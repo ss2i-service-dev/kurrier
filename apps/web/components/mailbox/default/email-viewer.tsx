@@ -6,6 +6,8 @@ import DOMPurify from "dompurify";
 import type { MessageEntity } from "@db";
 import { ActionIcon, Button } from "@mantine/core";
 import { Ellipsis } from "lucide-react";
+import { setRemoteImagesForContact } from "@/lib/actions/contact-images";
+import { toast } from "sonner";
 
 const BASE_CSS = `
 :host {
@@ -106,15 +108,23 @@ div[style*="border-left"][style*="solid"] blockquote {
 }
 `;
 
-export default function EmailViewer({ message }: { message: MessageEntity }) {
+export default function EmailViewer({
+	message,
+	remoteImagesAllowed = false,
+}: {
+	message: MessageEntity;
+	remoteImagesAllowed?: boolean;
+}) {
 	const hostRef = useRef<HTMLDivElement>(null);
 	const [hideQuotes, setHideQuotes] = useState(true);
 
-	const [showRemoteImages, setShowRemoteImages] = useState(false);
+	const [showRemoteImages, setShowRemoteImages] = useState(remoteImagesAllowed);
 	const [hasBlockedImages, setHasBlockedImages] = useState(false);
-	// Autorisation memorisee pour l'expediteur (localStorage) : rendue visible et
-	// reversible, sinon le bouton « charger les images » disparait sans explication.
-	const [alwaysForSender, setAlwaysForSender] = useState(false);
+	// Autorisation portee par le CONTACT (serveur, tous navigateurs) : rendue
+	// visible et reversible, sinon le bouton « charger les images » disparait
+	// sans explication.
+	const [alwaysForSender, setAlwaysForSender] = useState(remoteImagesAllowed);
+	const [savingPref, setSavingPref] = useState(false);
 
 	function blockRemoteImages(html: string, allowImages: boolean) {
 		const doc = new DOMParser().parseFromString(html, "text/html");
@@ -150,34 +160,30 @@ export default function EmailViewer({ message }: { message: MessageEntity }) {
 	}, [message.html]);
 
 	const senderEmail = message?.from?.value?.[0]?.address || "unknown";
-
-	const remoteImagePreferenceKey = `kurrier:remote-images:${senderEmail}`;
+	const senderName = message?.from?.value?.[0]?.name || null;
 
 	useEffect(() => {
+		setAlwaysForSender(remoteImagesAllowed);
+		setShowRemoteImages(remoteImagesAllowed);
+	}, [remoteImagesAllowed, senderEmail]);
+
+	const savePreference = async (allow: boolean) => {
 		if (!senderEmail || senderEmail === "unknown") return;
-		let always = false;
+		setSavingPref(true);
 		try {
-			always = localStorage.getItem(remoteImagePreferenceKey) === "true";
-		} catch {}
-		setAlwaysForSender(always);
-		setShowRemoteImages(always);
-	}, [remoteImagePreferenceKey, senderEmail]);
-
-	const allowRemoteImagesForSender = () => {
-		try {
-			localStorage.setItem(remoteImagePreferenceKey, "true");
-		} catch {}
-		setAlwaysForSender(true);
-		setShowRemoteImages(true);
+			const r = await setRemoteImagesForContact({ email: senderEmail, name: senderName, allow });
+			if (r?.success === false) throw new Error(r.error ?? "Failed");
+			setAlwaysForSender(allow);
+			setShowRemoteImages(allow);
+			if (allow && r?.created) toast.success(`${senderEmail} added to your contacts`);
+		} catch (e: any) {
+			toast.error(e?.message ?? "Could not save the preference");
+		} finally {
+			setSavingPref(false);
+		}
 	};
-
-	const blockRemoteImagesAgain = () => {
-		try {
-			localStorage.removeItem(remoteImagePreferenceKey);
-		} catch {}
-		setAlwaysForSender(false);
-		setShowRemoteImages(false);
-	};
+	const allowRemoteImagesForSender = () => savePreference(true);
+	const blockRemoteImagesAgain = () => savePreference(false);
 
 	useEffect(() => {
 		if (!hostRef.current) return;
@@ -233,14 +239,14 @@ export default function EmailViewer({ message }: { message: MessageEntity }) {
 							<Button size="xs" variant="default" onClick={() => setShowRemoteImages(true)}>
 								Load images
 							</Button>
-							<Button size="xs" variant="default" onClick={allowRemoteImagesForSender}>
-								Always load for {senderEmail}
+							<Button size="xs" variant="default" loading={savingPref} onClick={allowRemoteImagesForSender}>
+								Always load for this contact
 							</Button>
 						</>
 					) : alwaysForSender ? (
 						<>
-							<span>Images from {senderEmail} are always loaded.</span>
-							<Button size="xs" variant="default" onClick={blockRemoteImagesAgain}>
+							<span>Images from {senderEmail} are always loaded (contact preference).</span>
+							<Button size="xs" variant="default" loading={savingPref} onClick={blockRemoteImagesAgain}>
 								Stop loading automatically
 							</Button>
 						</>

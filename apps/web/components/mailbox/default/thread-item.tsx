@@ -14,6 +14,7 @@ import { getMessageAddress, getMessageName } from "@common/mail-client";
 import { Container } from "@/components/common/containers";
 import RenderInvite from "@/components/mailbox/default/render-invite";
 import {fetchEventPreviewItems} from "@/lib/actions/calendar";
+import { remoteImagesAllowedForContact } from "@/lib/actions/contact-images";
 
 export default async function ThreadItem({
 	message,
@@ -38,6 +39,9 @@ export default async function ThreadItem({
 	const publicConfig = getPublicEnv();
     const preview = await fetchEventPreviewItems(attachments, identityPublicId)
 	const identityMailboxes = await fetchIdentityMailboxList();
+	const remoteImagesAllowed = await remoteImagesAllowedForContact(
+		getMessageAddress(message, "from"),
+	);
 
 	return (
 		<>
@@ -72,7 +76,7 @@ export default async function ThreadItem({
                             mailSubscription={mailSubscription}
 							identityMailboxes={identityMailboxes}
 						>
-							<EmailViewer message={message} />
+							<EmailViewer message={message} remoteImagesAllowed={remoteImagesAllowed} />
 						</EmailRenderer>
 					</div>
 				</div>

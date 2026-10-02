@@ -1,8 +1,9 @@
 "use client";
 import React, { useRef, useEffect, useState } from "react";
-import { MailOpen, RotateCw, Trash2 } from "lucide-react";
+import { Archive, MailOpen, RotateCw, Trash2 } from "lucide-react";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import {
+	archiveThread,
 	deleteForever,
 	deltaFetch,
 	FetchIdentityMailboxListResult,
@@ -105,6 +106,16 @@ function MailListHeader({
 		toast.success("Messages moved to Trash", { position: "bottom-left" });
 	};
 
+	const archiveThreads = async () => {
+		await archiveThread(
+			Array.from(state?.selectedThreadIds ?? []),
+			String(mailboxIdRef.current),
+			!!mailboxSync,
+			true,
+		);
+		toast.success("Messages archived", { position: "bottom-left" });
+	};
+
 	const removeTrash = async () => {
 		await deleteForever(
 			Array.from(state?.selectedThreadIds ?? []),
@@ -182,6 +193,16 @@ function MailListHeader({
 							identityMailboxes={identityMailboxes}
 							activeMailbox={activeMailbox}
 						/>
+						{mailboxKind.current !== "archive" && (
+							<button
+								type="button"
+								onClick={archiveThreads}
+								className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs hover:bg-muted"
+								title="Archive"
+							>
+								<Archive className="h-4 w-4" />
+							</button>
+						)}
 						<button
 							type="button"
 							onClick={deleteThreads}

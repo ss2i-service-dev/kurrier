@@ -13,11 +13,11 @@ import {ComposeContact} from "@schema";
 
 export default function EmailHeaderContacts({
 	name,
-	toEmail,
+	defaultValues,
 	maxTags,
 	onChange,
 }: {
-	toEmail?: string;
+	defaultValues?: string[];
 	maxTags?: number;
 	onChange?: (value: string[]) => void;
 	name: string;
@@ -65,7 +65,7 @@ export default function EmailHeaderContacts({
 		<>
 			<FocusTrap active={true}>
 				<TagsInput
-					defaultValue={toEmail ? [toEmail] : []}
+					defaultValue={defaultValues ?? []}
 					searchValue={searchValue}
 					onSearchChange={searchContacts}
 					data={options}

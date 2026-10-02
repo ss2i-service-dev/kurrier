@@ -9,18 +9,20 @@ import { Ellipsis } from "lucide-react";
 
 const BASE_CSS = `
 :host {
-  --bg: #ffffff;
-  --text: #0f172a;      /* slate-900 */
-  --muted: #475569;     /* slate-600 */
-  --border: #e5e7eb;    /* gray-200 */
-  --quote-bg: #f8fafc;  /* slate-50 */
-  --quote-bar: #cbd5e1; /* slate-300 */
-  color: var(--text);
+  --bg: transparent;
+  --text: inherit;
+  --muted: color-mix(in srgb, currentColor 65%, transparent);
+  --border: color-mix(in srgb, currentColor 18%, transparent);
+  --quote-bg: color-mix(in srgb, currentColor 6%, transparent);
+  --quote-bar: color-mix(in srgb, currentColor 30%, transparent);
+  --link: #2563eb;
+  color: inherit;
   display: block;
 }
+:host-context(.dark) { --link: #7cb4ff; }
 
 .email-root {
-  font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";
+  font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";
   background: var(--bg);
   color: var(--text);
    word-break: break-word;
@@ -48,7 +50,7 @@ const BASE_CSS = `
 .email-root ul, .email-root ol { padding-left: 1.25rem; margin: .5rem 0 .85rem; }
 .email-root li { margin: .25rem 0; }
 
-.email-root a { color: #2563eb; text-decoration: none; }
+.email-root a { color: var(--link); text-decoration: none; }
 .email-root a:hover { text-decoration: underline; }
 
 .email-root img, .email-root video, .email-root canvas, .email-root svg {
@@ -63,7 +65,7 @@ const BASE_CSS = `
 .email-root pre, .email-root code, .email-root kbd, .email-root samp {
   font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
 }
-.email-root pre { padding: .75rem; background: #0f172a0d; border-radius: .375rem; overflow: auto; }
+.email-root pre { padding: .75rem; background: color-mix(in srgb, currentColor 7%, transparent); border-radius: .375rem; overflow: auto; }
 
 /* Softer <hr>, and hide a leading one */
 .email-root hr {
@@ -201,7 +203,7 @@ export default function EmailViewer({ message }: { message: MessageEntity }) {
 	}, [message.html, message.text, hideQuotes, showRemoteImages]);
 
 	return (
-		<div className="mb-24 mt-6 overflow-x-hidden">
+		<div className="mb-10 mt-5 overflow-x-hidden rounded-xl border border-neutral-200 bg-card text-card-foreground px-5 py-4 dark:border-neutral-800">
 			{hasBlockedImages && !showRemoteImages && (
 				<div className="mb-3 flex gap-2">
 					<Button

@@ -43,8 +43,10 @@ export default async function ThreadItem({
 		<>
 			<Container variant="wide">
 				<div className={"grid grid-cols-12 p-3"}>
-					<div className={"md:col-span-1 hidden"}>
+					<div className={"hidden md:block md:col-span-1 pt-4"}>
 						<Avatar
+							size="lg"
+							radius="xl"
 							name={
 								getMessageName(message, "from") ||
 								getMessageAddress(message, "from") ||

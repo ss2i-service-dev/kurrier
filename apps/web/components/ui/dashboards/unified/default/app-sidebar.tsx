@@ -57,12 +57,6 @@ export function AppSidebar({ ...props }: UnifiedSidebarProps) {
 				isActive: true,
 			},
 			{
-				title: "Calendar",
-				url: `/w/${workspacePublicId}/dashboard/calendar`,
-				icon: Calendar,
-				isActive: true,
-			},
-			{
 				title: "Drive",
 				url: `/w/${workspacePublicId}/dashboard/drive`,
 				icon: HardDrive,

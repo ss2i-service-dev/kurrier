@@ -1,5 +1,6 @@
 import React, { ReactNode } from "react";
 import MailboxSearchHeader from "@/components/mailbox/mailbox-search-header";
+import ThreadSlot from "@/components/mailbox/default/thread-slot";
 
 type LayoutProps = {
 	children: ReactNode;
@@ -22,7 +23,7 @@ export default async function DashboardLayout({
 		<>
             <MailboxSearchHeader params={params} />
 
-			{thread}
+			<ThreadSlot>{thread}</ThreadSlot>
 			{children}
 		</>
 	);

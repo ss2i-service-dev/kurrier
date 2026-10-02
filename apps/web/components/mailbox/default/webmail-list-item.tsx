@@ -1,12 +1,13 @@
 "use client";
 import React from "react";
-import { Mail, MailOpen, Paperclip, Trash2 } from "lucide-react";
+import { Archive, Mail, MailOpen, Paperclip, Trash2 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { MailboxEntity, MailboxSyncEntity } from "@db";
 import {
 	FetchMailboxThreadsResult,
 	markAsRead,
 	markAsUnread,
+	archiveThread,
 	moveToTrash,
 	toggleStar,
 } from "@/lib/actions/mailbox";
@@ -355,6 +356,23 @@ export default function WebmailListItem({
 						activeMailboxId={activeMailbox.id}
 					/>
 
+					{activeMailbox.kind !== "archive" && (
+						<button
+							onClick={async () => {
+								await archiveThread(
+									mailboxThreadItem.threadId,
+									activeMailbox.id,
+									!!mailboxSync,
+									true,
+								);
+								toast.success("Archived", { position: "bottom-left" });
+							}}
+							className="rounded p-1 hover:bg-muted"
+							title="Archive"
+						>
+							<Archive className="h-4 w-4" />
+						</button>
+					)}
 					<button
 						onClick={async () => {
 							await moveToTrash(

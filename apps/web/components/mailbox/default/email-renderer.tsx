@@ -4,16 +4,18 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
 import slugify from "@sindresorhus/slugify";
-import { Code, Download, EllipsisVertical, Forward, Reply } from "lucide-react";
+import { Archive, Code, Download, EllipsisVertical, Forward, Reply, ReplyAll, Trash2 } from "lucide-react";
 import { Temporal } from "@js-temporal/polyfill";
 import dynamic from "next/dynamic";
 import { ActionIcon, Button, Menu, Modal } from "@mantine/core";
 import { EmailEditorHandle } from "@/components/mailbox/default/editor/email-editor";
 import EditorAttachmentItem from "@/components/mailbox/default/editor/editor-attachment-item";
 import { PublicConfig } from "@schema";
-import {fetchMailbox, FetchThreadMailSubsResult, markAsRead} from "@/lib/actions/mailbox";
+import {archiveThread, fetchMailbox, FetchIdentityMailboxListResult, FetchThreadMailSubsResult, markAsRead, moveToTrash} from "@/lib/actions/mailbox";
+import { replyRecipients } from "@/lib/reply-recipients";
+import { toast } from "sonner";
 import {getRawMessageDownloadUrl} from "@/lib/actions/uploads-actions";
-import { useParams } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { useDisclosure } from "@mantine/hooks";
 import MailUnsubscriber from "@/components/mailbox/default/mail-unsubscriber";
 const EmailEditor = dynamic(
@@ -120,6 +122,47 @@ function EmailRenderer({
 
 	const [showEditor, setShowEditor] = useState<boolean>(false);
 	const [showEditorMode, setShowEditorMode] = useState<string>("reply");
+
+	// « Repondre » repond a tous par defaut quand le message a d'autres
+	// destinataires que nous ; sinon c'est une reponse simple.
+	const ownAddresses = useMemo(
+		() => (identityMailboxes ?? []).map((im) => String(im.identity.value)),
+		[identityMailboxes],
+	);
+	const hasOtherRecipients = useMemo(
+		() => replyRecipients(message, ownAddresses).cc.length > 0,
+		[message, ownAddresses],
+	);
+	const defaultReplyMode = hasOtherRecipients ? "replyAll" : "reply";
+	const openEditor = (mode: string) => {
+		setShowEditorMode(mode);
+		setShowEditor(true);
+	};
+
+	const router = useRouter();
+	const pathname = usePathname();
+	const leaveThread = () => {
+		router.push(pathname.replace(/\/threads\/[^/]+\/?$/, ""));
+		router.refresh();
+	};
+	const archiveMessage = async () => {
+		try {
+			await archiveThread(threadId, activeMailboxId, markSmtp, true);
+			toast.success("Archived", { position: "bottom-left" });
+			leaveThread();
+		} catch (err: any) {
+			toast.error(err?.message ?? "Archive failed");
+		}
+	};
+	const deleteMessage = async () => {
+		try {
+			await moveToTrash(threadId, activeMailboxId, markSmtp, true);
+			toast.success("Moved to Trash", { position: "bottom-left" });
+			leaveThread();
+		} catch (err: any) {
+			toast.error(err?.message ?? "Delete failed");
+		}
+	};
 	const editorRef = useRef<EmailEditorHandle>(null);
 	const seenRef = useRef(null);
 
@@ -339,11 +382,10 @@ function EmailRenderer({
 					<div className={"flex gap-1 justify-end items-center"}>
 						<ActionIcon
 							variant={"transparent"}
-							onClick={() => {
-								setShowEditor(!showEditor);
-							}}
+							onClick={() => openEditor(defaultReplyMode)}
+							title={hasOtherRecipients ? "Reply all" : "Reply"}
 						>
-							<Reply size={18} />
+							{hasOtherRecipients ? <ReplyAll size={18} /> : <Reply size={18} />}
 						</ActionIcon>
 
 						<div className={"cursor-pointer"}>
@@ -355,21 +397,37 @@ function EmailRenderer({
 								<Menu.Dropdown>
 									<Menu.Item
 										leftSection={<Reply size={14} />}
-										onClick={() => {
-											setShowEditorMode("reply");
-											setShowEditor(true);
-										}}
+										onClick={() => openEditor("reply")}
 									>
 										Reply
 									</Menu.Item>
+									{hasOtherRecipients && (
+										<Menu.Item
+											leftSection={<ReplyAll size={14} />}
+											onClick={() => openEditor("replyAll")}
+										>
+											Reply all
+										</Menu.Item>
+									)}
 									<Menu.Item
 										leftSection={<Forward size={14} />}
-										onClick={() => {
-											setShowEditorMode("forward");
-											setShowEditor(true);
-										}}
+										onClick={() => openEditor("forward")}
 									>
 										Forward
+									</Menu.Item>
+									<Menu.Divider />
+									<Menu.Item
+										leftSection={<Archive size={14} />}
+										onClick={archiveMessage}
+									>
+										Archive
+									</Menu.Item>
+									<Menu.Item
+										color="red"
+										leftSection={<Trash2 size={14} />}
+										onClick={deleteMessage}
+									>
+										Delete
 									</Menu.Item>
 									<Menu.Divider />
 
@@ -408,28 +466,39 @@ function EmailRenderer({
             )}
 
 			{threadIndex === numberOfMessages - 1 && !showEditor && (
-				<div className={"flex gap-6"}>
+				<div className={"flex gap-4 flex-wrap"}>
 					<Button
-						onClick={() => {
-							setShowEditor(!showEditor);
-							setShowEditorMode("reply");
-						}}
-						leftSection={<Reply />}
+						onClick={() => openEditor(defaultReplyMode)}
+						leftSection={hasOtherRecipients ? <ReplyAll /> : <Reply />}
 						variant={"outline"}
 						radius={"xl"}
 					>
-						Reply
+						{hasOtherRecipients ? "Reply all" : "Reply"}
 					</Button>
 					<Button
-						onClick={() => {
-							setShowEditor(!showEditor);
-							setShowEditorMode("forward");
-						}}
+						onClick={() => openEditor("forward")}
 						rightSection={<Forward />}
 						variant={"outline"}
 						radius={"xl"}
 					>
 						Forward
+					</Button>
+					<Button
+						onClick={archiveMessage}
+						leftSection={<Archive />}
+						variant={"outline"}
+						radius={"xl"}
+					>
+						Archive
+					</Button>
+					<Button
+						onClick={deleteMessage}
+						leftSection={<Trash2 />}
+						variant={"outline"}
+						color={"red"}
+						radius={"xl"}
+					>
+						Delete
 					</Button>
 				</div>
 			)}

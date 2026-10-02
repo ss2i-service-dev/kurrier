@@ -8,10 +8,10 @@ import {
 	Input,
 	FocusTrap
 } from "@mantine/core";
-import { Forward, Reply } from "lucide-react";
+import { Forward, Reply, ReplyAll } from "lucide-react";
+import { replyRecipients } from "@/lib/reply-recipients";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import { MessageEntity } from "@db";
-import { getMessageAddress } from "@common/mail-client";
 import { useMediaQuery } from "@mantine/hooks";
 import EmailHeaderContacts from "@/components/mailbox/default/editor/email-header-contacts";
 import {FetchIdentityMailboxListResult} from "@/lib/actions/mailbox";
@@ -21,27 +21,53 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 	const { state } = useDynamicContext<{
 		isPending: boolean;
 		message: MessageEntity;
-		showEditorMode: "reply" | "forward" | "compose";
+		showEditorMode: "reply" | "replyAll" | "forward" | "compose";
 		identityMailboxes: FetchIdentityMailboxListResult;
 	}>();
 
-	const [mode, setMode] = useState<"reply" | "forward" | "compose">(
-		state.showEditorMode,
+	type Mode = "reply" | "replyAll" | "forward" | "compose";
+	const [mode, setMode] = useState<Mode>(state.showEditorMode);
+
+	// Destinataires calcules depuis le message d'origine : Reply-To ou expediteur
+	// en « To » ; en « Reply all », les autres destinataires passent en « Cc »,
+	// nos propres adresses exclues.
+	const recipients = useMemo(
+		() =>
+			replyRecipients(
+				state?.message,
+				(state.identityMailboxes ?? []).map((im) => String(im.identity.value)),
+			),
+		[state.message, state.identityMailboxes],
 	);
-	const [ccActive, setCcActive] = useState(false);
+	const toValues = useMemo(
+		() => (mode === "forward" || mode === "compose" ? [] : recipients.to),
+		[mode, recipients],
+	);
+	const ccValues = useMemo(
+		() => (mode === "replyAll" ? recipients.cc : []),
+		[mode, recipients],
+	);
+
+	const [ccActive, setCcActive] = useState(ccValues.length > 0);
 	const [bccActive, setBccActive] = useState(false);
+	useEffect(() => {
+		if (ccValues.length > 0) setCcActive(true);
+	}, [ccValues]);
 
 	const options = useMemo(
 		() => [
 			{ value: "reply", label: "Reply", Icon: Reply },
+			...(recipients.cc.length > 0
+				? [{ value: "replyAll", label: "Reply all", Icon: ReplyAll }]
+				: []),
 			{ value: "forward", label: "Forward", Icon: Forward },
 		],
-		[],
+		[recipients],
 	);
 
-	const toEmail = useMemo(() => {
-		return getMessageAddress(state?.message, "from") || "";
-	}, [state.message]);
+	// Le serveur ne connait que reply / forward / new : « replyAll » n'est qu'une
+	// variante de reply avec des Cc pre-remplis.
+	const serverMode = mode === "replyAll" ? "reply" : mode;
 
 	const renderOption: SelectProps["renderOption"] = ({ option }) => {
 		const ItemIcon =
@@ -64,7 +90,7 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 
 		const cleaned = original.replace(/^(re|fwd)\s*:\s*/gi, "");
 
-		if (mode === "reply") return `Re: ${cleaned}`;
+		if (mode === "reply" || mode === "replyAll") return `Re: ${cleaned}`;
 		if (mode === "forward") return `Fwd: ${cleaned}`;
 		return cleaned;
 	}, [state.message, mode]);
@@ -102,8 +128,7 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 					<div className="sm:pt-1">
 						<Select
 							value={mode}
-							name="mode"
-							onChange={(v) => v && setMode(v as "reply" | "forward")}
+							onChange={(v) => v && setMode(v as Mode)}
 							data={options}
 							renderOption={renderOption}
 							leftSection={<CurrentIcon size={14} />}
@@ -118,18 +143,17 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 							}}
 						/>
 					</div>
-				) : (
-					<input type="hidden" name="mode" value={mode} />
-				)}
+				) : null}
+				<input type="hidden" name="mode" value={serverMode} />
 
 				<div className="grid items-center gap-2 sm:grid-cols-[40px,1fr]">
 					<span className="text-[13px] text-muted-foreground sm:text-right leading-6">
 						To
 					</span>
 					<EmailHeaderContacts
+						key={`to-${mode}`}
 						name={"to"}
-						maxTags={1}
-						toEmail={toEmail}
+						defaultValues={toValues}
 						onChange={(value) => {
 							if (value.length > 0) {
 								setSubjectFocus(true);
@@ -170,8 +194,9 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 						Cc
 					</span>
 					<EmailHeaderContacts
+						key={`cc-${mode}`}
 						name={"cc"}
-						toEmail={toEmail}
+						defaultValues={ccValues}
 						onChange={(value) => {
 							if (value.length > 0) {
 								setSubjectFocus(true);
@@ -188,7 +213,6 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 					</span>
 					<EmailHeaderContacts
 						name={"bcc"}
-						toEmail={toEmail}
 						onChange={(value) => {
 							if (value.length > 0) {
 								setSubjectFocus(true);
@@ -243,8 +267,7 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 					<div className="flex-shrink-0">
 						<Select
 							value={mode}
-							name={"mode"}
-							onChange={(v) => v && setMode(v as "reply" | "forward")}
+							onChange={(v) => v && setMode(v as Mode)}
 							data={options}
 							renderOption={renderOption}
 							leftSection={<CurrentIcon size={16} />}
@@ -259,18 +282,17 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 							}}
 						/>
 					</div>
-				) : (
-					<input type={"hidden"} name={"mode"} value={mode} />
-				)}
+				) : null}
+				<input type={"hidden"} name={"mode"} value={serverMode} />
 
 				<div className="flex-grow flex justify-between">
 					<div className="flex gap- items-stretch flex-col justify-start">
 						<div className="flex items-center gap-2">
 							<span className="text-sm text-muted-foreground">To</span>
 							<EmailHeaderContacts
+								key={`to-${mode}`}
 								name={"to"}
-								maxTags={1}
-								toEmail={toEmail}
+								defaultValues={toValues}
 								onChange={(value) => {
 									if (value.length > 0) {
 										setSubjectFocus(true);
@@ -283,8 +305,9 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 							<div className="flex items-center gap-2">
 								<span className="text-sm text-muted-foreground">Cc</span>
 								<EmailHeaderContacts
+									key={`cc-${mode}`}
 									name={"cc"}
-									toEmail={toEmail}
+									defaultValues={ccValues}
 									onChange={(value) => {
 										if (value.length > 0) {
 											setSubjectFocus(true);
@@ -299,7 +322,6 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 								<span className="text-sm text-muted-foreground">Bcc</span>
 								<EmailHeaderContacts
 									name={"bcc"}
-									toEmail={toEmail}
 									onChange={(value) => {
 										if (value.length > 0) {
 											setSubjectFocus(true);

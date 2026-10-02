@@ -812,6 +812,111 @@ export const moveToTrash = async (
 	}
 };
 
+// Archiver = deplacer vers le dossier de kind « archive » de l'identite. Le worker
+// (mail:move, op=archive) le cherche par kind ; s'il n'existe pas encore pour
+// cette identite (Stalwart n'en cree pas), on le cree d'abord, cote IMAP quand
+// la boite est synchronisee.
+export const archiveThread = async (
+	threadIds: string | string[],
+	mailboxId: string,
+	moveImap: boolean,
+	refresh: boolean,
+) => {
+	const ids = (Array.isArray(threadIds) ? threadIds : [threadIds])
+		.map(String)
+		.filter(Boolean);
+	if (!ids.length || !mailboxId) return;
+
+	const [src] = await db
+		.select()
+		.from(mailboxes)
+		.where(eq(mailboxes.id, mailboxId))
+		.limit(1);
+	if (!src) return;
+	if (src.kind === "archive") return;
+
+	const findArchive = async () => {
+		const [row] = await db
+			.select()
+			.from(mailboxes)
+			.where(
+				and(eq(mailboxes.identityId, src.identityId), eq(mailboxes.kind, "archive")),
+			)
+			.limit(1);
+		return row;
+	};
+
+	const { smtpQueue, smtpEvents, searchIngestQueue } = await getRedis();
+
+	if (!(await findArchive())) {
+		if (moveImap) {
+			const job = await smtpQueue.add(
+				"mailbox:add-new",
+				{
+					name: "Archive",
+					parentId: null,
+					identityId: src.identityId,
+					ownerId: src.ownerId,
+					kind: "archive",
+					slug: "archive",
+				},
+				{ attempts: 1, removeOnComplete: true, removeOnFail: true },
+			);
+			await job.waitUntilFinished(smtpEvents);
+		} else {
+			await db.insert(mailboxes).values({
+				ownerId: src.ownerId,
+				workspaceId: src.workspaceId,
+				identityId: src.identityId,
+				parentId: null,
+				kind: "archive",
+				name: "Archive",
+				slug: "archive",
+				isDefault: false,
+				metaData: {},
+			});
+		}
+		if (!(await findArchive())) {
+			throw new Error("Archive folder could not be created");
+		}
+	}
+
+	await Promise.all(
+		ids.map((threadId) =>
+			smtpQueue.add(
+				"mail:move",
+				{ threadId, mailboxId, op: "archive", moveImap },
+				{
+					attempts: 3,
+					backoff: { type: "exponential", delay: 1500 },
+					removeOnComplete: true,
+					removeOnFail: false,
+				},
+			),
+		),
+	);
+
+	await Promise.all(
+		ids.map((threadId) =>
+			searchIngestQueue.add(
+				"refresh-thread",
+				{ threadId },
+				{
+					jobId: `refresh-${threadId}`,
+					removeOnComplete: true,
+					removeOnFail: false,
+					attempts: 3,
+					backoff: { type: "exponential", delay: 1500 },
+				},
+			),
+		),
+	);
+
+	if (refresh) {
+		revalidatePath("/mail");
+	}
+};
+
 export const toggleStar = async (
 	threadId: string,
 	mailboxId: string,

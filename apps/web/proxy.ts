@@ -1,5 +1,6 @@
 import {type NextRequest, NextResponse} from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
+import { jwtVerify } from "jose";
 
 const locales = ["en", "ko"];
 const defaultLocale = "en";
@@ -36,7 +37,36 @@ export async function proxy(request: NextRequest) {
 		return NextResponse.redirect(url);
 	}
 
+	// Garde d'authentification. Le cookie « session » vit 30 jours, mais rien ne
+	// verifiait le jeton avant le rendu : un jeton absent ou perime arrivait
+	// jusqu'aux requetes SQL et faisait tomber la page (« No workspace selected »)
+	// au lieu de renvoyer au login. On tranche ici, avant tout rendu.
+	const protectedPath = PROTECTED.exec(request.nextUrl.pathname);
+	if (protectedPath && !(await hasValidSession(request))) {
+		const url = request.nextUrl.clone();
+		url.pathname = `/${protectedPath[1]}/auth/login`;
+		url.search = "";
+		const response = NextResponse.redirect(url);
+		response.cookies.delete("session");
+		return response;
+	}
+
 	return await updateSession(request);
+}
+
+const PROTECTED = /^\/(en|ko)\/w(?:\/|$)/;
+
+async function hasValidSession(request: NextRequest) {
+	const token = request.cookies.get("session")?.value;
+	if (!token) return false;
+	const secret = process.env.JWT_SECRET;
+	if (!secret) return false;
+	try {
+		const { payload } = await jwtVerify(token, new TextEncoder().encode(secret));
+		return Boolean(payload.sub);
+	} catch {
+		return false;
+	}
 }
 
 export const config = {

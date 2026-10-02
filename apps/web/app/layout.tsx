@@ -23,6 +23,7 @@ import {
 } from "@mantine/core";
 import { createMantineTheme } from "@/lib/mantine-theme";
 import { ModalsProvider } from "@mantine/modals";
+import Script from "next/script";
 
 const jakartaSans = Plus_Jakarta_Sans({
 	variable: "--font-sans",
@@ -89,6 +90,7 @@ export default async function RootLayout({
 						</MantineProvider>
 					</ConfigProvider>
 				</AppearanceProvider>
+				<Script src="/ss2i-shortcuts.js" strategy="afterInteractive" />
 			</body>
 		</html>
 	);

@@ -15,6 +15,7 @@ import {
 	inferKind,
 } from "./discover-helpers";
 import { ensureTrashFolder } from "./discover-trash";
+import { ensureArchiveFolder } from "./discover-archive";
 
 export const discoverMailboxes = async (
 	client: ImapFlow,
@@ -87,14 +88,20 @@ export const discoverMailboxes = async (
 
 		const existing = await findLocalByPath(identity.id, path);
 
+		// Le slug d'un dossier systeme DOIT etre son kind canonique : l'application
+		// cherche « trash », « sent », « spam »... jamais « deleted-items ». Un serveur
+		// qui nomme ses dossiers autrement (Stalwart : « Deleted Items ») rendait la
+		// suppression impossible (« Mailbox not found »).
+		const kind = inferKind(mbx.name, mbx.specialUse as string | undefined);
+		const slug = kind === "custom" ? slugify(mbx.name.toLowerCase()) : kind;
 		const valuesBase = {
 			ownerId: identity.ownerId,
 			workspaceId,
 			identityId: identity.id,
 			parentId,
 			name,
-			slug: slugify(mbx.name.toLowerCase()),
-			kind: inferKind(mbx.name, mbx.specialUse as string | undefined),
+			slug,
+			kind,
 			isDefault: path === "INBOX",
 			metaData: meta,
 		};
@@ -123,7 +130,7 @@ export const discoverMailboxes = async (
 				.set({
 					parentId,
 					name,
-					slug: slugify(path.toLowerCase()),
+					slug: existing.kind === "custom" ? slugify(path.toLowerCase()) : existing.kind,
 					metaData: meta as any,
 					updatedAt: new Date(),
 				} as any)
@@ -175,4 +182,5 @@ export const discoverMailboxes = async (
 	}
 
 	await ensureTrashFolder(client, identity);
+	await ensureArchiveFolder(client, identity);
 };

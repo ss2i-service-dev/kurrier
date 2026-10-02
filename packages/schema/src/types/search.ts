@@ -13,8 +13,12 @@ export const messagesSearchSchema: CollectionCreateSchema = {
 		{ name: "mailboxSlug", type: "string", facet: true },
 
 		{ name: "subject", type: "string" },
-		{ name: "text", type: "string" },
-		{ name: "html", type: "string" },
+		// ss2i : le texte est conserve pour l'affichage mais plus indexe, et le HTML
+		// n'est plus envoye du tout. Typesense garde l'index en memoire (2 a 3 fois la
+		// taille indexee) : avec une boite de plusieurs dizaines de Go, indexer le corps
+		// de chaque message depasse la RAM du serveur. La recherche porte sur le sujet,
+		// l'extrait, l'expediteur et les participants.
+		{ name: "text", type: "string", index: false, optional: true },
 		{ name: "snippet", type: "string" },
 
 		{ name: "fromName", type: "string" },

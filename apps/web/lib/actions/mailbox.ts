@@ -478,7 +478,7 @@ export const initSearch = async (
 
 	const result = (await client.collections("messages").documents().search({
 		q,
-		query_by: "subject,html,text,snippet,fromName,fromEmail,participants",
+		query_by: "subject,snippet,fromName,fromEmail,participants",
 		filter_by: filters.join(" && "),
 		sort_by: "createdAt:desc",
 		group_by: "threadId",

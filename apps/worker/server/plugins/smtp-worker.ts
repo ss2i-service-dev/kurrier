@@ -19,7 +19,7 @@ import {
 import { discoverMailboxes } from "../../lib/imap/backfill/discover/discover-mailboxes";
 import {startBackfillForIdentity} from "../../lib/imap/backfill/backfill-full";
 import {db, mailboxSync} from "@db";
-import {eq} from "drizzle-orm";
+import { eq, gt } from "drizzle-orm";
 
 export default defineNitroPlugin(async (nitroApp) => {
 	console.info("**********************SMTP-WORKER***************************");
@@ -83,7 +83,10 @@ export default defineNitroPlugin(async (nitroApp) => {
 						identityId: mailboxSync.identityId,
 					})
 					.from(mailboxSync)
-					.where(eq(mailboxSync.phase, "BACKFILL"));
+					// ss2i : la synchronisation temps reel remet `phase` a IDLE a chaque passage,
+					// si bien qu'une reprise fondee sur la phase ne trouvait plus rien des la
+					// premiere heure. Ce qui dit qu'il reste du rattrapage, c'est le curseur.
+					.where(gt(mailboxSync.backfillCursorUid, 0));
 				for (const row of rows) {
 					await smtpQueue.add(
 						"imap:backfill-account",
@@ -141,7 +144,10 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 	await scheduler.upsertJobScheduler(
 		"imap-resume-backfills-scheduler",
-		{ every: 24 * 60 * 60 * 1000 },
+		// ss2i : toutes les heures et non toutes les 24 h. Le quota quotidien d'une identite expire
+		// 24 h apres sa premiere initialisation, qui ne coincide pas avec l'heure du planificateur :
+		// avec un passage par jour, une identite ne reprenait qu'un jour sur deux.
+		{ every: 60 * 60 * 1000 },
 		"imap:resume-backfills",
 		{},
 		{

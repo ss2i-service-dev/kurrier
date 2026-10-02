@@ -342,7 +342,7 @@ function EmailRenderer({
 			<div className={"grid grid-cols-12"}>
 				<div className={"col-span-12"}>
 					{threadIndex === 0 && <div className={"flex gap-3 items-center"}>
-						<div className="text-xl font-base">
+						<div className="text-2xl font-semibold tracking-tight">
 							{message.subject || "No Subject"}
 						</div>
                         <MailUnsubscriber mailSubscription={mailSubscription} message={message}/>
@@ -350,19 +350,19 @@ function EmailRenderer({
 				</div>
 
 				<div className={"md:col-span-6 col-span-12 flex flex-col"}>
-					<div className={"mt-4 flex gap-1 items-center"}>
-						<div className={"text-sm font-semibold capitalize"}>
+					<div className={"mt-4 flex gap-2 items-baseline"}>
+						<div className={"text-base font-semibold capitalize"}>
 							{getMessageName(message, "from") ??
 								slugify(String(getMessageAddress(message, "from")), {
 									separator: " ",
 								})}
 						</div>
 						<div
-							className={"text-xs"}
+							className={"text-xs text-muted-foreground"}
 						>{`<${getMessageAddress(message, "from") ?? getMessageName(message, "from")}>`}</div>
 					</div>
 					<div className={"flex gap-1 items-center"}>
-						<div className={"text-xs"}>
+						<div className={"text-xs text-muted-foreground"}>
 							to{" "}
 							{`<${getMessageAddress(message, "to") ?? getMessageName(message, "to")}>`}
 						</div>
@@ -378,7 +378,7 @@ function EmailRenderer({
 						"md:col-span-6 col-span-12 my-1 flex md:justify-end justify-between items-center gap-2 "
 					}
 				>
-					<div className={"text-xs "}>{formatted}</div>
+					<div className={"text-xs text-muted-foreground"}>{formatted}</div>
 					<div className={"flex gap-1 justify-end items-center"}>
 						<ActionIcon
 							variant={"transparent"}

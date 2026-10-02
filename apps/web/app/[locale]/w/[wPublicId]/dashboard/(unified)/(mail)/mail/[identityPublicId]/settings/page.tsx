@@ -1,5 +1,6 @@
 import React from "react";
 import SettingsGeneral from "@/components/mailbox/settings/settings-general";
+import SettingsSignature from "@/components/mailbox/settings/settings-signature";
 import { FormState, handleAction } from "@schema";
 import { decode } from "decode-formdata";
 import { rlsClient } from "@/lib/actions/clients";
@@ -37,7 +38,34 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
         })
     }
 
-    return <SettingsGeneral updateName={updateName} identity={identity} />
+    const updateSignature = async (_prev: FormState, formData: FormData): Promise<FormState> => {
+        "use server";
+        return handleAction(async () => {
+            const decodedForm = decode(formData);
+            const signatureHtml = String(decodedForm.signatureHtml ?? "").trim();
+            const rls = await rlsClient();
+            await rls(async (tx) => {
+                const [current] = await tx
+                    .select({ metaData: identities.metaData })
+                    .from(identities)
+                    .where(eq(identities.id, decodedForm.id as string));
+                const meta = { ...((current?.metaData as Record<string, unknown>) ?? {}) };
+                if (signatureHtml) meta.signatureHtml = signatureHtml;
+                else delete meta.signatureHtml;
+                await tx
+                    .update(identities)
+                    .set({ metaData: meta })
+                    .where(eq(identities.id, decodedForm.id as string));
+            });
+            revalidatePath(String(decodedForm.pathname))
+            return {success: true, message: "Signature updated."};
+        })
+    }
+
+    return <>
+        <SettingsGeneral updateName={updateName} identity={identity} />
+        <SettingsSignature updateSignature={updateSignature} identity={identity} />
+    </>
 }
 
 export default Page;

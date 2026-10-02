@@ -16,6 +16,7 @@ import {FetchIdentityMailboxListResult, sendMail} from "@/lib/actions/mailbox";
 import type { FormState, PublicConfig } from "@schema";
 import { DynamicContextProvider } from "@/hooks/use-dynamic-context";
 import { toast } from "sonner";
+import { useParams } from "next/navigation";
 
 export type EmailEditorHandle = {
 	focus: () => void;
@@ -61,6 +62,14 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			if (el) onReady?.(el);
 		}, [onReady]);
 
+		const params = useParams() as { identityPublicId?: string };
+		const signatureHtml = React.useMemo(() => {
+			const entry = (identityMailboxes ?? []).find(
+				(im) => im.identity.publicId === params.identityPublicId,
+			);
+			return String((entry?.identity?.metaData as any)?.signatureHtml ?? "");
+		}, [identityMailboxes, params.identityPublicId]);
+
 		const [formState, formAction, isPending] = useActionState<
 			FormState,
 			FormData
@@ -84,7 +93,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			<>
 				<div className={"mt-4"} tabIndex={-1}>
 					<DynamicContextProvider
-						initialState={{ isPending, message, publicConfig, showEditorMode, identityMailboxes}}
+						initialState={{ isPending, message, publicConfig, showEditorMode, identityMailboxes, signatureHtml}}
 						syncOnChange
 					>
 						<Form action={formAction}>

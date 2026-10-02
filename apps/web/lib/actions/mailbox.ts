@@ -354,6 +354,9 @@ export async function sendMail(
 	decodedForm.sentMailboxId = sentMailbox.id;
 	decodedForm.mailboxId = inboxMailbox.id;
 	decodedForm.identityId = identity.id;
+	// L'utilisateur qui envoie : c'est son carnet d'adresses que le worker alimente.
+	const sender = await isSignedIn();
+	decodedForm.senderUserId = sender?.id ?? null;
 
 	if (toArray(decodedForm.to as any).length === 0) {
 		return {

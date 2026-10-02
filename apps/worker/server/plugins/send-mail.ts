@@ -35,6 +35,7 @@ import { PgTransaction } from "drizzle-orm/pg-core";
 import { getRedis } from "../../lib/get-redis";
 import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import {s3} from "../../lib/create-s3-client";
+import { upsertContactsFromOutgoing } from "../../lib/outgoing-contacts";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 // import MailComposer from "nodemailer/lib/mail-composer";
 const connection = new IORedis({
@@ -388,6 +389,22 @@ export default defineNitroPlugin(async (nitroApp) => {
 					{ messageId: newMessage.id },
 					{ removeOnComplete: true },
 				);
+
+				// Les destinataires rejoignent le carnet de l'expediteur. Jamais
+				// bloquant : un echec ici ne doit pas faire echouer un envoi reussi.
+				try {
+					await upsertContactsFromOutgoing({
+						ownerIds: [
+							String(decodedForm.senderUserId ?? ""),
+							mailbox.identity.ownerId,
+						].filter(Boolean),
+						workspaceId: mailbox.mailbox.workspaceId,
+						ownAddresses: [mailbox.identity.value],
+						recipients: [data.to, data.cc],
+					});
+				} catch (err: any) {
+					console.error("[send-mail] outgoing contacts failed:", err?.message ?? err);
+				}
 			} else if (mailerResponse.error) {
 				return {
 					success: false,

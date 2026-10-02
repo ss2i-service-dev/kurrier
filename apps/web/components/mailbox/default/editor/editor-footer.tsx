@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
+import DOMPurify from "dompurify";
+import { Checkbox } from "@mantine/core";
 import { ActionIcon, Button, Popover, Progress } from "@mantine/core";
 import { Baseline, Paperclip, X as IconX } from "lucide-react";
 import { RichTextEditor } from "@mantine/tiptap";
@@ -33,7 +35,17 @@ export default function EditorFooter() {
 	const { state } = useDynamicContext<{
 		isPending: boolean;
 		message: MessageEntity;
+		signatureHtml?: string;
 	}>();
+
+	const [includeSignature, setIncludeSignature] = useState(true);
+	const signaturePreview = useMemo(
+		() =>
+			state?.signatureHtml && typeof window !== "undefined"
+				? DOMPurify.sanitize(state.signatureHtml)
+				: "",
+		[state?.signatureHtml],
+	);
 
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const [uploads, setUploads] = useState<UploadItem[]>([]);
@@ -145,6 +157,33 @@ export default function EditorFooter() {
 
 	return (
 		<>
+			{signaturePreview && (
+				<div className="px-3 pb-2">
+					<div className="flex items-center justify-between gap-2 mb-1">
+						<span className="text-xs text-neutral-500">
+							Signature (added when sending)
+						</span>
+						<Checkbox
+							size="xs"
+							label="Include"
+							checked={includeSignature}
+							onChange={(e) => setIncludeSignature(e.currentTarget.checked)}
+						/>
+					</div>
+					<div
+						className={[
+							"rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 p-2 text-sm bg-white text-neutral-900",
+							includeSignature ? "" : "opacity-40",
+						].join(" ")}
+						dangerouslySetInnerHTML={{ __html: signaturePreview }}
+					/>
+				</div>
+			)}
+			<input
+				type="hidden"
+				name="includeSignature"
+				value={includeSignature ? "true" : "false"}
+			/>
 			{uploads.length > 0 && (
 				<div className="w-full rounded-md p-2 flex flex-col gap-2">
 					{uploads.map((u) => {

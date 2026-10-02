@@ -244,9 +244,15 @@ export default defineNitroPlugin(async (nitroApp) => {
 				origRow = await getOriginalMessage(decodedForm);
 			}
 
+			const signatureHtml =
+				decodedForm.includeSignature !== "false"
+					? String((mailbox.identity.metaData as any)?.signatureHtml ?? "").trim()
+					: "";
+
 			const { subject, text, html } = await generateMailAttrs({
 				data,
 				orig: origRow,
+				signatureHtml,
 			});
 
 			const mailboxIdForMessage = String(decodedForm.sentMailboxId);
@@ -392,18 +398,43 @@ export default defineNitroPlugin(async (nitroApp) => {
 		});
 	};
 
+	// Signature de l'identite : apres le corps, avant la citation du message
+	// d'origine. Le HTML est repris tel quel (tableaux, styles en ligne) ; le texte
+	// brut en est une version depouillee de ses balises.
+	const signatureBlocks = (signatureHtml?: string) => {
+		const sig = (signatureHtml ?? "").trim();
+		if (!sig) return { html: "", text: "" };
+		const text = sig
+			.replace(/<br\s*\/?>/gi, "\n")
+			.replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
+			.replace(/<[^>]+>/g, "")
+			.replace(/&nbsp;/g, " ")
+			.replace(/&amp;/g, "&")
+			.replace(/&lt;/g, "<")
+			.replace(/&gt;/g, ">")
+			.replace(/\n{3,}/g, "\n\n")
+			.trim();
+		return {
+			html: `<div class="signature" style="margin-top:1em">${sig}</div>`,
+			text: `\n\n-- \n${text}`,
+		};
+	};
+
 	const generateMailAttrs = async ({
 										 data,
 										 orig,
+										 signatureHtml,
 									 }: {
 		data: MailComposeInput;
 		orig: GetOriginalMessageType | null;
+		signatureHtml?: string;
 	}) => {
+		const signature = signatureBlocks(signatureHtml);
 		if (!orig) {
 			return {
 				subject: data.subject ?? "(no subject)",
-				text: data.text ?? "",
-				html: data.html ?? "",
+				text: `${data.text ?? ""}${signature.text}`,
+				html: `${data.html ?? ""}${signature.html}`,
 			};
 		}
 		const isReply = data.mode === "reply";
@@ -464,17 +495,20 @@ export default defineNitroPlugin(async (nitroApp) => {
 			: "";
 
 		// Bodies
+		const bodyText = `${data.text ?? ""}${signature.text}`;
+		const bodyHtml = `${data.html ?? ""}${signature.html}`;
+
 		const text = isReply
-			? `${data.text ?? ""}${hasOrig ? `\n\n${quotedText}` : ""}`
+			? `${bodyText}${hasOrig ? `\n\n${quotedText}` : ""}`
 			: isForward
-				? `${data.text ?? ""}${hasOrig ? `\n\nForwarded message:\n${quotedText}` : ""}`
-				: (data.text ?? "");
+				? `${bodyText}${hasOrig ? `\n\nForwarded message:\n${quotedText}` : ""}`
+				: bodyText;
 
 		const html = isReply
-			? `${data.html ?? ""}${quotedHtml}`
+			? `${bodyHtml}${quotedHtml}`
 			: isForward
-				? `${data.html ?? ""}${hasOrig ? `<p>Forwarded message:</p>${quotedHtml}` : ""}`
-				: (data.html ?? ""); // for "new", don't auto-pull orig html
+				? `${bodyHtml}${hasOrig ? `<p>Forwarded message:</p>${quotedHtml}` : ""}`
+				: bodyHtml; // for "new", don't auto-pull orig html
 
 		return { subject, text, html };
 	};

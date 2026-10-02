@@ -15,7 +15,7 @@ import WebmailListItem from "@/components/mailbox/default/webmail-list-item";
 import { DynamicContextProvider } from "@/hooks/use-dynamic-context";
 import { useMediaQuery } from "@mantine/hooks";
 import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-item-mobile";
-import { useParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {use} from "react";
 
 type WebListProps = {
@@ -42,10 +42,13 @@ export default function WebmailList({
 	const {mailboxSync, activeMailbox} = use(fetchMailboxPromise)
 	const identityMailboxes = use(identityMailboxesPromise)
 	const isMobile = useMediaQuery("(max-width: 768px)");
-	const params = useParams();
+	// Chemin reel de l'URL : useParams garde l'ancien threadId apres un retour
+	// a la liste depuis un fil ouvert (route parallele conservee).
+	const pathname = usePathname();
+	const onThread = /\/threads\/[^/]+/.test(pathname ?? "");
 
 	return (
-		<div className={params?.threadId ? "hidden" : ""}>
+		<div className={onThread ? "hidden" : ""}>
 			<DynamicContextProvider
 				initialState={{
 					selectedThreadIds: new Set(),

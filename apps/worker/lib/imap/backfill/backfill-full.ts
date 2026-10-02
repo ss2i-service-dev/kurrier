@@ -69,7 +69,7 @@ type BackfillMailboxOpts = {
 
 const DEFAULT_WINDOW = 300;
 
-async function backfillMailboxFull(opts: BackfillMailboxOpts) {
+async function backfillMailboxFull(opts: BackfillMailboxOpts): Promise<boolean> {
 	const {
 		client,
 		identityId,
@@ -82,7 +82,7 @@ async function backfillMailboxFull(opts: BackfillMailboxOpts) {
 		workspaceId
 	} = opts;
 
-	if (quota.limit <= 0) return;
+	if (quota.limit <= 0) return false;
 
 	const box = await client.mailboxOpen(path, { readOnly: true });
 	const top = Math.max(0, (box.uidNext ?? 1) - 1);
@@ -103,7 +103,7 @@ async function backfillMailboxFull(opts: BackfillMailboxOpts) {
 			mailboxId,
 			path,
 		});
-		return;
+		return false;
 	}
 
 	if (!sync.lastSeenUid || Number(sync.lastSeenUid) === 0) {
@@ -135,7 +135,7 @@ async function backfillMailboxFull(opts: BackfillMailboxOpts) {
 					updatedAt: new Date(),
 				})
 				.where(eq(mailboxSync.id, sync.id));
-			return;
+			return false;
 		}
 
 		cursor = top;
@@ -241,6 +241,7 @@ async function backfillMailboxFull(opts: BackfillMailboxOpts) {
 	if (politeWaitMs) {
 		await sleep(politeWaitMs);
 	}
+	return true;
 }
 
 export const startFullBackfill = async (
@@ -328,19 +329,37 @@ export const startFullBackfillForIdentity = async (
 			...mailboxRows.filter((r) => !isInbox(r)),
 		];
 
+		// ss2i : l'amont ne traitait qu'une fenetre de 300 UID par dossier et par passage, puis
+		// attendait le planificateur du lendemain. Sur une grosse boite (150 000 messages dans
+		// l'INBOX) cela representait plus d'un an de rattrapage. On enchaine desormais les
+		// fenetres, dossier par dossier (INBOX d'abord), jusqu'a ce qu'un dossier soit epuise ou
+		// que le quota quotidien soit consomme. La corbeille et le spam, purges par le serveur au
+		// bout de quelques semaines, ne valent pas leur poids dans le quota : on ne les rattrape pas
+		// (la synchronisation courante les couvre).
 		for (const row of inboxFirst) {
 			if (quota.limit <= 0) break;
 
 			const path = (row.metaData as any)?.imap?.path as string | undefined;
 			if (!path) continue;
-			await backfillMailboxFull({
-				client,
-				workspaceId: identity.workspaceId,
+			if (row.kind === "trash" || row.kind === "spam") continue;
+
+			let worked = true;
+			while (worked && quota.limit > 0) {
+				worked = await backfillMailboxFull({
+					client,
+					workspaceId: identity.workspaceId,
+					identityId,
+					ownerId,
+					mailboxId: row.id,
+					path,
+					quota,
+					politeWaitMs: 200,
+				});
+			}
+		}
+		if (quota.limit <= 0) {
+			console.log("[imap:backfill-full] quota du jour consomme, reprise au prochain passage", {
 				identityId,
-				ownerId,
-				mailboxId: row.id,
-				path,
-				quota,
 			});
 		}
 	} catch (err) {

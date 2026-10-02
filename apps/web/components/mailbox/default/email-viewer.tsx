@@ -112,6 +112,9 @@ export default function EmailViewer({ message }: { message: MessageEntity }) {
 
 	const [showRemoteImages, setShowRemoteImages] = useState(false);
 	const [hasBlockedImages, setHasBlockedImages] = useState(false);
+	// Autorisation memorisee pour l'expediteur (localStorage) : rendue visible et
+	// reversible, sinon le bouton « charger les images » disparait sans explication.
+	const [alwaysForSender, setAlwaysForSender] = useState(false);
 
 	function blockRemoteImages(html: string, allowImages: boolean) {
 		const doc = new DOMParser().parseFromString(html, "text/html");
@@ -152,12 +155,28 @@ export default function EmailViewer({ message }: { message: MessageEntity }) {
 
 	useEffect(() => {
 		if (!senderEmail || senderEmail === "unknown") return;
-		setShowRemoteImages(localStorage.getItem(remoteImagePreferenceKey) === "true");
+		let always = false;
+		try {
+			always = localStorage.getItem(remoteImagePreferenceKey) === "true";
+		} catch {}
+		setAlwaysForSender(always);
+		setShowRemoteImages(always);
 	}, [remoteImagePreferenceKey, senderEmail]);
 
 	const allowRemoteImagesForSender = () => {
-		localStorage.setItem(remoteImagePreferenceKey, "true");
+		try {
+			localStorage.setItem(remoteImagePreferenceKey, "true");
+		} catch {}
+		setAlwaysForSender(true);
 		setShowRemoteImages(true);
+	};
+
+	const blockRemoteImagesAgain = () => {
+		try {
+			localStorage.removeItem(remoteImagePreferenceKey);
+		} catch {}
+		setAlwaysForSender(false);
+		setShowRemoteImages(false);
 	};
 
 	useEffect(() => {
@@ -206,23 +225,33 @@ export default function EmailViewer({ message }: { message: MessageEntity }) {
 
 	return (
 		<div className="mb-10 mt-5 overflow-x-hidden rounded-xl border border-neutral-200 bg-white text-neutral-900 px-6 py-5 dark:border-neutral-700">
-			{hasBlockedImages && !showRemoteImages && (
-				<div className="mb-3 flex gap-2">
-					<Button
-						size="xs"
-						variant="default"
-						onClick={() => setShowRemoteImages(true)}
-					>
-						Load remote images once
-					</Button>
-
-					<Button
-						size="xs"
-						variant="default"
-						onClick={allowRemoteImagesForSender}
-					>
-						Always load for this sender
-					</Button>
+			{hasBlockedImages && (
+				<div className="mb-4 flex flex-wrap items-center gap-2 rounded-md bg-neutral-100 px-3 py-2 text-xs text-neutral-600">
+					{!showRemoteImages ? (
+						<>
+							<span>Remote images are blocked.</span>
+							<Button size="xs" variant="default" onClick={() => setShowRemoteImages(true)}>
+								Load images
+							</Button>
+							<Button size="xs" variant="default" onClick={allowRemoteImagesForSender}>
+								Always load for {senderEmail}
+							</Button>
+						</>
+					) : alwaysForSender ? (
+						<>
+							<span>Images from {senderEmail} are always loaded.</span>
+							<Button size="xs" variant="default" onClick={blockRemoteImagesAgain}>
+								Stop loading automatically
+							</Button>
+						</>
+					) : (
+						<>
+							<span>Remote images loaded for this message.</span>
+							<Button size="xs" variant="default" onClick={() => setShowRemoteImages(false)}>
+								Block again
+							</Button>
+						</>
+					)}
 				</div>
 			)}
 

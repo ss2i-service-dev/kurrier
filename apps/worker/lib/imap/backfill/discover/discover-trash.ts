@@ -60,6 +60,7 @@ export async function ensureTrashFolder(
 				.insert(mailboxes)
 				.values({
 					ownerId: identity.ownerId,
+					workspaceId: identity.workspaceId,
 					identityId: identity.id,
 					name,
 					slug: slugify(name),
@@ -107,6 +108,7 @@ export async function ensureTrashFolder(
 	if (!existingLocalTrash.length) {
 		await db.insert(mailboxes).values({
 			ownerId: identity.ownerId,
+			workspaceId: identity.workspaceId,
 			identityId: identity.id,
 			name: "Trash",
 			slug: "trash",

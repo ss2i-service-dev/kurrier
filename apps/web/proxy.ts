@@ -8,6 +8,8 @@ const defaultLocale = "en";
 function getRedirectLocale(request: NextRequest) {
 
 	const pathname = request.nextUrl.pathname;
+	// Un fichier statique de /public (ex. /ss2i-shortcuts.js) n'a pas de locale.
+	if (/\.[a-z0-9]+$/i.test(pathname)) return null;
 	const pathnameHasLocale = locales.some(
 		(locale) =>
 			pathname === `/${locale}` ||

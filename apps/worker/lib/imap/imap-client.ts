@@ -96,7 +96,9 @@ export const initSmtpClient = async (
 				user: credentials.IMAP_USERNAME,
 				pass: credentials.IMAP_PASSWORD,
 			},
-			socketTimeout: 60_000,
+			// ss2i : 5 min au lieu de 60 s. Gmail ralentit fortement le flux quand on approche de son
+			// plafond quotidien ; a 60 s les lots du rattrapage etaient coupes en plein milieu.
+			socketTimeout: 300_000,
 			logger: {
 				error(data: any) {
 					console.error(`[IMAP:${identityId}]`, data.msg ?? data);

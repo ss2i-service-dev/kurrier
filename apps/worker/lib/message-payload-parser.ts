@@ -284,8 +284,30 @@ export async function parseAndStoreEmail(
 		// mailboxId,
 	});
 
+	// ss2i : la ligne `messages` recevait `created_at = now()` (defaut de la colonne), c'est-a-dire
+	// l'heure d'ingestion, alors que l'affichage du lecteur, la date du fil (`threads.last_message_date`)
+	// et le tri de la recherche se fondent sur `createdAt`. Un rattrapage de plusieurs annees de
+	// courrier datait donc tout du jour meme. On pose la date interne IMAP (celle a laquelle le
+	// serveur a recu le message, fiable), a defaut la date de l'en-tete, a defaut maintenant.
+	// L'en-tete passe apres parce que mailparser remplace un en-tete Date absent ou malforme par
+	// l'heure courante sans le signaler (vu sur des envois d'un rectorat, Received de mai 2025 et
+	// Date « d'aujourd'hui ») ; une date d'en-tete a plus d'un jour dans le futur est ignoree.
+	const internalDate = (opts.metaData as any)?.imap?.internalDate;
+	const headerDate =
+		parsed.date instanceof Date && !Number.isNaN(parsed.date.getTime()) &&
+		parsed.date.getTime() <= Date.now() + 86_400_000
+			? parsed.date
+			: null;
+	const internal =
+		internalDate && !Number.isNaN(new Date(internalDate).getTime())
+			? new Date(internalDate)
+			: null;
+	const messageDate = internal ?? headerDate ?? new Date();
+
 	const decoratedParsed = {
 		...parsed,
+		date: messageDate,
+		createdAt: messageDate,
 		mailboxId,
 		workspaceId,
 		threadId: thread.id,

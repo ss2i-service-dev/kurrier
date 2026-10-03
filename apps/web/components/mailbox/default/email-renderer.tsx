@@ -265,7 +265,9 @@ function EmailRenderer({
 						</div>
 						{/*<div className="px-3 py-2">suisse@dinebot.io</div>*/}
 						<div className="px-3 py-2">
-							{String(message?.headersJson?.to?.text)}
+							{message?.headersJson?.to?.text
+								? String(message.headersJson.to.text)
+								: "undisclosed recipients"}
 						</div>
 					</div>
 
@@ -364,7 +366,11 @@ function EmailRenderer({
 					<div className={"flex gap-1 items-center"}>
 						<div className={"text-xs text-muted-foreground"}>
 							to{" "}
-							{`<${getMessageAddress(message, "to") ?? getMessageName(message, "to")}>`}
+							{(() => {
+								// ss2i : un envoi en copie cachee n'a pas d'en-tete To ; l'amont affichait « <null> ».
+								const to = getMessageAddress(message, "to") ?? getMessageName(message, "to");
+								return to ? `<${to}>` : "undisclosed recipients";
+							})()}
 						</div>
 					</div>
 				</div>

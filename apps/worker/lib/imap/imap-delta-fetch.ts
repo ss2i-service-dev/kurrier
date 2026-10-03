@@ -92,6 +92,7 @@ export const deltaFetch = async (
 								uid,
 								mailboxPath: path,
 								flags: [...flags],
+								internalDate: (msg as any).internalDate ?? null,
 							},
 						},
 						seen: isSeen,
@@ -224,6 +225,9 @@ export const deltaFetch = async (
 							uid,
 							mailboxPath: path,
 							flags: [...flags],
+							// ss2i : date de reception cote serveur, utilisee comme date du message
+							// quand l'en-tete Date est absent ou malforme (cf. message-payload-parser).
+							internalDate: (msg as any).internalDate ?? null,
 						},
 					},
 					seen: isSeen,

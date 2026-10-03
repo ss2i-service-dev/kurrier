@@ -1,6 +1,6 @@
 import { ImapFlow, FetchMessageObject } from "imapflow";
 import { db, identities, IdentityEntity, mailboxes, mailboxSync } from "@db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { parseAndStoreEmail } from "../../message-payload-parser";
 import { initSmtpClient } from "../../../lib/imap/imap-client";
 import { defaultImapQuota } from "@schema";
@@ -160,59 +160,109 @@ async function backfillMailboxFull(opts: BackfillMailboxOpts): Promise<boolean> 
 	const range = `${start}:${end}`;
 	console.info("[imap:backfill-full] batch range", { identityId, path, range });
 
+	// ss2i : la fenetre est traitee de facon idempotente. L'amont parcourait `client.fetch(range)`
+	// et avancait le curseur quoi qu'il arrive ; or imapflow termine silencieusement l'iteration
+	// quand la connexion tombe (Gmail coupe au bout du socketTimeout quand il nous ralentit), et
+	// l'amont sortait aussi de la boucle a l'epuisement du quota : dans les deux cas les UID restants
+	// de la fenetre etaient sautes pour toujours (32 fenetres sur 32 tronquees le 03/10/2026).
+	// Desormais : 1) on demande au serveur les UID presents dans la fenetre ; 2) on retire ceux deja
+	// en base ; 3) on ne recupere que les manquants ; 4) le curseur n'avance que si la fenetre est
+	// complete. Une fenetre incomplete sera reprise au passage suivant, en ne refaisant que les trous.
+	// Corollaire : remettre `backfill_cursor_uid` en haut rejoue tout le rattrapage a moindre cout.
 	let batchBytes = 0;
 	let processedCount = 0;
+	let complete = false;
 
-	for await (const msg of client.fetch(
-		{ uid: range },
-		{
-			uid: true,
-			envelope: true,
-			flags: true,
-			internalDate: true,
-			size: true,
-			source: true,
-		},
-	)) {
-		if (quota.limit <= 0) break;
-
-		const m = msg as FetchMessageObject;
-		const raw = m.source ? m.source.toString() : "";
-		if (!raw) continue;
-
-		const size = m.size ?? Buffer.byteLength(raw, "utf8");
-
-		if (size > quota.limit) {
-			quota.limit = 0;
-			break;
-		}
-
-		batchBytes += size;
-		processedCount += 1;
-
-		const { seen, answered, flagged } = mapImapFlags(m.flags);
-		const flags = Array.from(m.flags ?? []);
-
-		await parseAndStoreEmail(raw, {
-			ownerId,
-			mailboxId,
-			workspaceId,
-			rawStorageKey: `eml/${ownerId}/${mailboxId}/${m.id}.eml`,
-			emlKey: String(m.id),
-			metaData: {
-				imap: {
-					uid: m.uid,
-					mailboxPath: path,
-					flags,
-					sizeBytes: m.size ?? null,
-					internalDate: m.internalDate ?? null,
-				},
-			},
-			mode: "backfill",
-			seen,
-			answered,
-			flagged,
+	try {
+		const searchRes = await client.search({ uid: range }, { uid: true });
+		if (searchRes === false) throw new Error("UID SEARCH a echoue, fenetre conservee");
+		const present = (searchRes || []) as number[];
+		const storedRows = await db.execute(
+			sql`select (meta->'imap'->>'uid')::bigint as uid from messages
+				where mailbox_id = ${mailboxId}
+				  and (meta->'imap'->>'uid') is not null
+				  and (meta->'imap'->>'uid')::bigint between ${start} and ${end}`,
+		);
+		const stored = new Set<number>(
+			((storedRows as any).rows ?? (storedRows as any)).map((r: any) => Number(r.uid)),
+		);
+		const missing = present.filter((u) => !stored.has(u));
+		console.info("[imap:backfill-full] window", {
+			identityId,
+			path,
+			range,
+			present: present.length,
+			stored: present.length - missing.length,
+			missing: missing.length,
 		});
+
+		if (missing.length === 0) {
+			complete = true;
+		} else {
+			const fetched = new Set<number>();
+			for await (const msg of client.fetch(
+				missing.join(","),
+				{
+					uid: true,
+					envelope: true,
+					flags: true,
+					internalDate: true,
+					size: true,
+					source: true,
+				},
+				{ uid: true },
+			)) {
+				if (quota.limit <= 0) break;
+
+				const m = msg as FetchMessageObject;
+				const raw = m.source ? m.source.toString() : "";
+				if (!raw) continue;
+
+				const size = m.size ?? Buffer.byteLength(raw, "utf8");
+
+				if (size > quota.limit) {
+					quota.limit = 0;
+					break;
+				}
+
+				batchBytes += size;
+				processedCount += 1;
+
+				const { seen, answered, flagged } = mapImapFlags(m.flags);
+				const flags = Array.from(m.flags ?? []);
+
+				await parseAndStoreEmail(raw, {
+					ownerId,
+					mailboxId,
+					workspaceId,
+					rawStorageKey: `eml/${ownerId}/${mailboxId}/${m.id}.eml`,
+					emlKey: String(m.id),
+					metaData: {
+						imap: {
+							uid: m.uid,
+							mailboxPath: path,
+							flags,
+							sizeBytes: m.size ?? null,
+							internalDate: m.internalDate ?? null,
+						},
+					},
+					mode: "backfill",
+					seen,
+					answered,
+					flagged,
+				});
+				fetched.add(m.uid);
+			}
+			complete = missing.every((u) => fetched.has(u));
+		}
+	} catch (err: any) {
+		console.warn("[imap:backfill-full] window interrupted, cursor kept", {
+			identityId,
+			path,
+			range,
+			error: err?.message ?? String(err),
+		});
+		complete = false;
 	}
 
 	console.info("[imap:backfill-full] processed messages", {
@@ -220,11 +270,18 @@ async function backfillMailboxFull(opts: BackfillMailboxOpts): Promise<boolean> 
 		path,
 		processedCount,
 		batchBytes,
+		complete,
 		remainingQuota: quota.limit,
 	});
 
 	if (batchBytes > 0) {
 		quota.limit = Math.max(0, quota.limit - batchBytes);
+	}
+
+	if (!complete) {
+		// fenetre incomplete : on ne touche pas au curseur, elle sera reprise plus tard.
+		if (politeWaitMs) await sleep(politeWaitMs);
+		return false;
 	}
 
 	cursor = start - 1;

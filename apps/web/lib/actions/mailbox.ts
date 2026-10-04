@@ -764,6 +764,32 @@ export const markAsUnread = async (
 	}
 };
 
+// ss2i : deplacements et suppressions sont faits par le worker. Revalider aussitot le job
+// poste redessinait la liste AVANT la mise a jour en base : le toast disait « moved to
+// Trash » et le fil restait affiche. On attend donc que les fils aient quitte le dossier
+// (quelques dizaines de ms en temps normal), avec un plafond pour ne jamais bloquer l'action.
+const waitForThreadsToLeave = async (
+	threadIds: string[],
+	mailboxId: string,
+	timeoutMs = 5000,
+) => {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const [row] = await db
+			.select({ n: count() })
+			.from(mailboxThreads)
+			.where(
+				and(
+					eq(mailboxThreads.mailboxId, mailboxId),
+					inArray(mailboxThreads.threadId, threadIds),
+				),
+			);
+		if (!Number(row?.n ?? 0)) return true;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	return false;
+};
+
 export const moveToTrash = async (
 	threadIds: string | string[],
 	mailboxId: string,
@@ -776,6 +802,19 @@ export const moveToTrash = async (
 		.filter(Boolean);
 
 	if (!ids.length || !mailboxId) return;
+
+	// ss2i : depuis la corbeille, « supprimer » ne peut pas etre un deplacement vers la
+	// corbeille (le job ne faisait rien et l'interface annoncait « moved to Trash ») :
+	// c'est une suppression definitive, comme le bouton de l'en-tete de liste.
+	const [source] = await db
+		.select({ kind: mailboxes.kind })
+		.from(mailboxes)
+		.where(eq(mailboxes.id, mailboxId))
+		.limit(1);
+	if (source?.kind === "trash") {
+		await deleteForever(ids, mailboxId, moveImap, refresh);
+		return "deleted" as const;
+	}
 
 	const { smtpQueue, searchIngestQueue } = await getRedis();
 
@@ -811,8 +850,10 @@ export const moveToTrash = async (
 	);
 
 	if (refresh) {
+		await waitForThreadsToLeave(ids, mailboxId);
 		revalidatePath("/mail");
 	}
+	return "trashed" as const;
 };
 
 // Archiver = deplacer vers le dossier de kind « archive » de l'identite. Le worker
@@ -916,6 +957,7 @@ export const archiveThread = async (
 	);
 
 	if (refresh) {
+		await waitForThreadsToLeave(ids, mailboxId);
 		revalidatePath("/mail");
 	}
 };
@@ -1151,7 +1193,10 @@ export async function deleteForever(
 		}),
 	);
 
-	if (refresh) revalidatePath("/mail");
+	if (refresh) {
+		await waitForThreadsToLeave(ids, mailboxId);
+		revalidatePath("/mail");
+	}
 }
 
 export async function addNewMailboxFolder(
@@ -1355,7 +1400,10 @@ export const moveToFolder = async (
 		),
 	);
 
-	if (refresh) revalidatePath("/mail");
+	if (refresh) {
+		await waitForThreadsToLeave(ids, fromMailboxId);
+		revalidatePath("/mail");
+	}
 };
 
 export const clearImapClients = async (identityId: string) => {

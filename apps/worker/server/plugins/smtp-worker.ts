@@ -26,7 +26,41 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 	const imapInstances = new Map<string, ImapFlow>();
 	const idleImapInstances = new Map<string, ImapFlow>();
-	const { connection, searchIngestQueue, smtpQueue } = await getRedis();
+	// ss2i : le rattrapage a sa propre connexion IMAP, distincte de celle des actions.
+	const backfillImapInstances = new Map<string, ImapFlow>();
+	const { connection, searchIngestQueue, backfillQueue } = await getRedis();
+
+	// ss2i : un rattrapage enchaine les fenetres jusqu'au quota du jour, soit plusieurs heures
+	// sur une grosse boite. Ce worker-ci ne traite qu'un job a la fois : tant que le rattrapage
+	// y tournait, les mail:move, mail:set-flags et mail:delete-permanent de TOUTES les boites
+	// restaient en attente (l'interface annoncait « moved to Trash » et rien ne bougeait).
+	// Le rattrapage part donc dans sa propre file ; le meme jobId y evite les doublons.
+	const enqueueBackfill = (identityId: string) =>
+		backfillQueue.add(
+			"imap:backfill-account",
+			{ identityId },
+			{
+				removeOnComplete: true,
+				removeOnFail: true,
+				jobId: `imap-backfill-account-${identityId}`,
+			},
+		);
+
+	const backfillWorker = new Worker(
+		"imap-backfill",
+		async (job) => {
+			const { identityId } = job.data as { identityId: string };
+			await startBackfillForIdentity(identityId, backfillImapInstances);
+			return { success: true };
+		},
+		{ connection, concurrency: 2, lockDuration: 5 * 60 * 1000 },
+	);
+	backfillWorker.on("failed", (job, err) => {
+		console.info(`[BACKFILL] ${job?.id} has failed with ${err.message}`);
+	});
+	backfillWorker.on("error", (err) => {
+		console.info(`[BACKFILL] worker has failed with ${err.message}`);
+	});
 
 	const worker = new Worker(
 		"smtp-worker",
@@ -72,9 +106,9 @@ export default defineNitroPlugin(async (nitroApp) => {
 				await deleteMail(job.data, imapInstances);
 			} else if (job.name === "smtp:append:sent") {
 			} else if (job.name === "imap:backfill-account") {
-
+				// ss2i : simple relais vers la file du rattrapage (le web continue de poster ici).
 				const { identityId } = job.data as { identityId: string };
-				await startBackfillForIdentity(identityId, imapInstances);
+				await enqueueBackfill(identityId);
 				return { success: true };
 			} else if (job.name === "imap:resume-backfills") {
 
@@ -88,15 +122,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 					// premiere heure. Ce qui dit qu'il reste du rattrapage, c'est le curseur.
 					.where(gt(mailboxSync.backfillCursorUid, 0));
 				for (const row of rows) {
-					await smtpQueue.add(
-						"imap:backfill-account",
-						{ identityId: row.identityId },
-						{
-							removeOnComplete: true,
-							removeOnFail: true,
-							jobId: `imap-backfill-account-${row.identityId}`,
-						},
-					);
+					await enqueueBackfill(row.identityId);
 				}
 				return { success: true };
 			} else if (job.name === "imap:backfill-discover") {
@@ -194,10 +220,14 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 			await logoutAll("command", imapInstances);
 			await logoutAll("realtime", idleImapInstances);
+			await logoutAll("backfill", backfillImapInstances);
 			console.info("Logged out from IMAP servers");
 			try {
 				await Promise.allSettled([
 					worker?.close(),
+					// ss2i : sans attendre la fin du rattrapage en cours (il dure des heures) ; le job
+					// reste dans la file et reprend au redemarrage, sur son curseur.
+					backfillWorker?.close(true),
 					scheduler?.close(),
 				]);
 			} catch (err: any) {

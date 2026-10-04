@@ -40,6 +40,11 @@ const migrationWorkerEvents = new QueueEvents(
 const davWorkerQueue = new Queue("dav-worker", redisConnection);
 const davWorkerEvents = new QueueEvents("dav-worker", redisConnection);
 
+// ss2i : file reservee au rattrapage IMAP. Il tournait dans "smtp-worker", qui ne traite
+// qu'un job a la fois : pendant ses heures de travail, suppressions, archivages et drapeaux
+// attendaient derriere lui (cf. server/plugins/smtp-worker.ts).
+const backfillQueue = new Queue("imap-backfill", redisConnection);
+
 export async function getRedis() {
 	await Promise.all([
 		smtpEvents.waitUntilReady(),
@@ -63,5 +68,6 @@ export async function getRedis() {
 		migrationWorkerEvents,
 		davWorkerQueue,
 		davWorkerEvents,
+		backfillQueue,
 	};
 }

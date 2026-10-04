@@ -44,6 +44,12 @@ export const deltaFetch = async (
 		.from(mailboxes)
 		.where(eq(mailboxes.identityId, identityId));
 
+	// ss2i : « Tous les messages » (\All, Gmail) passe en dernier, pour qu'un nouveau message
+	// soit d'abord range dans son vrai dossier (INBOX, Envoyes) et seulement reconnu ensuite.
+	const isAllMail = (r: (typeof mailboxRows)[number]) =>
+		String((r.metaData as any)?.imap?.specialUse ?? "").toLowerCase() === "\\all";
+	mailboxRows.sort((a, b) => Number(isAllMail(a)) - Number(isAllMail(b)));
+
 	for (const row of mailboxRows) {
 		// only when fully idle
 		const [syncRow] = await db
@@ -116,6 +122,10 @@ export const deltaFetch = async (
 					);
 
 				if (existing) {
+					// ss2i : « Tous les messages » (\All, Gmail) liste aussi le courrier de l'INBOX
+					// et des Envoyes. Y voir un message connu ailleurs n'est pas un deplacement :
+					// sans cette garde, chaque nouveau message quittait l'INBOX pour l'archive.
+					if (isAllMail(row)) return;
 					if (existing.mailboxId !== row.id) {
 						console.log(
 							`[deltaFetch] Move detected for ${messageId}: ${existing.mailboxId} → ${row.id}`,

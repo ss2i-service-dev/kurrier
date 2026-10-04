@@ -1,6 +1,13 @@
 import { ImapFlow, FetchMessageObject } from "imapflow";
-import { db, identities, IdentityEntity, mailboxes, mailboxSync } from "@db";
-import { and, eq, sql } from "drizzle-orm";
+import {
+	db,
+	identities,
+	IdentityEntity,
+	mailboxes,
+	mailboxSync,
+	messages,
+} from "@db";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { parseAndStoreEmail } from "../../message-payload-parser";
 import { initSmtpClient } from "../../../lib/imap/imap-client";
 import { defaultImapQuota } from "@schema";
@@ -65,6 +72,8 @@ type BackfillMailboxOpts = {
 	window?: number;
 	politeWaitMs?: number;
 	quota: IdentityQuota;
+	// ss2i : ne pas telecharger un message deja present dans un autre dossier de l'identite.
+	skipKnownMessages?: boolean;
 };
 
 const DEFAULT_WINDOW = 300;
@@ -86,7 +95,8 @@ async function backfillMailboxFull(opts: BackfillMailboxOpts): Promise<boolean> 
 		window = DEFAULT_WINDOW,
 		politeWaitMs = 0,
 		quota,
-		workspaceId
+		workspaceId,
+		skipKnownMessages = false,
 	} = opts;
 
 	if (quota.limit <= 0) return false;
@@ -195,13 +205,51 @@ async function backfillMailboxFull(opts: BackfillMailboxOpts): Promise<boolean> 
 		const stored = new Set<number>(
 			((storedRows as any).rows ?? (storedRows as any)).map((r: any) => Number(r.uid)),
 		);
-		const missing = present.filter((u) => !stored.has(u));
+		let missing = present.filter((u) => !stored.has(u));
+		const absent = missing.length;
+
+		// ss2i : « Tous les messages » de Gmail contient aussi ce qui est deja rattrape depuis
+		// l'INBOX ou les Envoyes. On lit d'abord les enveloppes (quelques octets) et on ecarte les
+		// messages dont le Message-ID existe deja pour cette identite : seul le courrier archive,
+		// absent partout ailleurs, est telecharge.
+		let known = 0;
+		if (skipKnownMessages && missing.length) {
+			const idByUid = new Map<number, string>();
+			for await (const env of client.fetch(
+				missing.join(","),
+				{ uid: true, envelope: true },
+				{ uid: true },
+			)) {
+				const mid = env.envelope?.messageId?.trim();
+				if (mid) idByUid.set(env.uid, mid);
+			}
+			if (idByUid.size) {
+				const rows = await db
+					.selectDistinct({ messageId: messages.messageId })
+					.from(messages)
+					.innerJoin(mailboxes, eq(mailboxes.id, messages.mailboxId))
+					.where(
+						and(
+							eq(mailboxes.identityId, identityId),
+							inArray(messages.messageId, [...new Set(idByUid.values())]),
+						),
+					);
+				const have = new Set(rows.map((r) => r.messageId));
+				missing = missing.filter((u) => {
+					const mid = idByUid.get(u);
+					return !(mid && have.has(mid));
+				});
+				known = absent - missing.length;
+			}
+		}
+
 		console.info("[imap:backfill-full] window", {
 			identityId,
 			path,
 			range,
 			present: present.length,
-			stored: present.length - missing.length,
+			stored: present.length - absent,
+			known,
 			missing: missing.length,
 		});
 
@@ -396,9 +444,22 @@ export const startFullBackfillForIdentity = async (
 			);
 		};
 
+		// ss2i : sur Gmail, « Tous les messages » (\All) contient tout le courrier. Il passe en
+		// dernier, dedoublonne, et rend inutile le rattrapage des dossiers de libelles (les memes
+		// messages, qu'il faudrait telecharger une fois par libelle) : on veut tout le courrier,
+		// pas l'arborescence.
+		const isAllMail = (row: (typeof mailboxRows)[number]) =>
+			String((row.metaData as any)?.imap?.specialUse ?? "").toLowerCase() ===
+			"\\all";
+		const hasAllMail = mailboxRows.some(isAllMail);
+
 		const inboxFirst = [
 			...mailboxRows.filter(isInbox),
-			...mailboxRows.filter((r) => !isInbox(r)),
+			...mailboxRows.filter(
+				(r) =>
+					!isInbox(r) && !isAllMail(r) && !(hasAllMail && r.kind === "custom"),
+			),
+			...mailboxRows.filter((r) => !isInbox(r) && isAllMail(r)),
 		];
 
 		// ss2i : l'amont ne traitait qu'une fenetre de 300 UID par dossier et par passage, puis
@@ -426,6 +487,7 @@ export const startFullBackfillForIdentity = async (
 					path,
 					quota,
 					politeWaitMs: 200,
+					skipKnownMessages: isAllMail(row),
 				});
 			}
 		}

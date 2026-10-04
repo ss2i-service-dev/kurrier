@@ -68,7 +68,18 @@ export async function syncMailbox(opts: {
 					source: true,
 				},
 			)) {
-				await onMessage(msg, path, identityId, workspaceId, mailboxId);
+				// ss2i : un message que la base refuse faisait echouer toute la passe, a chaque
+				// passe, et les dossiers suivants n'etaient plus jamais synchronises.
+				try {
+					await onMessage(msg, path, identityId, workspaceId, mailboxId);
+				} catch (err: any) {
+					console.error("[imap:sync] message non stocke, ignore", {
+						identityId,
+						path,
+						uid: msg.uid,
+						error: err?.cause?.message ?? err?.message ?? String(err),
+					});
+				}
 				if (msg.uid && msg.uid > maxUid) maxUid = msg.uid;
 			}
 

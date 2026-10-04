@@ -2,6 +2,7 @@ import { db, mailboxes, messages, mailboxThreads } from "@db";
 import { and, eq, sql } from "drizzle-orm";
 import { ImapFlow } from "imapflow";
 import { initSmtpClient } from "./imap-client";
+import { resolveUids, type UidRow } from "./imap-resolve-uids";
 
 type MoveJob = {
 	threadId: string;
@@ -64,12 +65,19 @@ export const moveMail = async (
 		return;
 	}
 
+	// ss2i : « corbeille -> corbeille » (Delete clique depuis la corbeille) n'a rien a deplacer.
+	if (destMailboxRow.id === fromMailboxId) return;
+
 	const destPath: string =
 		(destMailboxRow.metaData as any)?.imap?.path ?? destMailboxRow.name;
 
 	// Messages in thread scoped to the source mailbox
 	const threadMsgs = await db
-		.select({ id: messages.id, meta: messages.metaData })
+		.select({
+			id: messages.id,
+			meta: messages.metaData,
+			messageId: messages.messageId,
+		})
 		.from(messages)
 		.where(
 			and(
@@ -79,51 +87,25 @@ export const moveMail = async (
 		);
 	if (threadMsgs.length === 0) return;
 
+	// A relever AVANT la mise a jour en base, qui reecrit imap.mailboxPath.
+	type Group = { path: string; rows: UidRow[] };
+	const byPath = new Map<string, Group>();
 	if (moveImap) {
-		type Group = { path: string; uids: number[]; messageIds: string[] };
-		const byPath = new Map<string, Group>();
-
 		for (const m of threadMsgs) {
 			const im = (m.meta as any)?.imap;
 			const uid = im?.uid as number | undefined;
 			const srcPath = im?.mailboxPath as string | undefined;
 			if (!uid || !srcPath) continue;
-			const g = byPath.get(srcPath) ?? {
-				path: srcPath,
-				uids: [],
-				messageIds: [],
-			};
-			g.uids.push(Number(uid));
-			g.messageIds.push(m.id);
+			const g = byPath.get(srcPath) ?? { path: srcPath, rows: [] };
+			g.rows.push({ id: m.id, uid: Number(uid), messageId: m.messageId });
 			byPath.set(srcPath, g);
-		}
-
-		if (!byPath.size) {
-			console.debug(
-				"[mail:move] No IMAP-backed UIDs to move; DB-only move will proceed.",
-			);
-		} else {
-			const client = await initSmtpClient(srcMailbox.identityId, imapInstances);
-			if (client?.authenticated && client.usable) {
-				try {
-					for (const { path: srcPath, uids } of byPath.values()) {
-						if (!uids.length) continue;
-						const lock = await client.getMailboxLock(srcPath);
-						try {
-							await client.messageMove(uids, destPath, { uid: true });
-						} finally {
-							lock.release();
-						}
-					}
-				} catch (err) {
-					console.error("[mail:move] IMAP move failed:", err);
-					// Let DB update happen; delta sync can reconcile.
-				}
-			}
 		}
 	}
 
-	// DB update
+	// ss2i : la base d'abord, IMAP ensuite. L'amont faisait l'inverse : le fil restait a sa
+	// place dans l'interface pendant tout l'aller-retour IMAP (plusieurs secondes chez Gmail),
+	// et l'EXPUNGE recu par la connexion temps reel pouvait supprimer la ligne avant qu'elle
+	// soit deplacee. L'issue est la meme qu'avant en cas d'echec IMAP : la base est a jour.
 	await db.transaction(async (tx) => {
 		const set: Record<string, any> = {
 			mailboxId: destMailboxRow.id,
@@ -164,4 +146,60 @@ export const moveMail = async (
 				),
 			);
 	});
+
+	if (!moveImap) return;
+	if (!byPath.size) {
+		console.debug(
+			"[mail:move] No IMAP-backed UIDs to move; DB-only move was applied.",
+		);
+		return;
+	}
+
+	const client = await initSmtpClient(srcMailbox.identityId, imapInstances);
+	if (!client?.authenticated || !client.usable) {
+		console.error("[mail:move] IMAP client unavailable, DB-only move applied");
+		return;
+	}
+
+	try {
+		for (const { path: srcPath, rows } of byPath.values()) {
+			let wanted = new Map<number, string>();
+			let moved: { uidMap?: Map<number, number> } | false | undefined;
+			const lock = await client.getMailboxLock(srcPath);
+			try {
+				wanted = await resolveUids(client, rows);
+				if (wanted.size) {
+					moved = await client.messageMove([...wanted.keys()], destPath, {
+						uid: true,
+					});
+				}
+			} finally {
+				lock.release();
+			}
+
+			// ss2i : le message a un nouvel UID dans le dossier d'arrivee (reponse COPYUID).
+			// L'amont gardait l'ancien, qui designe un autre message de ce dossier.
+			const uidMap = moved ? moved.uidMap : undefined;
+			if (!uidMap) continue;
+			for (const [srcUid, destUid] of uidMap) {
+				const id = wanted.get(Number(srcUid));
+				if (!id || !destUid) continue;
+				await db
+					.update(messages)
+					.set({
+						metaData: sql`
+              jsonb_set(
+                coalesce(${messages.metaData}, '{}'::jsonb),
+                '{imap,uid}',
+                to_jsonb(${Number(destUid)}::int),
+                true
+              )
+            `,
+					})
+					.where(eq(messages.id, id));
+			}
+		}
+	} catch (err) {
+		console.error("[mail:move] IMAP move failed:", err);
+	}
 };

@@ -156,8 +156,10 @@ function EmailRenderer({
 	};
 	const deleteMessage = async () => {
 		try {
-			await moveToTrash(threadId, activeMailboxId, markSmtp, true);
-			toast.success("Moved to Trash", { position: "bottom-left" });
+			const done = await moveToTrash(threadId, activeMailboxId, markSmtp, true);
+			toast.success(done === "deleted" ? "Deleted forever" : "Moved to Trash", {
+				position: "bottom-left",
+			});
 			leaveThread();
 		} catch (err: any) {
 			toast.error(err?.message ?? "Delete failed");

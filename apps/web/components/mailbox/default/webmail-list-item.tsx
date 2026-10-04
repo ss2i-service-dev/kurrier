@@ -375,15 +375,16 @@ export default function WebmailListItem({
 					)}
 					<button
 						onClick={async () => {
-							await moveToTrash(
+							const done = await moveToTrash(
 								mailboxThreadItem.threadId,
 								activeMailbox.id,
 								!!mailboxSync,
 								true,
 							);
-							toast.success("Messages moved to Trash", {
-								position: "bottom-left",
-							});
+							toast.success(
+								done === "deleted" ? "Deleted forever" : "Messages moved to Trash",
+								{ position: "bottom-left" },
+							);
 						}}
 						className="rounded p-1 hover:bg-muted"
 						title="Delete"

@@ -288,26 +288,38 @@ async function backfillMailboxFull(opts: BackfillMailboxOpts): Promise<boolean> 
 				const { seen, answered, flagged } = mapImapFlags(m.flags);
 				const flags = Array.from(m.flags ?? []);
 
-				await parseAndStoreEmail(raw, {
-					ownerId,
-					mailboxId,
-					workspaceId,
-					rawStorageKey: `eml/${ownerId}/${mailboxId}/${m.id}.eml`,
-					emlKey: String(m.id),
-					metaData: {
-						imap: {
-							uid: m.uid,
-							mailboxPath: path,
-							flags,
-							sizeBytes: m.size ?? null,
-							internalDate: m.internalDate ?? null,
+				// ss2i : un message que la base refuse ne doit pas arreter le rattrapage. La fenetre
+				// n'etant validee que complete, il la bloquait pour toujours, et tout le dossier
+				// derriere elle. On le journalise et on passe au suivant.
+				try {
+					await parseAndStoreEmail(raw, {
+						ownerId,
+						mailboxId,
+						workspaceId,
+						rawStorageKey: `eml/${ownerId}/${mailboxId}/${m.id}.eml`,
+						emlKey: String(m.id),
+						metaData: {
+							imap: {
+								uid: m.uid,
+								mailboxPath: path,
+								flags,
+								sizeBytes: m.size ?? null,
+								internalDate: m.internalDate ?? null,
+							},
 						},
-					},
-					mode: "backfill",
-					seen,
-					answered,
-					flagged,
-				});
+						mode: "backfill",
+						seen,
+						answered,
+						flagged,
+					});
+				} catch (err: any) {
+					console.error("[imap:backfill-full] message non stocke, ignore", {
+						identityId,
+						path,
+						uid: m.uid,
+						error: err?.cause?.message ?? err?.message ?? String(err),
+					});
+				}
 				fetched.add(m.uid);
 			}
 			complete = missing.every((u) => fetched.has(u));

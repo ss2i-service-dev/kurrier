@@ -227,6 +227,26 @@ function isIcsAttachment(att: Attachment) {
 /**
  * Parse raw email, create thread, insert message + attachments.
  */
+// ss2i : PostgreSQL refuse l'octet nul dans un texte comme dans un jsonb (erreur 22021,
+// « invalid byte sequence for encoding UTF8: 0x00 »). Un seul message qui en contient, du
+// spam le plus souvent, faisait echouer son insertion, et avec elle toute la synchronisation
+// du compte ou la fenetre de rattrapage en cours. On retire ces octets avant d'inserer.
+function stripNul<T>(value: T): T {
+	if (typeof value === "string") return value.replace(/\u0000/g, "") as T;
+	if (Array.isArray(value)) return value.map(stripNul) as T;
+	if (
+		value &&
+		typeof value === "object" &&
+		!(value instanceof Date) &&
+		!Buffer.isBuffer(value)
+	) {
+		const out: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(value)) out[k] = stripNul(v);
+		return out as T;
+	}
+	return value;
+}
+
 export async function parseAndStoreEmail(
 	rawEmail: string,
 	opts: {
@@ -343,7 +363,7 @@ export async function parseAndStoreEmail(
 		(decoratedParsed as any).flagged = opts.flagged;
 	}
 
-	const messagePayload = MessageInsertSchema.parse(decoratedParsed);
+	const messagePayload = stripNul(MessageInsertSchema.parse(decoratedParsed));
 	const [message] = await db
 		.insert(messages)
 		.values(messagePayload as MessageCreate)

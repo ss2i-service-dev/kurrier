@@ -16,10 +16,10 @@ export function shouldSyncBox(box: ImapBox, isGmail: boolean): boolean {
 	if (box.flags?.has("\\Noselect")) return false;
 
 	const path = box.path.toLowerCase();
-	const su = (box.specialUse as string | undefined)?.toLowerCase() ?? "";
-
 	if (isGmail) {
-		if (su === "\\all") return false;
+		// ss2i : « Tous les messages » (\All) n'est plus ecarte. C'est le seul dossier qui porte
+		// le courrier archive, soit l'essentiel d'une boite Gmail. Il est enregistre comme dossier
+		// d'archive, rattrape en dernier et dedoublonne par Message-ID (cf. backfill-full.ts).
 		if (path === "[gmail]") return false;
 		if (path === "[gmail]/important") return false;
 		if (path === "[gmail]/notes") return false;
@@ -27,4 +27,8 @@ export function shouldSyncBox(box: ImapBox, isGmail: boolean): boolean {
 	}
 
 	return true;
+}
+
+export function isAllMailBox(specialUse?: string | null): boolean {
+	return (specialUse ?? "").toLowerCase() === "\\all";
 }

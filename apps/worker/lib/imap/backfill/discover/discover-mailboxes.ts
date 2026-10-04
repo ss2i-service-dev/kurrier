@@ -4,6 +4,7 @@ import { ImapFlow } from "imapflow";
 import slugify from "@sindresorhus/slugify";
 import {
 	ImapBox,
+	isAllMailBox,
 	isGmailAccountFromBoxes,
 	shouldSyncBox,
 } from "./discover-gmail";
@@ -92,7 +93,12 @@ export const discoverMailboxes = async (
 		// cherche « trash », « sent », « spam »... jamais « deleted-items ». Un serveur
 		// qui nomme ses dossiers autrement (Stalwart : « Deleted Items ») rendait la
 		// suppression impossible (« Mailbox not found »).
-		const kind = inferKind(mbx.name, mbx.specialUse as string | undefined);
+		// ss2i : sur Gmail, « Tous les messages » tient lieu de dossier d'archive (archiver un
+		// message chez Gmail, c'est lui retirer le libelle INBOX : il ne reste que la).
+		const kind =
+			isGmail && isAllMailBox(mbx.specialUse as string | undefined)
+				? "archive"
+				: inferKind(mbx.name, mbx.specialUse as string | undefined);
 		const slug = kind === "custom" ? slugify(mbx.name.toLowerCase()) : kind;
 		const valuesBase = {
 			ownerId: identity.ownerId,
@@ -119,7 +125,11 @@ export const discoverMailboxes = async (
 					identityId: identity.id,
 					mailboxId: row.id,
 					uidValidity: box.uidValidity!,
-					lastSeenUid: 0,
+					// ss2i : la synchronisation courante telecharge TOUT ce qui depasse lastSeenUid,
+					// sans quota. A 0, un dossier decouvert etait aspire en entier au premier nouveau
+					// message, avant que le rattrapage (qui pose ce repere) n'arrive jusqu'a lui.
+					// L'historique est l'affaire du rattrapage, sous quota.
+					lastSeenUid: Math.max(0, (box.uidNext ?? 1) - 1),
 					backfillCursorUid: Math.max(0, (box.uidNext ?? 1) - 1),
 					phase: "BACKFILL",
 				});
@@ -147,7 +157,11 @@ export const discoverMailboxes = async (
 						identityId: identity.id,
 						mailboxId: existing.id,
 						uidValidity: box.uidValidity!,
-						lastSeenUid: 0,
+						// ss2i : la synchronisation courante telecharge TOUT ce qui depasse lastSeenUid,
+						// sans quota. A 0, un dossier decouvert etait aspire en entier au premier nouveau
+						// message, avant que le rattrapage (qui pose ce repere) n'arrive jusqu'a lui.
+						// L'historique est l'affaire du rattrapage, sous quota.
+						lastSeenUid: Math.max(0, (box.uidNext ?? 1) - 1),
 						backfillCursorUid: Math.max(0, (box.uidNext ?? 1) - 1),
 						phase: "BACKFILL",
 					});

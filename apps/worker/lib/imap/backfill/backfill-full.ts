@@ -69,6 +69,13 @@ type BackfillMailboxOpts = {
 
 const DEFAULT_WINDOW = 300;
 
+// ss2i : valeur de `backfill_cursor_uid` qui veut dire « rattrapage de ce dossier termine ».
+// L'amont n'avait que 0, qui veut aussi dire « jamais commence » : arrive en bas, le dossier
+// repartait du haut au passage suivant. Avec les fenetres enchainees, le rattrapage tournait
+// alors en boucle sur l'INBOX (terminee) sans jamais passer aux dossiers suivants ni finir.
+// Pour rejouer un dossier : remettre son curseur a 0 (ou a un UID).
+const BACKFILL_DONE = -1;
+
 async function backfillMailboxFull(opts: BackfillMailboxOpts): Promise<boolean> {
 	const {
 		client,
@@ -123,6 +130,8 @@ async function backfillMailboxFull(opts: BackfillMailboxOpts): Promise<boolean> 
 	}
 
 	let cursor = Number(sync.backfillCursorUid ?? 0);
+
+	if (cursor === BACKFILL_DONE) return false;
 
 	// Nothing left to backfill for this mailbox
 	if (cursor <= 0) {
@@ -285,15 +294,21 @@ async function backfillMailboxFull(opts: BackfillMailboxOpts): Promise<boolean> 
 	}
 
 	cursor = start - 1;
+	const done = cursor <= 0;
 
 	await db
 		.update(mailboxSync)
 		.set({
-			backfillCursorUid: cursor,
-			phase: cursor <= 0 ? "IDLE" : "BACKFILL",
+			backfillCursorUid: done ? BACKFILL_DONE : cursor,
+			phase: done ? "IDLE" : "BACKFILL",
 			updatedAt: new Date(),
 		})
 		.where(eq(mailboxSync.id, sync.id));
+
+	if (done) {
+		console.info("[imap:backfill-full] mailbox complete", { identityId, path });
+		return false;
+	}
 
 	if (politeWaitMs) {
 		await sleep(politeWaitMs);

@@ -167,14 +167,33 @@ export default function EmailViewer({
 		setShowRemoteImages(remoteImagesAllowed);
 	}, [remoteImagesAllowed, senderEmail]);
 
+	// Les autres messages du meme expediteur deja ouverts (fil a plusieurs
+	// messages) suivent la preference sans rechargement.
+	useEffect(() => {
+		const onPref = (e: Event) => {
+			const d = (e as CustomEvent).detail ?? {};
+			if (String(d.email).toLowerCase() !== String(senderEmail).toLowerCase()) return;
+			setAlwaysForSender(Boolean(d.allow));
+			setShowRemoteImages(Boolean(d.allow));
+		};
+		window.addEventListener("ss2i:remote-images", onPref);
+		return () => window.removeEventListener("ss2i:remote-images", onPref);
+	}, [senderEmail]);
+
 	const savePreference = async (allow: boolean) => {
-		if (!senderEmail || senderEmail === "unknown") return;
+		if (!senderEmail || senderEmail === "unknown") {
+			// Expediteur illisible : rien a memoriser, on se limite a ce message.
+			setShowRemoteImages(allow);
+			return;
+		}
+		// Affichage immediat, l'enregistrement suit.
+		setShowRemoteImages(allow);
 		setSavingPref(true);
 		try {
 			const r = await setRemoteImagesForContact({ email: senderEmail, name: senderName, allow });
 			if (r?.success === false) throw new Error(r.error ?? "Failed");
 			setAlwaysForSender(allow);
-			setShowRemoteImages(allow);
+			window.dispatchEvent(new CustomEvent("ss2i:remote-images", { detail: { email: senderEmail, allow } }));
 			if (allow && r?.created) toast.success(`${senderEmail} added to your contacts`);
 		} catch (e: any) {
 			toast.error(e?.message ?? "Could not save the preference");
@@ -236,16 +255,14 @@ export default function EmailViewer({
 					{!showRemoteImages ? (
 						<>
 							<span>Remote images are blocked.</span>
-							<Button size="xs" variant="default" onClick={() => setShowRemoteImages(true)}>
+							{/* ss2i : charger une fois = charger toujours pour cet expediteur. */}
+							<Button size="xs" variant="default" loading={savingPref} onClick={allowRemoteImagesForSender} title={`Also loads them automatically in future messages from ${senderEmail}`}>
 								Load images
-							</Button>
-							<Button size="xs" variant="default" loading={savingPref} onClick={allowRemoteImagesForSender}>
-								Always load for this contact
 							</Button>
 						</>
 					) : alwaysForSender ? (
 						<>
-							<span>Images from {senderEmail} are always loaded (contact preference).</span>
+							<span>Images from {senderEmail} are loaded automatically.</span>
 							<Button size="xs" variant="default" loading={savingPref} onClick={blockRemoteImagesAgain}>
 								Stop loading automatically
 							</Button>

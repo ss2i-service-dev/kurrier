@@ -91,6 +91,7 @@ export default function WebmailList({
 										}
 										mailboxThreadItem={mailboxThreadItem}
 										workspacePublicId={workspacePublicId}
+										orderedThreadIds={mailboxThreads.map((t) => String(t.threadId))}
 										activeMailbox={activeMailbox}
 										identityPublicId={identityPublicId}
 										mailboxSync={mailboxSync ?? undefined}

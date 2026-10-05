@@ -25,6 +25,8 @@ type Props = {
 	globalLabels: FetchLabelsResult;
 	labelsByThreadId: FetchMailboxThreadLabelsResult;
 	workspacePublicId?: string;
+	// ss2i : ordre affiche des fils, pour la selection par plage (Shift+clic).
+	orderedThreadIds?: string[];
 };
 import { Temporal } from "@js-temporal/polyfill";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
@@ -40,7 +42,8 @@ export default function WebmailListItem({
 	mailboxSync,
 	globalLabels,
 	labelsByThreadId,
-	workspacePublicId
+	workspacePublicId,
+	orderedThreadIds = [],
 }: Props) {
 	function formatDateLabel(input?: string | number | Date) {
 		const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -201,7 +204,31 @@ export default function WebmailListItem({
 
 	const { state, setState } = useDynamicContext<{
 		selectedThreadIds: Set<string>;
+		lastSelectedThreadId?: string;
 	}>();
+
+	// ss2i : Shift+clic applique l'etat de la case cliquee a toute la plage
+	// depuis la derniere case cliquee, comme Gmail. Mise a jour fusionnee : le
+	// setState du contexte remplace l'etat entier.
+	const toggleSelection = (shiftKey: boolean) => {
+		const id = mailboxThreadItem.threadId;
+		setState((prev) => {
+			const next = new Set(prev?.selectedThreadIds);
+			const willCheck = !next.has(id);
+			const anchor = prev?.lastSelectedThreadId;
+			const from = anchor ? orderedThreadIds.indexOf(anchor) : -1;
+			const to = orderedThreadIds.indexOf(id);
+			const ids =
+				shiftKey && from >= 0 && to >= 0
+					? orderedThreadIds.slice(Math.min(from, to), Math.max(from, to) + 1)
+					: [id];
+			for (const t of ids) {
+				if (willCheck) next.add(t);
+				else next.delete(t);
+			}
+			return { ...prev, selectedThreadIds: next, lastSelectedThreadId: id };
+		});
+	};
 
 	return (
 		<>
@@ -220,21 +247,16 @@ export default function WebmailListItem({
 					{!isOnSnoozedPage && (
 						<input
 							type="checkbox"
-							onChange={(e) => {
-								const newSet = new Set(state?.selectedThreadIds);
-								if (e.target.checked) {
-									newSet.add(mailboxThreadItem.threadId);
-								} else {
-									newSet.delete(mailboxThreadItem.threadId);
-								}
-								setState({ selectedThreadIds: newSet });
-							}}
+							onChange={() => {}}
 							checked={state?.selectedThreadIds?.has(
 								mailboxThreadItem.threadId,
 							)}
 							aria-label={`Select thread ${mailboxThreadItem.subject}`}
 							className="h-4 w-4 rounded border-muted-foreground/40"
-							onClick={(e) => e.stopPropagation()}
+							onClick={(e) => {
+								e.stopPropagation();
+								toggleSelection(e.shiftKey);
+							}}
 						/>
 					)}
 				</div>

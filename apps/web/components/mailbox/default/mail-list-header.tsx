@@ -1,6 +1,7 @@
 "use client";
 import React, { useRef, useEffect, useState } from "react";
-import { Archive, MailOpen, RotateCw, Trash2 } from "lucide-react";
+import { Archive, Inbox, ListChecks, MailOpen, RotateCw, Trash2 } from "lucide-react";
+import { findLikelyNotSpam } from "@/lib/actions/spam-triage";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import {
 	archiveThread,
@@ -9,6 +10,7 @@ import {
 	FetchIdentityMailboxListResult,
 	FetchMailboxThreadsResult,
 	markAsRead,
+	moveToFolder,
 	moveToTrash,
 	revalidateMailbox,
 } from "@/lib/actions/mailbox";
@@ -116,6 +118,34 @@ function MailListHeader({
 		toast.success("Messages archived", { position: "bottom-left" });
 	};
 
+	// ss2i : page Spam. Presélection des fils probablement legitimes (expediteur
+	// deja vu hors spam ou a qui on a ecrit), puis renvoi en boite de reception.
+	const [triaging, setTriaging] = useState(false);
+	const selectLikelyNotSpam = async () => {
+		try {
+			setTriaging(true);
+			const found = new Set(await findLikelyNotSpam(String(mailboxIdRef.current)));
+			const shown = mailboxThreads.map((t) => String(t.threadId)).filter((id) => found.has(id));
+			setState((prev) => ({ ...prev, selectedThreadIds: new Set(shown) }));
+			if (shown.length === 0) toast.info("No message here looks legitimate", { position: "bottom-left" });
+			else toast.success(`${shown.length} message(s) selected, check them before moving`, { position: "bottom-left" });
+		} catch (e: any) {
+			toast.error(e?.message ?? "Selection failed");
+		} finally {
+			setTriaging(false);
+		}
+	};
+	const inboxId = identityMailboxes
+		.find((im) => im.identity.id === activeMailbox?.identityId)
+		?.mailboxes?.find((m: any) => m?.kind === "inbox")?.id;
+	const notSpam = async () => {
+		if (!inboxId) return;
+		const ids = Array.from(state?.selectedThreadIds ?? []);
+		await moveToFolder(ids, String(mailboxIdRef.current), String(inboxId), !!mailboxSync, true);
+		setState((prev) => ({ ...prev, selectedThreadIds: new Set() }));
+		toast.success("Moved to Inbox", { position: "bottom-left" });
+	};
+
 	const removeTrash = async () => {
 		await deleteForever(
 			Array.from(state?.selectedThreadIds ?? []),
@@ -180,6 +210,24 @@ function MailListHeader({
 							<RotateCw className={reloading ? "animate-spin" : ""} size={16} />
 						</ActionIcon>
 					</Tooltip>
+					{mailboxKind.current === "spam" && (
+						<Tooltip
+							label="Select messages that are probably not spam: sender already seen in Inbox, Archive or a folder, or someone you have written to"
+							multiline
+							w={260}
+							withArrow
+						>
+							<Button
+								size="xs"
+								variant="subtle"
+								loading={triaging}
+								leftSection={<ListChecks size={16} />}
+								onClick={selectLikelyNotSpam}
+							>
+								Select likely not spam
+							</Button>
+						</Tooltip>
+					)}
 
 					<div
 						className={clsx(
@@ -193,6 +241,17 @@ function MailListHeader({
 							identityMailboxes={identityMailboxes}
 							activeMailbox={activeMailbox}
 						/>
+						{mailboxKind.current === "spam" && inboxId && (
+							<button
+								type="button"
+								onClick={notSpam}
+								className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs hover:bg-muted"
+								title="Not spam: move to Inbox"
+							>
+								<Inbox className="h-4 w-4" />
+								Not spam
+							</button>
+						)}
 						{mailboxKind.current !== "archive" && (
 							<button
 								type="button"

@@ -1,7 +1,7 @@
 "use server";
 
 import { cache } from "react";
-import {getWorkspaceId, rlsClient} from "@/lib/actions/clients";
+import {getWorkspaceId, getWorkspacePublicId, rlsClient} from "@/lib/actions/clients";
 import {
 	db,
 	DraftMessageInsertSchema,
@@ -1335,7 +1335,8 @@ export async function deleteMailboxFolder({
 	);
 
 	await job.waitUntilFinished(smtpEvents);
-	redirect(`/dashboard/mail/${identityId}/inbox`);
+	// ss2i : l'amont oubliait le segment /w/<id>/, d'ou une 404 apres chaque suppression.
+	redirect(`/w/${await getWorkspacePublicId()}/dashboard/mail/${identityId}/inbox`);
 	return { success: true };
 }
 

@@ -9,7 +9,9 @@ export default async function DashboardLayout({
 	const user = await isSignedIn();
 
 	if (user) {
-		redirect("/dashboard/platform/overview");
+		// ss2i : l'amont visait /dashboard/platform/overview, sans le segment
+		// /w/<id>/ : 404 a chaque ouverture avec une session encore valide.
+		redirect("/api/auth/resume");
 	}
 
 	return <>{children}</>;

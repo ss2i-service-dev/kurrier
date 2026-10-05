@@ -1,0 +1,23 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { getWorkspaceRedirectUrl, isSignedIn } from "@/lib/actions/auth";
+import { withLocale } from "@/lib/utils";
+
+// Reprise d'une session encore valide : envoie vers la boite de reception de
+// l'identite par defaut (ou la vue d'ensemble du workspace), avec le segment
+// /w/<id>/ que le layout d'authentification amont oubliait (404 assuree).
+// C'est une route et non le layout, parce que le contexte du workspace se pose
+// en cookies, ce qu'un composant serveur n'a pas le droit de faire.
+export async function GET() {
+	const cookieStore = await cookies();
+	const locale = cookieStore.get("locale")?.value === "ko" ? "ko" : "en";
+	const user = await isSignedIn();
+	const target = user
+		? await getWorkspaceRedirectUrl(user as Parameters<typeof getWorkspaceRedirectUrl>[0])
+		: "/auth/login";
+	if (target === "/auth/login") {
+		// Session sans workspace : on la coupe, sinon login -> reprise -> login en boucle.
+		cookieStore.delete("session");
+	}
+	redirect(withLocale(locale, target));
+}

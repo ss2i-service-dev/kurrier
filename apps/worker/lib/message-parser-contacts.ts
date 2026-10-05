@@ -1,4 +1,5 @@
-import {db, addressBooks, contacts, mailboxes, workspaceMembers, workspaceIdentityMembers} from "@db";
+import {db, addressBooks, contacts, identities, mailboxes, workspaceMembers, workspaceIdentityMembers} from "@db";
+import { upsertContactsFromOutgoing } from "./outgoing-contacts";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {ParsedMail} from "mailparser";
 
@@ -13,8 +14,14 @@ function getFromAddress(parsed: ParsedMail) {
 
 async function getMailboxContext(mailboxId: string) {
     const [mb] = await db
-        .select({ workspaceId: mailboxes.workspaceId, identityId: mailboxes.identityId })
+        .select({
+            workspaceId: mailboxes.workspaceId,
+            identityId: mailboxes.identityId,
+            kind: mailboxes.kind,
+            identityValue: identities.value,
+        })
         .from(mailboxes)
+        .leftJoin(identities, eq(identities.id, mailboxes.identityId))
         .where(eq(mailboxes.id, mailboxId))
         .limit(1);
 
@@ -38,11 +45,31 @@ export async function upsertWorkspaceSharedContactFromMessage(opts: {
 }) {
     const { parsed, mailboxId, fallbackOwnerId } = opts;
 
-    const addr = getFromAddress(parsed);
-    if (!addr) return null;
-
     const mb = await getMailboxContext(mailboxId);
     if (!mb) return null;
+
+    // ss2i : le carnet ne recoit QUE les personnes a qui l'on a ecrit. Un message
+    // du dossier Envoyes (y compris ecrit hors kurrier, depuis Gmail par exemple)
+    // y ajoute ses destinataires ; le courrier recu n'y ajoute plus personne.
+    if (mb.kind === "sent") {
+        try {
+            await upsertContactsFromOutgoing({
+                ownerIds: [fallbackOwnerId],
+                workspaceId: mb.workspaceId,
+                ownAddresses: [String(mb.identityValue ?? "")].filter(Boolean),
+                recipients: [
+                    (parsed.to as any)?.text ?? null,
+                    (parsed.cc as any)?.text ?? null,
+                ],
+            });
+        } catch (err: any) {
+            console.error("[contacts] sent recipients failed:", err?.message ?? err);
+        }
+        return null;
+    }
+
+    const addr = getFromAddress(parsed);
+    if (!addr) return null;
 
     if (!mb.identityId) return null;
 
@@ -104,24 +131,8 @@ export async function upsertWorkspaceSharedContactFromMessage(opts: {
                 )
                 .limit(1);
 
-            if (!existing) {
-                const { firstName, lastName } = splitName(displayName);
-                const [inserted] = await tx
-                    .insert(contacts)
-                    .values({
-                        ownerId,
-                        workspaceId: book.workspaceId,
-                        addressBookId: book.id,
-                        firstName,
-                        lastName,
-                        emails: [{ address: email }],
-                        profilePictureXs: null,
-                    } as any)
-                    .returning();
-
-                if (inserted?.id) results.push({ ownerId, contactId: inserted.id });
-                continue;
-            }
+            // ss2i : un expediteur inconnu ne devient plus un contact.
+            if (!existing) continue;
 
             const hasName = !!(existing.firstName || existing.lastName);
             if (!hasName && displayName) {

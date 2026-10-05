@@ -56,7 +56,10 @@ async function flushBatches() {
 
 		if (searchBuffer.length) {
 			const messageIds = searchBuffer.map((job) => job.messageId);
-			const contactIds = searchBuffer.map((job) => job.contactId);
+			// ss2i : seuls les messages rattaches a un contact existant le poussent vers CardDAV.
+			const contactIds = searchBuffer
+				.map((job) => job.contactId)
+				.filter((id) => id && id !== "null");
 			const ownerId = searchBuffer[0].ownerId;
 
 			await searchIngestQueue.add(
@@ -64,11 +67,13 @@ async function flushBatches() {
 				{ messageIds },
 				{ removeOnComplete: true },
 			);
-			await davWorkerQueue.add(
-				"dav:create-contacts-batch",
-				{ contactIds: contactIds, ownerId },
-				{ removeOnComplete: true, removeOnFail: true },
-			);
+			if (contactIds.length) {
+				await davWorkerQueue.add(
+					"dav:create-contacts-batch",
+					{ contactIds: contactIds, ownerId },
+					{ removeOnComplete: true, removeOnFail: true },
+				);
+			}
 
 			searchBuffer = [];
 		}

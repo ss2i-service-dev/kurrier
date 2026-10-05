@@ -67,7 +67,8 @@ export default function WebmailListItemMobile({
 
 	const openThread = () => {
 		const url = pathname.match("/dashboard/mail")
-			? `/dashboard/mail/${identityPublicId}/${activeMailbox.slug}/threads/${mailboxThreadItem.threadId}`
+			? // ss2i : meme lien que la liste bureau, avec le segment /w/<id>/ (404 sinon).
+			  `/w/${pathname.match(/\/w\/([^/]+)/)?.[1]}/dashboard/mail/${identityPublicId}/${activeMailbox.slug}/threads/${mailboxThreadItem.threadId}`
 			: `/mail/${identityPublicId}/${activeMailbox.slug}/threads/${mailboxThreadItem.threadId}`;
 		router.push(url);
 	};

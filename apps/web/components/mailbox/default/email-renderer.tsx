@@ -4,14 +4,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
 import slugify from "@sindresorhus/slugify";
-import { Archive, Code, Download, EllipsisVertical, Forward, Reply, ReplyAll, Trash2 } from "lucide-react";
+import { Archive, Code, Download, EllipsisVertical, Forward, Mail, Reply, ReplyAll, Trash2 } from "lucide-react";
 import { Temporal } from "@js-temporal/polyfill";
 import dynamic from "next/dynamic";
-import { ActionIcon, Button, Menu, Modal } from "@mantine/core";
+import { ActionIcon, Button, Menu, Modal, Tooltip } from "@mantine/core";
 import { EmailEditorHandle } from "@/components/mailbox/default/editor/email-editor";
 import EditorAttachmentItem from "@/components/mailbox/default/editor/editor-attachment-item";
 import { PublicConfig } from "@schema";
-import {archiveThread, fetchMailbox, FetchIdentityMailboxListResult, FetchThreadMailSubsResult, markAsRead, moveToTrash} from "@/lib/actions/mailbox";
+import {archiveThread, fetchMailbox, FetchIdentityMailboxListResult, FetchThreadMailSubsResult, markAsRead, markAsUnread, moveToTrash} from "@/lib/actions/mailbox";
 import { replyRecipients } from "@/lib/reply-recipients";
 import { toast } from "sonner";
 import {getRawMessageDownloadUrl} from "@/lib/actions/uploads-actions";
@@ -163,6 +163,16 @@ function EmailRenderer({
 			leaveThread();
 		} catch (err: any) {
 			toast.error(err?.message ?? "Delete failed");
+		}
+	};
+	// Non lu : on revient a la liste, sinon la reouverture du fil le remarque lu.
+	const unreadMessage = async () => {
+		try {
+			await markAsUnread(threadId, activeMailboxId, markSmtp, true);
+			toast.success("Marked as unread", { position: "bottom-left" });
+			leaveThread();
+		} catch (err: any) {
+			toast.error(err?.message ?? "Mark as unread failed");
 		}
 	};
 	const editorRef = useRef<EmailEditorHandle>(null);
@@ -388,13 +398,27 @@ function EmailRenderer({
 				>
 					<div className={"text-xs text-muted-foreground"}>{formatted}</div>
 					<div className={"flex gap-1 justify-end items-center"}>
-						<ActionIcon
-							variant={"transparent"}
-							onClick={() => openEditor(defaultReplyMode)}
-							title={hasOtherRecipients ? "Reply all" : "Reply"}
-						>
-							{hasOtherRecipients ? <ReplyAll size={18} /> : <Reply size={18} />}
-						</ActionIcon>
+						{/* ss2i : actions en un clic dans l'en-tete, sans passer par le menu. */}
+						<Tooltip label="Reply all (r)" withArrow>
+							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Reply all" onClick={() => openEditor(defaultReplyMode)}>
+								<ReplyAll size={18} />
+							</ActionIcon>
+						</Tooltip>
+						<Tooltip label="Archive (a)" withArrow>
+							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Archive" onClick={archiveMessage}>
+								<Archive size={18} />
+							</ActionIcon>
+						</Tooltip>
+						<Tooltip label="Mark as unread and back to the list" withArrow>
+							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Mark as unread" onClick={unreadMessage}>
+								<Mail size={18} />
+							</ActionIcon>
+						</Tooltip>
+						<Tooltip label="Delete (e)" withArrow>
+							<ActionIcon variant={"subtle"} color={"red"} aria-label="Delete" onClick={deleteMessage}>
+								<Trash2 size={18} />
+							</ActionIcon>
+						</Tooltip>
 
 						<div className={"cursor-pointer"}>
 							<Menu shadow="md" width={175} position={"left-start"}>

@@ -2,6 +2,7 @@
 import React, { useRef, useEffect, useState } from "react";
 import { Archive, Inbox, ListChecks, MailOpen, RotateCw, Trash2 } from "lucide-react";
 import { findLikelyNotSpam } from "@/lib/actions/spam-triage";
+import { moveWithUndo } from "@/lib/pending-moves";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import {
 	archiveThread,
@@ -94,29 +95,43 @@ function MailListHeader({
 		);
 	};
 
-	const deleteThreads = async () => {
+	// ss2i : la selection quitte la liste des le clic, toast avec « Undo » ; le serveur
+	// n'est sollicite qu'a la fin de la fenetre d'annulation (cf. lib/pending-moves).
+	// En cas d'echec, les fils reviennent avec l'erreur.
+	// Avant : rien a l'ecran pendant de longues secondes, puis quelques fils seulement.
+	const applyToSelection = (
+		run: (ids: string[], mailboxId: string) => Promise<unknown>,
+		done: (n: number) => string,
+	) => {
+		const ids = Array.from(state?.selectedThreadIds ?? []).map(String);
+		const mailboxId = String(mailboxIdRef.current);
+		if (!ids.length) return;
+		setState((prev) => ({ ...prev, selectedThreadIds: new Set() }));
+		moveWithUndo({
+			mailboxId,
+			threadIds: ids,
+			message: done(ids.length),
+			run: () => run(ids, mailboxId),
+		});
+	};
+	const plural = (n: number) => (n > 1 ? `${n} conversations` : "Conversation");
+
+	const deleteThreads = () => {
 		if (mailboxKind.current === "trash") {
-			await removeTrash();
+			removeTrash();
 			return;
 		}
-		await moveToTrash(
-			Array.from(state?.selectedThreadIds ?? []),
-			String(mailboxIdRef.current),
-			!!mailboxSync,
-			true,
+		applyToSelection(
+			(ids, mailboxId) => moveToTrash(ids, mailboxId, !!mailboxSync, true),
+			(n) => `${plural(n)} moved to Trash`,
 		);
-		toast.success("Messages moved to Trash", { position: "bottom-left" });
 	};
 
-	const archiveThreads = async () => {
-		await archiveThread(
-			Array.from(state?.selectedThreadIds ?? []),
-			String(mailboxIdRef.current),
-			!!mailboxSync,
-			true,
+	const archiveThreads = () =>
+		applyToSelection(
+			(ids, mailboxId) => archiveThread(ids, mailboxId, !!mailboxSync, true),
+			(n) => `${plural(n)} archived`,
 		);
-		toast.success("Messages archived", { position: "bottom-left" });
-	};
 
 	// ss2i : page Spam. Presélection des fils probablement legitimes (expediteur
 	// deja vu hors spam ou a qui on a ecrit), puis renvoi en boite de reception.
@@ -138,23 +153,20 @@ function MailListHeader({
 	const inboxId = identityMailboxes
 		.find((im) => im.identity.id === activeMailbox?.identityId)
 		?.mailboxes?.find((m: any) => m?.kind === "inbox")?.id;
-	const notSpam = async () => {
+	const notSpam = () => {
 		if (!inboxId) return;
-		const ids = Array.from(state?.selectedThreadIds ?? []);
-		await moveToFolder(ids, String(mailboxIdRef.current), String(inboxId), !!mailboxSync, true);
-		setState((prev) => ({ ...prev, selectedThreadIds: new Set() }));
-		toast.success("Moved to Inbox", { position: "bottom-left" });
+		applyToSelection(
+			(ids, mailboxId) =>
+				moveToFolder(ids, mailboxId, String(inboxId), !!mailboxSync, true),
+			(n) => `${plural(n)} moved to Inbox`,
+		);
 	};
 
-	const removeTrash = async () => {
-		await deleteForever(
-			Array.from(state?.selectedThreadIds ?? []),
-			String(mailboxIdRef.current),
-			!!mailboxSync,
-			true,
+	const removeTrash = () =>
+		applyToSelection(
+			(ids, mailboxId) => deleteForever(ids, mailboxId, !!mailboxSync, true),
+			(n) => `${plural(n)} deleted forever`,
 		);
-		toast.success("Thread deleted forever", { position: "bottom-left" });
-	};
 
 	const emptyTrash = async () => {
 		await deleteForever(

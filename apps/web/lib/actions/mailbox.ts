@@ -429,9 +429,62 @@ export async function sendMail(
 		return { success: true, data: { draftMessageId: row.id } };
 	}
 
+	// ss2i : annulation d'envoi. Le job part avec un delai : l'interface propose « Undo »
+	// (retrait du job) et « Send now » (promotion du job) pendant ce delai. Cote serveur,
+	// donc fermer l'onglet n'empeche pas l'envoi.
+	const { sendMailQueue } = await getRedis();
+	const job = await sendMailQueue.add("send-and-reconcile", decodedForm, {
+		jobId: `undo-send-${crypto.randomUUID()}`,
+		delay: UNDO_SEND_MS,
+	});
+	return {
+		success: true,
+		message: "Message sent",
+		data: { pendingSendId: String(job.id), undoMs: UNDO_SEND_MS },
+	};
+}
+
+const UNDO_SEND_MS = 30_000;
+
+// ss2i : « Undo » d'un envoi encore en attente. Rend le formulaire si le job a bien ete
+// retire ; s'il est deja parti (ou en cours d'envoi), on ne peut plus rien faire.
+export async function cancelPendingSend(pendingSendId: string) {
+	const { sendMailQueue } = await getRedis();
+	const job = await sendMailQueue.getJob(pendingSendId);
+	if (!job) return { cancelled: false as const };
+	try {
+		if ((await job.getState()) !== "delayed") return { cancelled: false as const };
+		await job.remove();
+		return { cancelled: true as const };
+	} catch {
+		return { cancelled: false as const };
+	}
+}
+
+// ss2i : « Send now » : le job en attente part tout de suite.
+export async function sendPendingNow(pendingSendId: string) {
+	const { sendMailQueue } = await getRedis();
+	const job = await sendMailQueue.getJob(pendingSendId);
+	if (!job) return;
+	try {
+		if ((await job.getState()) === "delayed") await job.promote();
+	} catch {
+		// deja parti
+	}
+}
+
+// ss2i : resultat de l'envoi, appele une fois le delai ecoule (ou apres « Send now »)
+// pour afficher une erreur eventuelle. Jamais pendant le delai : les actions serveur
+// d'un onglet passent une par une, attendre ici bloquerait toutes les autres.
+export async function waitPendingSend(pendingSendId: string): Promise<FormState> {
 	const { sendMailQueue, sendMailEvents } = await getRedis();
-	const job = await sendMailQueue.add("send-and-reconcile", decodedForm);
-	return await job.waitUntilFinished(sendMailEvents);
+	const job = await sendMailQueue.getJob(pendingSendId);
+	if (!job) return {};
+	try {
+		return (await job.waitUntilFinished(sendMailEvents, 120_000)) ?? {};
+	} catch (e: any) {
+		return { error: e?.message ?? "Sending failed" };
+	}
 }
 
 export const deltaFetch = async ({ identityId }: { identityId: string }) => {

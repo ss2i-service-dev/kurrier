@@ -123,6 +123,8 @@ function EmailRenderer({
 
 	const [showEditor, setShowEditor] = useState<boolean>(false);
 	const [showEditorMode, setShowEditorMode] = useState<string>("reply");
+	// ss2i : reponse envoyee mais encore annulable : editeur masque, pas detruit.
+	const [replyParked, setReplyParked] = useState(false);
 
 	// « Repondre » repond a tous par defaut quand le message a d'autres
 	// destinataires que nous ; sinon c'est une reponse simple.
@@ -541,7 +543,7 @@ function EmailRenderer({
 			)}
 
 			{showEditor && (
-				<div>
+				<div className={replyParked ? "hidden" : undefined}>
 					<EmailEditor
 						sentMailboxId={String(sentMailboxId)}
 						ref={editorRef}
@@ -552,7 +554,11 @@ function EmailRenderer({
 							scrollToEditor(el, { offsetTop: 96, minBottomGap: 64 });
 							requestAnimationFrame(() => editorRef.current?.focus());
 						}}
-						handleClose={() => setShowEditor(false)}
+						handleClose={() => {
+							setShowEditor(false);
+							setReplyParked(false);
+						}}
+						onParkedChange={setReplyParked}
 						showEditorMode={showEditorMode}
 					/>
 				</div>

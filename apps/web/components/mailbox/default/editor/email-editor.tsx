@@ -12,7 +12,13 @@ import {
 	TextEditorHandle,
 } from "@/components/mailbox/default/editor/rich-text-editor";
 import Form from "next/form";
-import {FetchIdentityMailboxListResult, sendMail} from "@/lib/actions/mailbox";
+import {
+	FetchIdentityMailboxListResult,
+	cancelPendingSend,
+	sendMail,
+	sendPendingNow,
+	waitPendingSend,
+} from "@/lib/actions/mailbox";
 import type { FormState, PublicConfig } from "@schema";
 import { DynamicContextProvider } from "@/hooks/use-dynamic-context";
 import { toast } from "sonner";
@@ -31,6 +37,9 @@ type Props = {
 	sentMailboxId: string;
 	handleClose: () => void;
 	identityMailboxes: FetchIdentityMailboxListResult;
+	// ss2i : masque (true) ou reaffiche (false) le composeur sans le detruire, le temps
+	// de la fenetre d'annulation d'envoi. Sans elle, le composeur se ferme a l'envoi.
+	onParkedChange?: (parked: boolean) => void;
 };
 
 const EmailEditor = forwardRef<EmailEditorHandle, Props>(
@@ -42,7 +51,8 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			showEditorMode,
 			sentMailboxId,
 			handleClose,
-			identityMailboxes
+			identityMailboxes,
+			onParkedChange,
 		},
 		ref,
 	) => {
@@ -75,15 +85,94 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			FormData
 		>(sendMail, {});
 
+		// ss2i : le composeur reste en vie (masque) pendant la fenetre d'annulation, pour
+		// que « Undo » le rende intact : destinataires, objet, texte, pieces jointes.
+		const mounted = useRef(true);
+		useEffect(() => {
+			mounted.current = true;
+			return () => {
+				mounted.current = false;
+			};
+		}, []);
+
+		const startUndoWindow = (pendingSendId: string, undoMs: number) => {
+			// Filet si le composeur a disparu entre-temps (navigation) : le texte est
+			// recopie dans le presse-papiers au moment de « Undo ».
+			const bodyText = textEditorRef.current?.getElement()?.innerText ?? "";
+			onParkedChange ? onParkedChange(true) : handleClose();
+
+			let settled = false;
+			const finish = async () => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				toast.dismiss(toastId);
+				if (mounted.current) handleClose();
+				const result = await waitPendingSend(pendingSendId);
+				if (result?.error) {
+					toast.error("Sending failed", {
+						description: result.error,
+						position: "bottom-left",
+					});
+				}
+			};
+			const timer = setTimeout(finish, undoMs);
+
+			const toastId = toast("Sending…", {
+				position: "bottom-left",
+				duration: undoMs,
+				description: "You can still undo",
+				action: {
+					label: "Send now",
+					onClick: () => {
+						sendPendingNow(pendingSendId).then(finish);
+					},
+				},
+				cancel: {
+					label: "Undo",
+					onClick: async () => {
+						if (settled) return;
+						settled = true;
+						clearTimeout(timer);
+						const { cancelled } = await cancelPendingSend(pendingSendId);
+						if (!cancelled) {
+							toast.info("Already sent", { position: "bottom-left" });
+							if (mounted.current) handleClose();
+							return;
+						}
+						if (mounted.current) {
+							onParkedChange?.(false);
+							requestAnimationFrame(() => textEditorRef.current?.focus("end"));
+							toast.success("Sending cancelled", { position: "bottom-left" });
+						} else {
+							await navigator.clipboard?.writeText(bodyText).catch(() => {});
+							toast.warning("Sending cancelled", {
+								description: "The editor was closed: its text has been copied to the clipboard.",
+								position: "bottom-left",
+							});
+						}
+					},
+				},
+			});
+		};
+
 		useEffect(() => {
 			if (formState.error) {
 				toast.error("Error", {
 					description: formState.error,
 				});
 			} else if (formState.success) {
+				const pending = (formState.data ?? {}) as {
+					pendingSendId?: string;
+					undoMs?: number;
+				};
+				if (pending.pendingSendId) {
+					startUndoWindow(pending.pendingSendId, pending.undoMs ?? 30_000);
+					return;
+				}
 				handleClose();
 				toast.success("Success", {
-					description: formState.success,
+					description: formState.message,
 				});
 			}
 		}, [formState]);

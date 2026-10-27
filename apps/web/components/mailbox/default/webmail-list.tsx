@@ -17,6 +17,7 @@ import { useMediaQuery } from "@mantine/hooks";
 import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-item-mobile";
 import { usePathname } from "next/navigation";
 import {use} from "react";
+import { useHiddenThreads } from "@/lib/pending-moves";
 
 type WebListProps = {
 	mailboxThreadPromise: Promise<{ mailboxThreads: FetchMailboxThreadsResult, labelsByThreadId: FetchMailboxThreadLabelsResult }>;
@@ -37,7 +38,7 @@ export default function WebmailList({
 	workspacePublicId,
 	fetchMailboxPromise
 }: WebListProps) {
-	const {labelsByThreadId, mailboxThreads} = use(mailboxThreadPromise)
+	const {labelsByThreadId, mailboxThreads: serverThreads} = use(mailboxThreadPromise)
 	const globalLabels = use(globalLabelsPromise)
 	const {mailboxSync, activeMailbox} = use(fetchMailboxPromise)
 	const identityMailboxes = use(identityMailboxesPromise)
@@ -46,6 +47,11 @@ export default function WebmailList({
 	// a la liste depuis un fil ouvert (route parallele conservee).
 	const pathname = usePathname();
 	const onThread = /\/threads\/[^/]+/.test(pathname ?? "");
+	// ss2i : les fils en cours de depart (corbeille, archive...) disparaissent des le clic.
+	const isHidden = useHiddenThreads();
+	const mailboxThreads = serverThreads.filter(
+		(t) => !isHidden(String(t.mailboxId), String(t.threadId)),
+	);
 
 	return (
 		<div className={onThread ? "hidden" : ""}>

@@ -818,19 +818,18 @@ export const moveToTrash = async (
 
 	const { smtpQueue, searchIngestQueue } = await getRedis();
 
-	await Promise.all(
-		ids.map((threadId) =>
-			smtpQueue.add(
-				"mail:move",
-				{ threadId, mailboxId, op: "trash", messageId, moveImap },
-				{
-					attempts: 3,
-					backoff: { type: "exponential", delay: 1500 },
-					removeOnComplete: true,
-					removeOnFail: false,
-				},
-			),
-		),
+	// ss2i : un seul job pour toute la selection (cf. moveMail, worker) : un job par fil,
+	// traites un a un avec chacun son aller-retour IMAP, faisait disparaitre la selection
+	// au compte-gouttes.
+	await smtpQueue.add(
+		"mail:move",
+		{ threadId: ids[0], threadIds: ids, mailboxId, op: "trash", messageId, moveImap },
+		{
+			attempts: 3,
+			backoff: { type: "exponential", delay: 1500 },
+			removeOnComplete: true,
+			removeOnFail: false,
+		},
 	);
 
 	await Promise.all(
@@ -925,19 +924,18 @@ export const archiveThread = async (
 		}
 	}
 
-	await Promise.all(
-		ids.map((threadId) =>
-			smtpQueue.add(
-				"mail:move",
-				{ threadId, mailboxId, op: "archive", moveImap },
-				{
-					attempts: 3,
-					backoff: { type: "exponential", delay: 1500 },
-					removeOnComplete: true,
-					removeOnFail: false,
-				},
-			),
-		),
+	// ss2i : un seul job pour toute la selection (cf. moveMail, worker) : un job par fil,
+	// traites un a un avec chacun son aller-retour IMAP, faisait disparaitre la selection
+	// au compte-gouttes.
+	await smtpQueue.add(
+		"mail:move",
+		{ threadId: ids[0], threadIds: ids, mailboxId, op: "archive", moveImap },
+		{
+			attempts: 3,
+			backoff: { type: "exponential", delay: 1500 },
+			removeOnComplete: true,
+			removeOnFail: false,
+		},
 	);
 
 	await Promise.all(
@@ -1166,19 +1164,20 @@ export async function deleteForever(
 
 	if (!ids.length || !mailboxId) return;
 
+	// ss2i : un seul job pour toute la selection, deleteMail (worker) accepte un tableau.
+	await smtpQueue.add(
+		"mail:delete-permanent",
+		{ threadId: ids, mailboxId, imapDelete },
+		{
+			attempts: 3,
+			backoff: { type: "exponential", delay: 1500 },
+			removeOnComplete: true,
+			removeOnFail: true,
+		},
+	);
+
 	await Promise.all(
 		ids.map(async (threadId) => {
-			await smtpQueue.add(
-				"mail:delete-permanent",
-				{ threadId, mailboxId, imapDelete },
-				{
-					attempts: 3,
-					backoff: { type: "exponential", delay: 1500 },
-					removeOnComplete: true,
-					removeOnFail: true,
-				},
-			);
-
 			await searchIngestQueue.add(
 				"refresh-thread",
 				{ threadId },
@@ -1362,27 +1361,27 @@ export const moveToFolder = async (
 
 	const { smtpQueue, searchIngestQueue } = await getRedis();
 
-	await Promise.all(
-		ids.map((threadId) =>
-			smtpQueue.add(
-				"mail:move",
-				{
-					threadId,
-					mailboxId: fromMailboxId,
-					op: "move",
-					toMailboxId,
-					messageId,
-					moveImap,
-				},
-				{
-					jobId: `move:${threadId}:${fromMailboxId}->${toMailboxId}`,
-					attempts: 3,
-					backoff: { type: "exponential", delay: 1500 },
-					removeOnComplete: true,
-					removeOnFail: false,
-				},
-			),
-		),
+	// ss2i : un seul job pour toute la selection (cf. moveMail, worker) : un job par fil,
+	// traites un a un avec chacun son aller-retour IMAP, faisait disparaitre la selection
+	// au compte-gouttes.
+	await smtpQueue.add(
+		"mail:move",
+		{
+			threadId: ids[0],
+			threadIds: ids,
+			mailboxId: fromMailboxId,
+			op: "move",
+			toMailboxId,
+			messageId,
+			moveImap,
+		},
+		{
+			jobId: `move:${ids[0]}+${ids.length - 1}:${fromMailboxId}->${toMailboxId}`,
+			attempts: 3,
+			backoff: { type: "exponential", delay: 1500 },
+			removeOnComplete: true,
+			removeOnFail: false,
+		},
 	);
 
 	await Promise.all(

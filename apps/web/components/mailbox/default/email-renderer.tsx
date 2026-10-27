@@ -14,6 +14,7 @@ import { PublicConfig } from "@schema";
 import {archiveThread, fetchMailbox, FetchIdentityMailboxListResult, FetchThreadMailSubsResult, markAsRead, markAsUnread, moveToTrash} from "@/lib/actions/mailbox";
 import { replyRecipients } from "@/lib/reply-recipients";
 import { toast } from "sonner";
+import { moveWithUndo } from "@/lib/pending-moves";
 import {getRawMessageDownloadUrl} from "@/lib/actions/uploads-actions";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { useDisclosure } from "@mantine/hooks";
@@ -145,25 +146,29 @@ function EmailRenderer({
 		router.push(pathname.replace(/\/threads\/[^/]+\/?$/, ""));
 		router.refresh();
 	};
-	const archiveMessage = async () => {
-		try {
-			await archiveThread(threadId, activeMailboxId, markSmtp, true);
-			toast.success("Archived", { position: "bottom-left" });
-			leaveThread();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Archive failed");
-		}
+	// ss2i : retour immediat a la liste, deja privee du fil ; le serveur suit
+	// (cf. lib/pending-moves). En cas d'echec, le fil revient avec l'erreur.
+	const archiveMessage = () => {
+		const id = String(threadId);
+		moveWithUndo({
+			mailboxId: activeMailboxId,
+			threadIds: [id],
+			message: "Archived",
+			run: () => archiveThread(id, activeMailboxId, markSmtp, true),
+			failure: "Archive failed",
+		});
+		leaveThread();
 	};
-	const deleteMessage = async () => {
-		try {
-			const done = await moveToTrash(threadId, activeMailboxId, markSmtp, true);
-			toast.success(done === "deleted" ? "Deleted forever" : "Moved to Trash", {
-				position: "bottom-left",
-			});
-			leaveThread();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Delete failed");
-		}
+	const deleteMessage = () => {
+		const id = String(threadId);
+		moveWithUndo({
+			mailboxId: activeMailboxId,
+			threadIds: [id],
+			message: "Moved to Trash",
+			run: () => moveToTrash(id, activeMailboxId, markSmtp, true),
+			failure: "Delete failed",
+		});
+		leaveThread();
 	};
 	// Non lu : on revient a la liste, sinon la reouverture du fil le remarque lu.
 	const unreadMessage = async () => {

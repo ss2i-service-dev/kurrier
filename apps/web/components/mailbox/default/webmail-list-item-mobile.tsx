@@ -15,6 +15,7 @@ import { IconStar, IconStarFilled } from "@tabler/icons-react";
 import { Temporal } from "@js-temporal/polyfill";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import { toast } from "sonner";
+import { moveWithUndo } from "@/lib/pending-moves";
 import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 
 type Props = {
@@ -229,17 +230,16 @@ export default function WebmailListItemMobile({
 					</button>
 				)}
 				<button
-					onClick={async () => {
-						const done = await moveToTrash(
-							mailboxThreadItem.threadId,
-							activeMailbox.id,
-							!!mailboxSync,
-							true,
-						);
-						toast.success(
-							done === "deleted" ? "Deleted forever" : "Messages moved to Trash",
-							{ position: "bottom-left" },
-						);
+					onClick={() => {
+						// ss2i : la ligne part des le clic, le serveur suit (cf. lib/pending-moves).
+						const id = String(mailboxThreadItem.threadId);
+						moveWithUndo({
+							mailboxId: activeMailbox.id,
+							threadIds: [id],
+							message: activeMailbox.kind === "trash" ? "Deleted forever" : "Moved to Trash",
+							run: () => moveToTrash(id, activeMailbox.id, !!mailboxSync, true),
+							failure: "Delete failed",
+						});
 					}}
 					className="rounded p-1 hover:bg-muted"
 					title="Delete"

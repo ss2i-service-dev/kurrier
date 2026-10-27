@@ -46,6 +46,20 @@ export async function resolveUids(
 		return scanned;
 	};
 
+	// Enveloppes des UID en base, en UN seul FETCH : une selection de 50 fils faisait
+	// 50 allers-retours (plusieurs secondes chez Gmail) avant de deplacer quoi que ce soit.
+	const atUid = new Map<number, string>();
+	const uidList = [...new Set(rows.map((r) => Number(r.uid)).filter((u) => u > 0))];
+	if (uidList.length) {
+		try {
+			for await (const m of client.fetch(uidList.join(","), { uid: true, envelope: true }, { uid: true })) {
+				atUid.set(Number(m.uid), norm(m.envelope?.messageId));
+			}
+		} catch {
+			// verification message par message ci-dessous
+		}
+	}
+
 	for (const row of rows) {
 		const wanted = norm(row.messageId);
 		// Sans Message-ID en base, rien a comparer : comportement d'origine.
@@ -54,10 +68,7 @@ export async function resolveUids(
 			continue;
 		}
 
-		const current = await client
-			.fetchOne(String(row.uid), { envelope: true }, { uid: true })
-			.catch(() => false as const);
-		if (current && norm(current.envelope?.messageId) === wanted) {
+		if (atUid.get(Number(row.uid)) === wanted) {
 			resolved.set(row.uid, row.id);
 			continue;
 		}

@@ -11,6 +11,7 @@ import {
 	moveToFolder,
 } from "@/lib/actions/mailbox";
 import { toast } from "sonner";
+import { moveWithUndo } from "@/lib/pending-moves";
 
 function MoveToFolder({
 	identityMailboxes,
@@ -33,7 +34,7 @@ function MoveToFolder({
 		identityLabel: entry?.identity?.value ?? "Folders",
 	});
 
-	const { state } = useDynamicContext<{
+	const { state, setState } = useDynamicContext<{
 		selectedThreadIds: Set<string>;
 		activeMailbox?: MailboxEntity | null;
 		identityPublicId: string;
@@ -51,17 +52,17 @@ function MoveToFolder({
 			return;
 		}
 
-		try {
-			setSubmitting(true);
-			await moveToFolder(ids, active.id, destId, !!active.metaData?.imap, true);
-			toast.success("Moved to folder");
-			close();
-			setDestId(null);
-		} catch (e: any) {
-			toast.error(e?.message ?? "Move failed");
-		} finally {
-			setSubmitting(false);
-		}
+		// ss2i : fermeture, retrait de la liste et toast immediats, le serveur suit.
+		close();
+		setDestId(null);
+		setState((prev) => ({ ...prev, selectedThreadIds: new Set() }));
+		moveWithUndo({
+			mailboxId: active.id,
+			threadIds: ids,
+			message: ids.length > 1 ? `${ids.length} conversations moved` : "Moved to folder",
+			run: () => moveToFolder(ids, active.id, destId, !!active.metaData?.imap, true),
+			failure: "Move failed, messages restored",
+		});
 	};
 
 	return (

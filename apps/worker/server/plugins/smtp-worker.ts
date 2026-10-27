@@ -78,17 +78,22 @@ export default defineNitroPlugin(async (nitroApp) => {
 					throw new Error("mail:move requires toMailboxId when op === 'move'");
 				}
 				await moveMail(job.data, imapInstances);
-				await searchIngestQueue.add(
-					"refresh-thread",
-					{ threadId: job.data.threadId },
-					{
-						jobId: `refresh-${job.data.threadId}`, // collapses duplicates
-						removeOnComplete: true,
-						removeOnFail: false,
-						attempts: 3,
-						backoff: { type: "exponential", delay: 1500 },
-					},
-				);
+				const movedIds: string[] = job.data.threadIds?.length
+					? job.data.threadIds
+					: [job.data.threadId];
+				for (const threadId of movedIds) {
+					await searchIngestQueue.add(
+						"refresh-thread",
+						{ threadId },
+						{
+							jobId: `refresh-${threadId}`, // collapses duplicates
+							removeOnComplete: true,
+							removeOnFail: false,
+							attempts: 3,
+							backoff: { type: "exponential", delay: 1500 },
+						},
+					);
+				}
 			} else if (job.name === "mail:set-flags") {
 				await mailSetFlags(job.data, imapInstances);
 				await searchIngestQueue.add(

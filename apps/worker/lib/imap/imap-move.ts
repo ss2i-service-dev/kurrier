@@ -1,11 +1,15 @@
 import { db, mailboxes, messages, mailboxThreads } from "@db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { ImapFlow } from "imapflow";
 import { initSmtpClient } from "./imap-client";
 import { resolveUids, type UidRow } from "./imap-resolve-uids";
 
 type MoveJob = {
 	threadId: string;
+	// ss2i : une selection entiere en un seul job (base mise a jour pour tous les fils,
+	// puis un MOVE IMAP par dossier). Un job par fil, traites un a un, laissait la
+	// selection a l'ecran pendant de longues secondes chez Gmail.
+	threadIds?: string[];
 	mailboxId: string; // source
 	op: "trash" | "archive" | "spam" | "move";
 	toMailboxId?: string; // required when op === "move"
@@ -19,11 +23,15 @@ export const moveMail = async (
 ) => {
 	const {
 		threadId,
+		threadIds: batchIds,
 		mailboxId: fromMailboxId,
 		op,
 		toMailboxId,
 		moveImap,
 	} = data;
+
+	const ids = (batchIds?.length ? batchIds : [threadId]).map(String).filter(Boolean);
+	if (!ids.length) return;
 
 	// Source mailbox
 	const [srcMailbox] = await db
@@ -81,7 +89,7 @@ export const moveMail = async (
 		.from(messages)
 		.where(
 			and(
-				eq(messages.threadId, threadId),
+				inArray(messages.threadId, ids),
 				eq(messages.mailboxId, fromMailboxId),
 			),
 		);
@@ -127,7 +135,7 @@ export const moveMail = async (
 			.set(set)
 			.where(
 				and(
-					eq(messages.threadId, threadId),
+					inArray(messages.threadId, ids),
 					eq(messages.mailboxId, fromMailboxId),
 				),
 			);
@@ -141,7 +149,7 @@ export const moveMail = async (
 			})
 			.where(
 				and(
-					eq(mailboxThreads.threadId, threadId),
+					inArray(mailboxThreads.threadId, ids),
 					eq(mailboxThreads.mailboxId, fromMailboxId),
 				),
 			);

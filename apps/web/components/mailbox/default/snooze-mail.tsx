@@ -4,7 +4,7 @@ import React, { useMemo, useState } from "react";
 import { Button, Divider, Modal, Tooltip } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { DateTimePicker } from "@mantine/dates";
-import { getTimeZones } from "@vvo/tzdb";
+import { cachedTimeZones } from "@/lib/time-zones";
 import { getDayjsTz } from "@common/day-js-extended";
 import { Dayjs } from "dayjs";
 import { CalendarClock, Clock4, X } from "lucide-react";
@@ -38,7 +38,7 @@ export default function SnoozeMail({
 	const [pickerOpened, pickerDisclosure] = useDisclosure(false);
 
 	const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-	const tzs = getTimeZones();
+	const tzs = cachedTimeZones();
 	const tzName = tzs.find((tz) => tz.group.includes(localTz));
 	const dayjsTz = getDayjsTz(localTz);
 

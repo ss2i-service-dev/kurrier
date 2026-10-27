@@ -234,9 +234,15 @@ export const fetchMailboxUnreadCounts = cache(
 				})
 				.from(mailboxThreads)
 				.where(
-					or(
-						isNull(mailboxThreads.snoozedUntil),
-						lte(mailboxThreads.snoozedUntil, now)
+					// ss2i : seuls les fils non lus comptent ; sans ce filtre, la politique RLS
+					// (sous-requete EXISTS par ligne) s'evaluait sur toute la table : 680 ms a
+					// chaque affichage pour 22 000 fils, contre quelques ms ici.
+					and(
+						gt(mailboxThreads.unreadCount, 0),
+						or(
+							isNull(mailboxThreads.snoozedUntil),
+							lte(mailboxThreads.snoozedUntil, now)
+						),
 					)
 				)
 				.groupBy(mailboxThreads.mailboxId)

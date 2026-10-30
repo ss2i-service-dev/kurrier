@@ -486,3 +486,10 @@
 		animation: weekFade 0.35s ease forwards;
 	}
 }
+
+/* ss2i : panneau des non-lus a cote du fil ouvert, la colonne du fil cede la
+   largeur minimale du Container « wide » (sinon elle deborde sur un portable). */
+[data-ss2i-thread-column] .sm\:min-w-2xl,
+[data-ss2i-thread-column] .lg\:min-w-5xl {
+	min-width: 0;
+}

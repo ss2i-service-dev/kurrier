@@ -53,7 +53,9 @@ export default defineNitroPlugin(async (nitroApp) => {
 			await startBackfillForIdentity(identityId, backfillImapInstances);
 			return { success: true };
 		},
-		{ connection, concurrency: 2, lockDuration: 5 * 60 * 1000 },
+		// ss2i : 4 rattrapages simultanés ; à 2, une nouvelle boîte attendait des heures que les
+		// rattrapages en cours (boîtes de plusieurs dizaines de milliers de messages) se terminent.
+		{ connection, concurrency: 4, lockDuration: 5 * 60 * 1000 },
 	);
 	backfillWorker.on("failed", (job, err) => {
 		console.info(`[BACKFILL] ${job?.id} has failed with ${err.message}`);

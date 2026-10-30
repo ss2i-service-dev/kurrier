@@ -481,26 +481,42 @@ export const startFullBackfillForIdentity = async (
 		// que le quota quotidien soit consomme. La corbeille et le spam, purges par le serveur au
 		// bout de quelques semaines, ne valent pas leur poids dans le quota : on ne les rattrape pas
 		// (la synchronisation courante les couvre).
-		for (const row of inboxFirst) {
-			if (quota.limit <= 0) break;
+		// ss2i (patch 0034) : les dossiers ordinaires sont rattrapés à tour de rôle, une fenêtre
+		// chacun : épuiser l'INBOX d'abord laissait les Envoyés vides des heures, voire des jours
+		// sur une boîte de 30 000 messages. « Tous les messages » reste en dernier, puisqu'il se
+		// dédoublonne contre les autres dossiers.
+		const eligible = inboxFirst.filter(
+			(row) =>
+				Boolean((row.metaData as any)?.imap?.path) &&
+				row.kind !== "trash" &&
+				row.kind !== "spam",
+		);
+		const runWindow = (row: (typeof eligible)[number]) =>
+			backfillMailboxFull({
+				client,
+				workspaceId: identity.workspaceId,
+				identityId,
+				ownerId,
+				mailboxId: row.id,
+				path: (row.metaData as any).imap.path as string,
+				quota,
+				politeWaitMs: 200,
+				skipKnownMessages: isAllMail(row),
+			});
 
-			const path = (row.metaData as any)?.imap?.path as string | undefined;
-			if (!path) continue;
-			if (row.kind === "trash" || row.kind === "spam") continue;
-
+		let pending = eligible.filter((row) => !isAllMail(row));
+		while (pending.length > 0 && quota.limit > 0) {
+			const stillWorking: typeof pending = [];
+			for (const row of pending) {
+				if (quota.limit <= 0) break;
+				if (await runWindow(row)) stillWorking.push(row);
+			}
+			pending = stillWorking;
+		}
+		for (const row of eligible.filter(isAllMail)) {
 			let worked = true;
 			while (worked && quota.limit > 0) {
-				worked = await backfillMailboxFull({
-					client,
-					workspaceId: identity.workspaceId,
-					identityId,
-					ownerId,
-					mailboxId: row.id,
-					path,
-					quota,
-					politeWaitMs: 200,
-					skipKnownMessages: isAllMail(row),
-				});
+				worked = await runWindow(row);
 			}
 		}
 		if (quota.limit <= 0) {

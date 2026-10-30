@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import type { MessageEntity } from "@db";
-import { ActionIcon, Button } from "@mantine/core";
+import { Button } from "@mantine/core";
 import { Ellipsis } from "lucide-react";
 import { setRemoteImagesForContact } from "@/lib/actions/contact-images";
 import { toast } from "sonner";
@@ -239,6 +239,17 @@ export default function EmailViewer({
     `;
 
 		const root = shadow.querySelector(".email-root") as HTMLElement | null;
+		// ss2i : un transfert Gmail range tout le message transféré dans .gmail_quote ; masquer
+		// les citations ne laissait alors qu'un cadre vide. Si rien ne reste visible, on montre tout.
+		if (
+			root &&
+			hideQuotes &&
+			!root.innerText.trim() &&
+			!Array.from(root.querySelectorAll("img")).some((img) => img.offsetParent !== null)
+		) {
+			setHideQuotes(false);
+			return;
+		}
 		if (root) {
 			const links = root.querySelectorAll<HTMLAnchorElement>("a[href]");
 			links.forEach((a) => {
@@ -279,17 +290,18 @@ export default function EmailViewer({
 			)}
 
 			<div ref={hostRef} style={{ display: "block", width: "100%" }} />
+			{/* ss2i : un vrai bouton libellé ; l'icône seule passait inaperçue. */}
 			{hasQuotes && (
-				<ActionIcon
+				<Button
 					type="button"
-					variant="light"
+					variant="default"
 					size="xs"
+					mt="sm"
+					leftSection={<Ellipsis size={14} />}
 					onClick={() => setHideQuotes((v) => !v)}
-					className="my-2 px-2 py-1 rounded border text-[12px] text-gray-600 hover:bg-gray-50"
-					title={hideQuotes ? "Show previous emails" : "Hide previous emails"}
 				>
-					<Ellipsis size={16} />
-				</ActionIcon>
+					{hideQuotes ? "Show previous messages" : "Hide previous messages"}
+				</Button>
 			)}
 		</div>
 	);

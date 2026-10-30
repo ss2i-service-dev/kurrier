@@ -170,6 +170,10 @@ export class SmtpMailer implements Mailer {
 				html: opts.html || undefined,
 				headers,
 				attachments,
+				// ss2i : les images data: du HTML (logo ou carte de la signature) partent en pièces
+				// jointes intégrées (cid), comme dans Outlook : une image distante serait bloquée par
+				// défaut chez la plupart des destinataires.
+				attachDataUrls: true,
 			});
 
 			return { success: true, MessageId: String(info.messageId || "") };

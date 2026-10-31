@@ -40,6 +40,13 @@ const BASE_CSS = `
   white-space: normal !important;   /* neutralize inline nowrap */
 }
 
+/* ss2i : mail en texte seul, mise en forme d'origine conservée */
+.email-root .ss2i-plain {
+  white-space: pre-wrap !important;
+  padding: 6px;
+  line-height: 1.5;
+}
+
 .email-root p { margin: 0 0 .85em; }
 .email-root p:last-child { margin-bottom: 0; }
 
@@ -213,13 +220,18 @@ export default function EmailViewer({
 		const rawHtml =
 			message.html && message.html.trim()
 				? message.html
-				: `<div style="white-space: pre-wrap;padding: 6px;">${(
-						message.text || "No content"
-					)
+				: // ss2i : mail en texte seul ; classe dédiée pour garder retours à la ligne et
+					// alignements (la règle générale `white-space: normal !important` les écrasait),
+					// adresses web rendues cliquables.
+					`<div class="ss2i-plain">${(message.text || "No content")
 						.toString()
 						.replace(
 							/[<>&]/g,
 							(c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c] as string,
+						)
+						.replace(
+							/\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/g,
+							(u) => `<a href="${u}">${u}</a>`,
 						)}</div>`;
 
 		const sanitized = DOMPurify.sanitize(rawHtml, {

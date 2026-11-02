@@ -13,6 +13,7 @@ import {
 	index,
 	bigint,
 	numeric,
+	doublePrecision,
 	primaryKey,
 	pgSchema
 } from "drizzle-orm/pg-core";
@@ -1935,5 +1936,101 @@ export const mcpOauthAccessTokens = pgTable(
 		uniqueIndex("ux_mcp_oauth_tokens_refresh_hash").on(t.refreshTokenHash),
 		index("ix_mcp_oauth_tokens_user").on(t.userId),
 		index("ix_mcp_oauth_tokens_expires").on(t.expiresAt),
+	],
+).enableRLS();
+
+// ss2i : suggestions de destinataires classees par usage reel (migration 005). Agregats
+// par utilisateur, alimentes par le worker (ss2i_recipient_ingest) ; lus par l'editeur.
+export const ss2iRecipientStats = pgTable(
+	"ss2i_recipient_stats",
+	{
+		ownerId: uuid("owner_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull(),
+		email: text("email").notNull(),
+		name: text("name"),
+		count: integer("count").notNull().default(0),
+		score: doublePrecision("score").notNull().default(0),
+		lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull(),
+	},
+	(t) => [
+		primaryKey({ columns: [t.ownerId, t.email] }),
+		pgPolicy("ss2i_recipient_stats_select_owner", {
+			for: "select",
+			to: "kurrier",
+			using: sql`${t.ownerId} = ${authUid}`,
+		}),
+	],
+).enableRLS();
+
+export const ss2iRecipientPairs = pgTable(
+	"ss2i_recipient_pairs",
+	{
+		ownerId: uuid("owner_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull(),
+		email: text("email").notNull(),
+		other: text("other").notNull(),
+		count: integer("count").notNull().default(0),
+		score: doublePrecision("score").notNull().default(0),
+		lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull(),
+	},
+	(t) => [
+		primaryKey({ columns: [t.ownerId, t.email, t.other] }),
+		pgPolicy("ss2i_recipient_pairs_select_owner", {
+			for: "select",
+			to: "kurrier",
+			using: sql`${t.ownerId} = ${authUid}`,
+		}),
+	],
+).enableRLS();
+
+export const ss2iRecipientIngested = pgTable(
+	"ss2i_recipient_ingested",
+	{
+		ownerId: uuid("owner_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull(),
+		messageId: text("message_id").notNull(),
+	},
+	(t) => [primaryKey({ columns: [t.ownerId, t.messageId] })],
+).enableRLS();
+
+
+// ss2i : expediteurs bloques (migration 007). Par utilisateur, valable sur toutes ses identites.
+// kind = address (adresse exacte) ou domain (domaine et sous-domaines), value en minuscules.
+export const blockedSenders = pgTable(
+	"blocked_senders",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		ownerId: uuid("owner_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull()
+			.default(authUid),
+		workspaceId: uuid("workspace_id")
+			.references(() => workspaces.id, { onDelete: "cascade" })
+			.notNull()
+			.default(authWorkspaceId),
+		kind: text("kind").notNull(),
+		value: text("value").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+	},
+	(t) => [
+		uniqueIndex("uniq_blocked_senders_owner_value").on(t.ownerId, t.kind, t.value),
+		pgPolicy("blocked_senders_select_owner", {
+			for: "select",
+			to: "kurrier",
+			using: sql`${t.ownerId} = ${authUid}`,
+		}),
+		pgPolicy("blocked_senders_insert_owner", {
+			for: "insert",
+			to: "kurrier",
+			withCheck: sql`${t.ownerId} = ${authUid} AND ${t.workspaceId} = ${authWorkspaceId}`,
+		}),
+		pgPolicy("blocked_senders_delete_owner", {
+			for: "delete",
+			to: "kurrier",
+			using: sql`${t.ownerId} = ${authUid}`,
+		}),
 	],
 ).enableRLS();

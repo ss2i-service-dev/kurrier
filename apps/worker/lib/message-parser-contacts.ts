@@ -1,5 +1,6 @@
 import {db, addressBooks, contacts, identities, mailboxes, workspaceMembers, workspaceIdentityMembers} from "@db";
 import { upsertContactsFromOutgoing } from "./outgoing-contacts";
+import { ingestRecipientStats } from "./recipient-stats";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {ParsedMail} from "mailparser";
 
@@ -64,6 +65,20 @@ export async function upsertWorkspaceSharedContactFromMessage(opts: {
             });
         } catch (err: any) {
             console.error("[contacts] sent recipients failed:", err?.message ?? err);
+        }
+        // ss2i : et alimente les suggestions de destinataires (envois hors courrier compris).
+        if (parsed.messageId) {
+            await ingestRecipientStats({
+                ownerIds: [fallbackOwnerId],
+                messageId: parsed.messageId,
+                sentAt: parsed.date ?? null,
+                ownAddresses: [String(mb.identityValue ?? "")].filter(Boolean),
+                recipients: [
+                    (parsed.to as any)?.text ?? null,
+                    (parsed.cc as any)?.text ?? null,
+                    (parsed.bcc as any)?.text ?? null,
+                ],
+            });
         }
         return null;
     }

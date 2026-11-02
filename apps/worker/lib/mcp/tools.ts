@@ -54,7 +54,8 @@ export type ToolDefinition = {
 	name: string;
 	description: string;
 	inputSchema: JsonSchema;
-	scope: ToolScope;
+	// Fixe, ou selon les arguments (reply/forward en brouillon = emails:receive).
+	scope: ToolScope | ((args: Record<string, any>) => ToolScope);
 	handler: (ctx: ToolContext, args: Record<string, any>) => Promise<unknown>;
 };
 
@@ -356,6 +357,121 @@ async function sendViaQueue(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// Brouillons : service lib/drafts/draft-service.ts (meme couche que le composeur web,
+// meta.draft identique : un brouillon cree ici s'ouvre dans l'editeur). Import differe
+// comme get-redis (le service ouvre ses connexions au chargement).
+// ---------------------------------------------------------------------------
+
+const drafts = () => import("../drafts/draft-service");
+
+type DraftSummaryLike = {
+	draftMessageId: string;
+	threadId: string;
+	subject: string | null;
+	snippet: string | null;
+	to: string[];
+	cc: string[];
+	bcc: string[];
+	mode: string;
+	originalMessageId: string | null;
+	hasAttachments: boolean;
+	updatedAt: Date | null;
+	imapSynced: boolean;
+};
+
+const draftSummary = (d: DraftSummaryLike) => ({
+	draft_id: d.draftMessageId,
+	thread_id: d.threadId,
+	subject: d.subject ?? "",
+	preview: d.snippet ?? "",
+	to: d.to,
+	cc: d.cc,
+	bcc: d.bcc,
+	mode: d.mode,
+	original_message_id: d.originalMessageId,
+	has_attachments: d.hasAttachments,
+	updated_at: d.updatedAt,
+	imap_synced: d.imapSynced,
+});
+
+// Un brouillon de l'utilisateur : la chaine message -> dossier -> identite -> owner de
+// access.ts, puis le drapeau draft et le dossier Drafts.
+async function ownedDraft(ctx: ToolContext, draftId: unknown) {
+	const id = str(draftId, "draft_id")!;
+	let row: Awaited<ReturnType<typeof getOwnedMessage>>;
+	try {
+		row = await getOwnedMessage(ctx.userId, id);
+	} catch {
+		throw new McpToolError(`Draft not found: ${id}`);
+	}
+	if (!row.message.draft || row.mailbox.kind !== "drafts") {
+		throw new McpToolError(`Draft not found: ${id}`);
+	}
+	return row;
+}
+
+// Enregistre par le service (base + job IMAP differe), puis pousse la version IMAP tout
+// de suite : un brouillon demande par l'MCP doit apparaitre dans Drafts sans attendre.
+async function saveDraftViaService(opts: {
+	ctx: ToolContext;
+	identityId: string;
+	draftMessageId?: string;
+	to: string[];
+	cc: string[];
+	bcc: string[];
+	subject: string;
+	text: string;
+	html: string;
+	mode: "new" | "reply" | "forward";
+	originalMessageId?: string;
+	includeSignature: boolean;
+	attachments: unknown;
+	extraAttachments?: UploadedAttachment[];
+}) {
+	const service = await drafts();
+	const uploadId = opts.draftMessageId ?? crypto.randomUUID();
+	const uploaded = await uploadAttachments(opts.ctx.userId, uploadId, opts.attachments);
+	const attachments = [...(opts.extraAttachments ?? []), ...uploaded].map((a) => ({
+		path: a.path,
+		filenameOriginal: a.filenameOriginal,
+		contentType: a.contentType,
+		sizeBytes: a.sizeBytes,
+		messageId: a.messageId || null,
+	}));
+	let saved: Awaited<ReturnType<typeof service.saveDraft>>;
+	try {
+		saved = await service.saveDraft({
+			ownerId: opts.ctx.userId,
+			identityId: opts.identityId,
+			draftMessageId: opts.draftMessageId ?? null,
+			to: opts.to,
+			cc: opts.cc,
+			bcc: opts.bcc,
+			subject: opts.subject,
+			html: opts.html,
+			text: opts.text,
+			mode: opts.mode,
+			originalMessageId: opts.originalMessageId ?? null,
+			attachments,
+			includeSignature: opts.includeSignature,
+		});
+	} catch (err: any) {
+		throw new McpToolError(err?.message ?? "Draft could not be saved");
+	}
+	await service.flushDraft({ draftMessageId: saved.draftMessageId });
+	const detail = await service.getDraft({
+		ownerId: opts.ctx.userId,
+		identityId: opts.identityId,
+		draftMessageId: saved.draftMessageId,
+	});
+	return {
+		status: opts.draftMessageId ? "updated" : "created",
+		revision: saved.revision,
+		...(detail ? draftSummary(detail) : { draft_id: saved.draftMessageId }),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // Drapeaux et deplacements : memes jobs que markAsRead / toggleStar / moveToFolder
 // ---------------------------------------------------------------------------
 
@@ -636,6 +752,10 @@ const threadIdsProp = {
 	minItems: 1,
 	maxItems: 200,
 	description: "Thread ids (from list_threads, search or get_thread).",
+};
+const asDraftProp = {
+	type: "boolean",
+	description: "Save as a draft (reviewable in the courrier web editor) instead of sending. Default false.",
 };
 const bodyProps = {
 	body_text: { type: "string", description: "Plain-text body. Paragraphs separated by blank lines." },
@@ -927,9 +1047,9 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "reply",
-		scope: "emails:send",
+		scope: (args) => (args.as_draft ? "emails:receive" : "emails:send"),
 		description:
-			"Reply to a message (by message_id from get_thread). Recipients, subject (Re:), quoting, In-Reply-To and References are computed like the web editor. reply_all adds the other recipients in cc.",
+			"Reply to a message (by message_id from get_thread). Recipients, subject (Re:), quoting, In-Reply-To and References are computed like the web editor. reply_all adds the other recipients in cc. With as_draft, saves a draft attached to the thread for the user to review in courrier instead of sending.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -938,6 +1058,7 @@ export const TOOLS: ToolDefinition[] = [
 				to: { type: "array", items: { type: "string" }, description: "Override the computed recipients." },
 				cc: { type: "array", items: { type: "string" }, description: "Extra cc recipients." },
 				bcc: { type: "array", items: { type: "string" } },
+				as_draft: asDraftProp,
 				...bodyProps,
 			},
 			required: ["message_id"],
@@ -954,7 +1075,7 @@ export const TOOLS: ToolDefinition[] = [
 				...emails(args.cc, "cc"),
 			];
 			const { text, html } = bodyParts(args);
-			return sendViaQueue({
+			const outgoing = {
 				ctx,
 				identityId: identity.id,
 				to,
@@ -963,18 +1084,20 @@ export const TOOLS: ToolDefinition[] = [
 				subject: message.subject ?? "",
 				text,
 				html,
-				mode: "reply",
+				mode: "reply" as const,
 				originalMessageId: message.id,
 				includeSignature: bool(args.include_signature, true),
 				attachments: args.attachments,
-			});
+			};
+			if (bool(args.as_draft, false)) return saveDraftViaService(outgoing);
+			return sendViaQueue(outgoing);
 		},
 	},
 	{
 		name: "forward",
-		scope: "emails:send",
+		scope: (args) => (args.as_draft ? "emails:receive" : "emails:send"),
 		description:
-			"Forward a message (by message_id from get_thread) to new recipients, with its original attachments unless include_attachments is false. Subject (Fwd:) and quoting are computed like the web editor.",
+			"Forward a message (by message_id from get_thread) to new recipients, with its original attachments unless include_attachments is false. Subject (Fwd:) and quoting are computed like the web editor. With as_draft, saves a draft for the user to review in courrier instead of sending (to may then be empty).",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -983,9 +1106,10 @@ export const TOOLS: ToolDefinition[] = [
 				cc: { type: "array", items: { type: "string" } },
 				bcc: { type: "array", items: { type: "string" } },
 				include_attachments: { type: "boolean", description: "Default true." },
+				as_draft: asDraftProp,
 				...bodyProps,
 			},
-			required: ["message_id", "to"],
+			required: ["message_id"],
 			additionalProperties: false,
 		},
 		handler: async (ctx, args) => {
@@ -1004,21 +1128,212 @@ export const TOOLS: ToolDefinition[] = [
 							sizeBytes: Number(a.sizeBytes ?? 0),
 						}))
 				: [];
-			return sendViaQueue({
+			const outgoing = {
 				ctx,
 				identityId: identity.id,
-				to: emails(args.to, "to", true),
+				// En brouillon, les destinataires peuvent venir plus tard (relecture dans courrier).
+				to: emails(args.to, "to", !bool(args.as_draft, false)),
 				cc: emails(args.cc, "cc"),
 				bcc: emails(args.bcc, "bcc"),
 				subject: message.subject ?? "",
 				text,
 				html,
-				mode: "forward",
+				mode: "forward" as const,
 				originalMessageId: message.id,
 				includeSignature: bool(args.include_signature, true),
 				attachments: args.attachments,
 				extraAttachments: original,
+			};
+			if (bool(args.as_draft, false)) return saveDraftViaService(outgoing);
+			return sendViaQueue(outgoing);
+		},
+	},
+	{
+		name: "list_drafts",
+		scope: "emails:receive",
+		description: "List the drafts of an identity (Drafts folder), most recently saved first.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				identity: identityProp,
+				limit: { type: "integer", minimum: 1, maximum: 200, description: "Default 50." },
+				offset: { type: "integer", minimum: 0 },
+			},
+			additionalProperties: false,
+		},
+		handler: async (ctx, args) => {
+			const identity = await resolveIdentity(ctx.userId, str(args.identity, "identity", { optional: true }));
+			const service = await drafts();
+			const list = await service.listDrafts({
+				ownerId: ctx.userId,
+				identityId: identity.id,
+				limit: int(args.limit, "limit", 50, 1, 200),
+				offset: int(args.offset, "offset", 0, 0, 1_000_000),
 			});
+			return { identity: identity.value, drafts: list.map(draftSummary) };
+		},
+	},
+	{
+		name: "get_draft",
+		scope: "emails:receive",
+		description: "Read a draft: recipients, subject, body as text (and HTML), attachments, reply/forward context.",
+		inputSchema: {
+			type: "object",
+			properties: { draft_id: { type: "string", description: "Draft id from list_drafts, create_draft, reply or forward with as_draft." } },
+			required: ["draft_id"],
+			additionalProperties: false,
+		},
+		handler: async (ctx, args) => {
+			const { identity, message } = await ownedDraft(ctx, args.draft_id);
+			const detail = await (await drafts()).getDraft({ ownerId: ctx.userId, identityId: identity.id, draftMessageId: message.id });
+			if (!detail) throw new McpToolError(`Draft not found: ${message.id}`);
+			return {
+				...draftSummary(detail),
+				body_text: detail.text || htmlToText(detail.html),
+				body_html: detail.html,
+				include_signature: detail.includeSignature,
+				attachments: detail.attachments.map((a) => ({
+					filename: a.filenameOriginal,
+					content_type: a.contentType,
+					size_bytes: a.sizeBytes,
+				})),
+			};
+		},
+	},
+	{
+		name: "create_draft",
+		scope: "emails:receive",
+		description:
+			"Create a new draft in the Drafts folder of an identity. The user can open and finish it in the courrier web editor. Nothing is sent.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				identity: identityProp,
+				to: { type: "array", items: { type: "string" } },
+				cc: { type: "array", items: { type: "string" } },
+				bcc: { type: "array", items: { type: "string" } },
+				subject: { type: "string" },
+				...bodyProps,
+			},
+			additionalProperties: false,
+		},
+		handler: async (ctx, args) => {
+			const identity = await resolveIdentity(ctx.userId, str(args.identity, "identity", { optional: true }));
+			const bodyGiven = args.body_text || args.body || args.body_html;
+			const { text, html } = bodyGiven ? bodyParts(args) : { text: "", html: "" };
+			return saveDraftViaService({
+				ctx,
+				identityId: identity.id,
+				to: emails(args.to, "to"),
+				cc: emails(args.cc, "cc"),
+				bcc: emails(args.bcc, "bcc"),
+				subject: str(args.subject, "subject", { optional: true, max: 998 }) ?? "",
+				text,
+				html,
+				mode: "new",
+				includeSignature: bool(args.include_signature, true),
+				attachments: args.attachments,
+			});
+		},
+	},
+	{
+		name: "update_draft",
+		scope: "emails:receive",
+		description:
+			"Update a draft: only the fields passed change (to, cc, bcc, subject, body, include_signature); new attachments are added to the existing ones.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				draft_id: { type: "string" },
+				to: { type: "array", items: { type: "string" } },
+				cc: { type: "array", items: { type: "string" } },
+				bcc: { type: "array", items: { type: "string" } },
+				subject: { type: "string" },
+				...bodyProps,
+			},
+			required: ["draft_id"],
+			additionalProperties: false,
+		},
+		handler: async (ctx, args) => {
+			const { identity, message } = await ownedDraft(ctx, args.draft_id);
+			const service = await drafts();
+			const current = await service.getDraft({ ownerId: ctx.userId, identityId: identity.id, draftMessageId: message.id });
+			if (!current) throw new McpToolError(`Draft not found: ${message.id}`);
+			const bodyGiven = args.body_text || args.body || args.body_html;
+			const body = bodyGiven ? bodyParts(args) : { text: current.text, html: current.html };
+			return saveDraftViaService({
+				ctx,
+				identityId: identity.id,
+				draftMessageId: message.id,
+				to: args.to === undefined ? current.to : emails(args.to, "to"),
+				cc: args.cc === undefined ? current.cc : emails(args.cc, "cc"),
+				bcc: args.bcc === undefined ? current.bcc : emails(args.bcc, "bcc"),
+				subject: args.subject === undefined ? (current.subject ?? "") : (str(args.subject, "subject", { optional: true, max: 998 }) ?? ""),
+				text: body.text,
+				html: body.html,
+				mode: current.mode === "reply" || current.mode === "forward" ? current.mode : "new",
+				originalMessageId: current.originalMessageId ?? undefined,
+				includeSignature: args.include_signature === undefined ? current.includeSignature : bool(args.include_signature, true),
+				attachments: args.attachments,
+				extraAttachments: current.attachments.map((a) => ({
+					path: a.path,
+					bucketId: "",
+					messageId: a.messageId ?? "",
+					filenameOriginal: a.filenameOriginal ?? "attachment",
+					contentType: a.contentType ?? "application/octet-stream",
+					sizeBytes: Number(a.sizeBytes ?? 0),
+				})),
+			});
+		},
+	},
+	{
+		name: "delete_draft",
+		scope: "emails:receive",
+		description: "Delete a draft (drafts are removed for good, as mail clients do; this never touches real messages).",
+		inputSchema: {
+			type: "object",
+			properties: { draft_id: { type: "string" } },
+			required: ["draft_id"],
+			additionalProperties: false,
+		},
+		handler: async (ctx, args) => {
+			const { identity, message } = await ownedDraft(ctx, args.draft_id);
+			const result = await (await drafts()).deleteDraft({ ownerId: ctx.userId, identityId: identity.id, draftMessageId: message.id });
+			if (!result.deleted) throw new McpToolError(`Draft not found: ${message.id}`);
+			return { status: "deleted", draft_id: message.id };
+		},
+	},
+	{
+		name: "send_draft",
+		scope: "emails:send",
+		description:
+			"Send a draft through the regular pipeline, with the same 30-second undo delay as the web editor (the send can still be cancelled from courrier during that delay). Confirm with the user first.",
+		inputSchema: {
+			type: "object",
+			properties: { draft_id: { type: "string" } },
+			required: ["draft_id"],
+			additionalProperties: false,
+		},
+		handler: async (ctx, args) => {
+			const { identity, message } = await ownedDraft(ctx, args.draft_id);
+			let result: { pendingSendId: string; undoMs: number };
+			try {
+				result = await (await drafts()).sendDraft({
+					ownerId: ctx.userId,
+					identityId: identity.id,
+					draftMessageId: message.id,
+					senderUserId: ctx.userId,
+				});
+			} catch (err: any) {
+				throw new McpToolError(err?.message ?? "Draft could not be sent");
+			}
+			return {
+				status: "scheduled",
+				draft_id: message.id,
+				pending_send_id: result.pendingSendId,
+				sends_in_ms: result.undoMs,
+				note: "The message leaves after the undo delay; the draft is removed once sent.",
+			};
 		},
 	},
 	{

@@ -23,7 +23,7 @@ export async function createUserFixture(tag: string) {
 		.insert(identities)
 		.values({ ownerId: user.id, workspaceId: workspace.id, kind: "email", value: email, status: "verified" })
 		.returning();
-	const box = async (kind: "inbox" | "sent" | "trash", name: string) => {
+	const box = async (kind: "inbox" | "sent" | "trash" | "drafts", name: string) => {
 		const [row] = await db
 			.insert(mailboxes)
 			.values({
@@ -41,6 +41,7 @@ export async function createUserFixture(tag: string) {
 	};
 	const inbox = await box("inbox", "Inbox");
 	const sent = await box("sent", "Sent");
+	const drafts = await box("drafts", "Drafts");
 	const [thread] = await db
 		.insert(threads)
 		.values({ ownerId: user.id, workspaceId: workspace.id, lastMessageDate: new Date() })
@@ -90,5 +91,5 @@ export async function createUserFixture(tag: string) {
 			sizeBytes: 12,
 		})
 		.returning();
-	return { user, workspace, identity, inbox, sent, thread, message, attachment, email };
+	return { user, workspace, identity, inbox, sent, drafts, thread, message, attachment, email };
 }

@@ -16,6 +16,7 @@ import {
 	threadPlacements,
 } from "../lib/mcp/access";
 import { handleRpcBody } from "../lib/mcp/rpc";
+import { getDraftRow, upsertDraftRow } from "@common";
 import type { ToolContext } from "../lib/mcp/tools";
 
 async function main() {
@@ -123,6 +124,51 @@ async function main() {
 	assert(crlfTo?.result?.isError === true && /line break in address|invalid address/.test(crlfTo.result.content[0].text), "recipient with CRLF refused");
 	const crlfFolder = await call(ctxB, "list_threads", { folder: "inbox\n" });
 	assert(crlfFolder?.result?.isError === true && /line breaks/.test(crlfFolder.result.content[0].text), "folder with LF refused");
+
+	console.log("# brouillons");
+	const draftA = await upsertDraftRow({
+		ownerId: a.user.id,
+		identityId: a.identity.id,
+		to: ["someone@test.invalid"],
+		subject: "Draft of alice",
+		text: "draft body alice",
+		html: "<p>draft body alice</p>",
+		mode: "reply",
+		originalMessageId: a.message.id,
+	});
+	const dGetB = await call(ctxB, "get_draft", { draft_id: draftA.id });
+	assert(dGetB?.result?.isError === true && /Draft not found/.test(dGetB.result.content[0].text), "get_draft(A's draft) as B -> isError");
+	const dUpdB = await call(ctxB, "update_draft", { draft_id: draftA.id, subject: "hijacked" });
+	assert(dUpdB?.result?.isError === true && /Draft not found/.test(dUpdB.result.content[0].text), "update_draft(A's draft) as B -> isError");
+	const dDelB = await call(ctxB, "delete_draft", { draft_id: draftA.id });
+	assert(dDelB?.result?.isError === true && /Draft not found/.test(dDelB.result.content[0].text), "delete_draft(A's draft) as B -> isError");
+	const dSendB = await call(ctxB, "send_draft", { draft_id: draftA.id });
+	assert(dSendB?.result?.isError === true && /Draft not found/.test(dSendB.result.content[0].text), "send_draft(A's draft) as B -> isError");
+	const dListB = await call(ctxB, "list_drafts", { identity: a.email });
+	assert(dListB?.result?.isError === true, "list_drafts(identity A) as B -> isError");
+	const dListBOwn = await call(ctxB, "list_drafts", {});
+	assert(dListBOwn?.result?.isError !== true && dListBOwn.result.structuredContent.drafts.length === 0, "list_drafts as B is empty");
+	const replyDraftB = await call(ctxB, "reply", { message_id: a.message.id, body_text: "x", as_draft: true });
+	assert(replyDraftB?.result?.isError === true && /Message not found/.test(replyDraftB.result.content[0].text), "reply as_draft on A's message as B -> isError");
+	const still = await getDraftRow({ ownerId: a.user.id, draftMessageId: draftA.id });
+	assert(still !== null && still.subject === "Draft of alice", "A's draft untouched after B's attempts");
+	const dGetA = await call(ctxA, "get_draft", { draft_id: draftA.id });
+	assert(
+		dGetA?.result?.isError !== true &&
+			dGetA.result.structuredContent.body_text === "draft body alice" &&
+			dGetA.result.structuredContent.mode === "reply" &&
+			dGetA.result.structuredContent.original_message_id === a.message.id &&
+			dGetA.result.structuredContent.thread_id === a.thread.id,
+		"get_draft as A: body, reply mode, original message, attached to the thread",
+	);
+	const dListA = await call(ctxA, "list_drafts", {});
+	assert(dListA?.result?.structuredContent?.drafts?.some((d: any) => d.draft_id === draftA.id), "list_drafts as A lists the draft");
+	const notDraft = await call(ctxA, "get_draft", { draft_id: a.message.id });
+	assert(notDraft?.result?.isError === true && /Draft not found/.test(notDraft.result.content[0].text), "get_draft on a regular message -> Draft not found");
+	const draftScope = await call(keyReceive, "reply", { message_id: a.message.id, body_text: "x", as_draft: true });
+	assert(draftScope?.result?.isError === true && /Message not found/.test(draftScope.result.content[0].text), "reply as_draft needs only emails:receive (scope check passed)");
+	const sendDraftScope = await call(keyReceive, "send_draft", { draft_id: draftA.id });
+	assert(sendDraftScope?.result?.isError === true && /lacks the 'emails:send'/.test(sendDraftScope.result.content[0].text), "send_draft needs emails:send");
 
 	console.log(process.exitCode ? "\nFAILURES" : "\nALL OK");
 	process.exit(process.exitCode ?? 0);

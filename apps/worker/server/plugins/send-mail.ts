@@ -398,6 +398,8 @@ export default defineNitroPlugin(async (nitroApp) => {
 			const autoMail = decodedForm.autoMail === "unsubscribe" ? "unsubscribe" : null;
 			const mailerResponse = await mailer.sendEmail(data.to, {
 				from: mailbox.identity.value,
+				cc: data.cc ?? [],
+				bcc: data.bcc ?? [],
 				subject: String(newMessageBody.subject),
 				text: newMessageBody.text ?? "",
 				html: newMessageBody.html ?? "",

@@ -144,6 +144,9 @@ export class SmtpMailer implements Mailer {
 			from: string;
 			inReplyTo: string;
 			references: string[];
+			// ss2i : copies et copies cachees ; Bcc va dans l enveloppe SMTP, jamais dans les en-tetes.
+			cc?: string[];
+			bcc?: string[];
 			// ss2i : en-tetes supplementaires (ex. X-Kurrier-Auto) ajoutes tels quels au message.
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
@@ -168,6 +171,8 @@ export class SmtpMailer implements Mailer {
 			const info = await this.transporter.sendMail({
 				from: opts.from,
 				to, // array is fine; Nodemailer will join
+				cc: opts.cc?.length ? opts.cc : undefined,
+				bcc: opts.bcc?.length ? opts.bcc : undefined,
 				subject: opts.subject,
 				text: opts.text || undefined,
 				html: opts.html || undefined,

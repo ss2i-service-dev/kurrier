@@ -206,8 +206,10 @@ export default function WebmailListItem({
 	const canMarkAsUnread =
 		mailboxThreadItem.messageCount > 0 && mailboxThreadItem.unreadCount === 0;
 
-	const isUnread = mailboxThreadItem.unreadCount > 0;
-	const isRead = mailboxThreadItem.unreadCount === 0;
+	// ss2i : dans la corbeille, aucune distinction lu / non lu (pas de gras, pas d'icone).
+	const isTrash = activeMailbox.kind === "trash";
+	const isUnread = !isTrash && mailboxThreadItem.unreadCount > 0;
+	const isRead = !isUnread;
 
 	const { state, setState } = useDynamicContext<{
 		selectedThreadIds: Set<string>;
@@ -321,7 +323,7 @@ export default function WebmailListItem({
 				</div>
 
 				<div className="ml-auto flex items-center gap-2 pl-2">
-					{mailboxThreadItem.unreadCount > 0 ? (
+					{isUnread ? (
 						<Mail className="h-4 w-4 text-primary md:hidden" />
 					) : (
 						<MailOpen className="h-4 w-4 text-muted-foreground md:hidden" />

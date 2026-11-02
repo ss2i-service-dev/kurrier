@@ -58,13 +58,14 @@ async function callTool(ctx: ToolContext, params: Record<string, any> | undefine
 		return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
 	}
 	// Cle API : la portee de l'outil doit figurer dans api_keys.scopes. OAuth : tout.
-	if (ctx.scopes !== null && !ctx.scopes.includes(tool.scope)) {
+	const args = params?.arguments && typeof params.arguments === "object" ? params.arguments : {};
+	const scope = typeof tool.scope === "function" ? tool.scope(args) : tool.scope;
+	if (ctx.scopes !== null && !ctx.scopes.includes(scope)) {
 		return {
-			content: [{ type: "text", text: `This API key lacks the '${tool.scope}' scope required by ${name}` }],
+			content: [{ type: "text", text: `This API key lacks the '${scope}' scope required by ${name}` }],
 			isError: true,
 		};
 	}
-	const args = params?.arguments && typeof params.arguments === "object" ? params.arguments : {};
 	try {
 		const result = await tool.handler(ctx, args);
 		const structured = result && typeof result === "object" && !Array.isArray(result) ? result : { result };

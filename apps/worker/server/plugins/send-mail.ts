@@ -47,6 +47,7 @@ import { getRedis } from "../../lib/get-redis";
 import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import {s3} from "../../lib/create-s3-client";
 import { upsertContactsFromOutgoing } from "../../lib/outgoing-contacts";
+import { ingestRecipientStats } from "../../lib/recipient-stats";
 import { deleteDraft } from "../../lib/drafts/draft-service";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 // import MailComposer from "nodemailer/lib/mail-composer";
@@ -483,6 +484,14 @@ export default defineNitroPlugin(async (nitroApp) => {
 				} catch (err: any) {
 					console.error("[send-mail] outgoing contacts failed:", err?.message ?? err);
 				}
+				// ss2i : suggestions de destinataires (frecency et co-occurrence), To, Cc et Bcc.
+				await ingestRecipientStats({
+					ownerIds: [String(decodedForm.senderUserId ?? ""), newMessage.ownerId].filter(Boolean),
+					messageId: String(parsedMessage.messageId),
+					sentAt: newMessage.date ?? newMessage.createdAt ?? null,
+					ownAddresses: [mailbox.identity.value],
+					recipients: [data.to, data.cc, data.bcc],
+				});
 			} else if (mailerResponse.error) {
 				return {
 					success: false,

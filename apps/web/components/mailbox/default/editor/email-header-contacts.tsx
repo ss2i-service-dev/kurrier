@@ -15,8 +15,7 @@ import {
 	type RecipientField,
 } from "@/components/mailbox/default/editor/recipients-move";
 import ContactSuggestionItem from "@/components/mailbox/default/editor/contact-suggestion-item";
-import { searchContactsForCompose } from "@/lib/actions/calendar";
-import {ComposeContact} from "@schema";
+import { suggestRecipients } from "@/lib/actions/recipient-suggestions";
 
 export default function EmailHeaderContacts({
 	name,
@@ -65,41 +64,38 @@ export default function EmailHeaderContacts({
 		return Array.from(wrapRef.current.querySelectorAll(PILL)).indexOf(pill);
 	};
 
-	const uniqueByEmail = (arr: ComposeContact[]) => {
-		const seen = new Set();
-		return arr.filter((item) => {
-			if (seen.has(item.email)) return false;
-			seen.add(item.email);
-			return true;
-		});
+	// ss2i : suggestions classees par usage reel cote serveur (recence, frequence,
+	// association avec les adresses deja saisies dans les trois champs) ; le texte tape
+	// ne fait que filtrer. Champ vide au focus : les meilleurs candidats tout de suite.
+	// Une reponse en retard ne remplace jamais une plus recente.
+	const requestSeq = useRef(0);
+	const loadSuggestions = async (val: string) => {
+		const seq = ++requestSeq.current;
+		const current = Array.from(
+			new Set([...(dnd?.all() ?? []), ...valueRef.current].map((e) => e.toLowerCase())),
+		);
+		const rows = await suggestRecipients({ query: val, current });
+		if (seq !== requestSeq.current) return;
+		setOptions(
+			rows.map((row) => ({
+				value: row.email,
+				label: row.name && row.name !== row.email ? `${row.name} <${row.email}>` : row.email,
+				avatar: row.avatar,
+			})),
+		);
 	};
 
-	const searchContacts = async (val: string) => {
+	const searchContacts = (val: string) => {
 		setSearchValue(val);
-
-		const rowsContacts = await searchContactsForCompose(val);
-		const rows = uniqueByEmail(rowsContacts);
-
-
-		const mapped: ComboboxItem[] = rows.map((row) => ({
-			value: row.email,
-			label: `${row.name} <${row.email}>`,
-			avatar: row.avatar,
-		}));
-
-		setOptions(mapped);
+		void loadSuggestions(val);
 	};
 
 	const renderOption: TagsInputProps["renderOption"] = ({ option }) => (
 		<ContactSuggestionItem option={option} />
 	);
 
-	const filter: OptionsFilter = ({ options, search }) => {
-		const s = search.toLowerCase();
-		return (options as ComboboxItem[]).filter((opt) =>
-			opt.label.toLowerCase().includes(s),
-		);
-	};
+	// Ordre du serveur conserve : le filtrage textuel est deja fait la-bas.
+	const filter: OptionsFilter = ({ options }) => options;
 
 	return (
 		<div
@@ -122,6 +118,7 @@ export default function EmailHeaderContacts({
 					value={value}
 					searchValue={searchValue}
 					onSearchChange={searchContacts}
+					onFocus={() => void loadSuggestions(searchValue)}
 					data={options}
 					onChange={(v) => {
 						update(v);

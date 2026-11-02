@@ -5,3 +5,4 @@ export * from "./day-js-extended";
 export * from "./common-utils";
 export * from "./drafts";
 export * from "./compose";
+export * from "./recipient-suggest";

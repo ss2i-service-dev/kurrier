@@ -20,6 +20,8 @@ type FieldApi = { get: () => string[]; set: (v: string[]) => void };
 type Ctx = {
 	register: (name: RecipientField, api: FieldApi) => () => void;
 	move: (email: string, from: RecipientField, to: RecipientField) => void;
+	// Toutes les adresses saisies, To, Cc et Bcc confondus (suggestions par association).
+	all: () => string[];
 };
 
 const RecipientsDnDContext = createContext<Ctx | null>(null);
@@ -80,7 +82,12 @@ export function RecipientsDnDProvider({
 		[onActivate],
 	);
 
-	const value = useMemo(() => ({ register, move }), [register, move]);
+	const all = useCallback(
+		() => Object.values(fields.current).flatMap((api) => api?.get() ?? []),
+		[],
+	);
+
+	const value = useMemo(() => ({ register, move, all }), [register, move, all]);
 	return (
 		<RecipientsDnDContext.Provider value={value}>
 			{children}

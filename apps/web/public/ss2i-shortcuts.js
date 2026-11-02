@@ -19,9 +19,10 @@
     ["c", "Nouveau message", () => cliquer("Compose")],
     ["r", "Repondre", () => cliquer("Reply")],
     ["f", "Transferer", () => cliquer("Forward")],
-    ["a", "Archiver", () => cliquer("Archive")],
-    ["e", "Supprimer", () => cliquer("Delete")],
-    ["#", "Supprimer", () => cliquer("Delete")],
+    ["a", "Archiver (le mail ouvert ou les mails coches)", () => surMailOuSelection("Archive")],
+    ["e", "Supprimer (le mail ouvert ou les mails coches)", () => surMailOuSelection("Delete")],
+    ["#", "Supprimer (le mail ouvert ou les mails coches)", () => surMailOuSelection("Delete")],
+    ["u", "Marquer non lu et revenir a la liste", () => marquerNonLu()],
     ["/", "Rechercher", () => focaliserRecherche()],
     ["?", "Afficher cette aide", () => basculerAide()],
   ];
@@ -32,6 +33,32 @@
     const cible =
       boutons.find((b) => b.textContent.trim() === libelle) ||
       boutons.find((b) => b.textContent.trim().startsWith(libelle));
+    if (cible) cible.click();
+    return Boolean(cible);
+  };
+
+  const dansUnMail = () => /\/threads\/[^/]+/.test(window.location.pathname);
+
+  // Dans un mail ouvert : le bouton libelle du mail. Sur la liste : le bouton de la
+  // barre de selection, marque data-ss2i-shortcut (mail-list-header.tsx) et visible
+  // seulement si des mails sont coches ; sans selection, rien ne se passe. Jamais par
+  // title : chaque ligne de la liste a ses propres boutons « Delete » / « Archive ».
+  const surMailOuSelection = (libelle) => {
+    if (dansUnMail()) return cliquer(libelle);
+    const marque = libelle === "Delete" ? "selection-delete" : "selection-archive";
+    const cible = Array.from(
+      document.querySelectorAll(`button[data-ss2i-shortcut="${marque}"]`)
+    ).find((b) => b.offsetParent !== null);
+    if (cible) cible.click();
+    return Boolean(cible);
+  };
+
+  // Non lu : seulement dans un mail ouvert (URL .../threads/<id>). Le bouton est une
+  // icone sans texte, retrouvee par son aria-label ; il marque le fil non lu et
+  // revient a la liste (email-renderer.tsx, unreadMessage).
+  const marquerNonLu = () => {
+    if (!dansUnMail()) return false;
+    const cible = document.querySelector('button[aria-label="Mark as unread"]');
     if (cible) cible.click();
     return Boolean(cible);
   };
@@ -81,6 +108,9 @@
     if (!el) return false;
     if (el.isContentEditable) return true;
     const t = el.tagName;
+    // Une case a cocher n'est pas une saisie : apres avoir coche des mails, le focus
+    // y reste et « e » doit agir sur la selection.
+    if (t === "INPUT" && (el.type === "checkbox" || el.type === "radio")) return false;
     return t === "INPUT" || t === "TEXTAREA" || t === "SELECT";
   };
 

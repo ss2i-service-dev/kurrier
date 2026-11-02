@@ -270,6 +270,7 @@ function MailListHeader({
 								onClick={archiveThreads}
 								className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs hover:bg-muted"
 								title="Archive"
+								data-ss2i-shortcut="selection-archive"
 							>
 								<Archive className="h-4 w-4" />
 							</button>
@@ -279,6 +280,7 @@ function MailListHeader({
 							onClick={deleteThreads}
 							className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs hover:bg-muted"
 							title="Delete"
+							data-ss2i-shortcut="selection-delete"
 						>
 							<Trash2 className="h-4 w-4" />
 						</button>

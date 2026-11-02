@@ -40,14 +40,21 @@ export type ToolContext = {
 	userId: string;
 	email: string;
 	authType: "oauth" | "api_key";
+	// null = acces complet (OAuth) ; sinon api_keys.scopes de la cle API.
+	scopes: string[] | null;
 };
 
 type JsonSchema = Record<string, unknown>;
+
+// Portee de cle API exigee par outil : emails:send pour tout ce qui envoie,
+// emails:receive pour le reste (lecture et rangement).
+export type ToolScope = "emails:send" | "emails:receive";
 
 export type ToolDefinition = {
 	name: string;
 	description: string;
 	inputSchema: JsonSchema;
+	scope: ToolScope;
 	handler: (ctx: ToolContext, args: Record<string, any>) => Promise<unknown>;
 };
 
@@ -66,13 +73,22 @@ const redis = () => import("../get-redis").then((m) => m.getRedis());
 // Validation et mise en forme
 // ---------------------------------------------------------------------------
 
-const str = (v: unknown, name: string, opts?: { optional?: boolean; max?: number }) => {
+// Chaine simple : pas de retour a la ligne (en-tetes mail, noms de dossier, ids),
+// sauf pour les corps (multiline).
+const str = (
+	v: unknown,
+	name: string,
+	opts?: { optional?: boolean; max?: number; multiline?: boolean },
+) => {
 	if (v === undefined || v === null || v === "") {
 		if (opts?.optional) return undefined;
 		throw new McpToolError(`'${name}' is required`);
 	}
 	if (typeof v !== "string") throw new McpToolError(`'${name}' must be a string`);
 	if (opts?.max && v.length > opts.max) throw new McpToolError(`'${name}' is too long`);
+	if (!opts?.multiline && /[\r\n]/.test(v)) {
+		throw new McpToolError(`'${name}' must not contain line breaks`);
+	}
 	return v;
 };
 
@@ -97,6 +113,7 @@ const emails = (v: unknown, name: string, required = false): string[] => {
 	const raw = Array.isArray(v) ? v.map(String) : String(v).split(",");
 	const list = raw.map((s) => s.trim()).filter(Boolean);
 	for (const item of list) {
+		if (/[\r\n]/.test(item)) throw new McpToolError(`'${name}': line break in address`);
 		const addr = item.match(/<([^>]+)>\s*$/)?.[1] ?? item;
 		if (!EMAIL_RE.test(addr)) throw new McpToolError(`'${name}': invalid address "${item}"`);
 	}
@@ -177,8 +194,8 @@ const escapeHtml = (s: string) =>
 // ajoute signature et citation. Un texte seul deviendrait invisible dans la partie
 // HTML (signature + citation sans le corps) : on derive donc toujours les deux formes.
 const bodyParts = (args: Record<string, any>) => {
-	const text = str(args.body_text ?? args.body, "body_text", { optional: true, max: 500_000 });
-	const html = str(args.body_html, "body_html", { optional: true, max: 2_000_000 });
+	const text = str(args.body_text ?? args.body, "body_text", { optional: true, max: 500_000, multiline: true });
+	const html = str(args.body_html, "body_html", { optional: true, max: 2_000_000, multiline: true });
 	if (!text && !html) throw new McpToolError("'body_text' or 'body_html' is required");
 	return {
 		text: text ?? htmlToText(html!),
@@ -239,7 +256,7 @@ async function uploadAttachments(
 		const contentType =
 			str(file?.content_type ?? file?.contentType, "attachments[].content_type", { optional: true }) ??
 			"application/octet-stream";
-		const content = str(file?.content_base64 ?? file?.content, "attachments[].content_base64")!;
+		const content = str(file?.content_base64 ?? file?.content, "attachments[].content_base64", { multiline: true })!;
 		const buffer = Buffer.from(content, "base64");
 		total += buffer.length;
 		if (total > 25 * 1024 * 1024) throw new McpToolError("Attachments exceed 25 MB in total");
@@ -646,6 +663,7 @@ const bodyProps = {
 export const TOOLS: ToolDefinition[] = [
 	{
 		name: "whoami",
+		scope: "emails:receive",
 		description: "Who is authenticated: user id, email, authentication type and email identities.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		handler: async (ctx) => {
@@ -660,6 +678,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "list_identities",
+		scope: "emails:receive",
 		description: "List the email identities (accounts) of the authenticated user.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		handler: async (ctx) => {
@@ -678,6 +697,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "list_folders",
+		scope: "emails:receive",
 		description: "List the folders of an identity with thread and unread counts.",
 		inputSchema: {
 			type: "object",
@@ -710,6 +730,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "list_threads",
+		scope: "emails:receive",
 		description:
 			"List threads of a folder, most recent activity first: subject, participants, preview, date, unread, starred, attachments. Paginate with offset.",
 		inputSchema: {
@@ -750,6 +771,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "search",
+		scope: "emails:receive",
 		description:
 			"Full-text search across threads (subject, preview, sender, participants), same engine as the web search. Optional identity and folder filters.",
 		inputSchema: {
@@ -770,6 +792,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "get_thread",
+		scope: "emails:receive",
 		description:
 			"Read a thread: every message as readable text with from/to/cc/date headers, message ids and attachments. Does not mark it read unless mark_read is true.",
 		inputSchema: {
@@ -825,6 +848,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "get_attachment",
+		scope: "emails:receive",
 		description:
 			"Fetch an attachment: text content for text-like files (txt, csv, json, xml, html, ics, eml), otherwise a short-lived signed download URL (5 minutes).",
 		inputSchema: {
@@ -867,6 +891,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "send_email",
+		scope: "emails:send",
 		description:
 			"Send a new email from one of your identities. Goes through the same sending pipeline as the web app (signature, Sent folder, contacts). Confirm with the user before sending.",
 		inputSchema: {
@@ -902,6 +927,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "reply",
+		scope: "emails:send",
 		description:
 			"Reply to a message (by message_id from get_thread). Recipients, subject (Re:), quoting, In-Reply-To and References are computed like the web editor. reply_all adds the other recipients in cc.",
 		inputSchema: {
@@ -946,6 +972,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "forward",
+		scope: "emails:send",
 		description:
 			"Forward a message (by message_id from get_thread) to new recipients, with its original attachments unless include_attachments is false. Subject (Fwd:) and quoting are computed like the web editor.",
 		inputSchema: {
@@ -996,6 +1023,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "mark_read",
+		scope: "emails:receive",
 		description: "Mark threads as read (in every folder they appear in, or only in 'folder').",
 		inputSchema: {
 			type: "object",
@@ -1007,6 +1035,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "mark_unread",
+		scope: "emails:receive",
 		description: "Mark threads as unread (in every folder they appear in, or only in 'folder').",
 		inputSchema: {
 			type: "object",
@@ -1018,6 +1047,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "star",
+		scope: "emails:receive",
 		description: "Star (flag) threads.",
 		inputSchema: {
 			type: "object",
@@ -1029,6 +1059,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "unstar",
+		scope: "emails:receive",
 		description: "Remove the star (flag) from threads.",
 		inputSchema: {
 			type: "object",
@@ -1040,6 +1071,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "move_to_folder",
+		scope: "emails:receive",
 		description:
 			"Move threads to another folder of the same identity. 'folder' (source) is only needed when a thread sits in several folders.",
 		inputSchema: {
@@ -1056,6 +1088,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "archive",
+		scope: "emails:receive",
 		description: "Archive threads (move them to the Archive folder, created if needed).",
 		inputSchema: {
 			type: "object",
@@ -1067,6 +1100,7 @@ export const TOOLS: ToolDefinition[] = [
 	},
 	{
 		name: "trash",
+		scope: "emails:receive",
 		description:
 			"Move threads to Trash. Never deletes permanently: threads already in Trash are refused.",
 		inputSchema: {

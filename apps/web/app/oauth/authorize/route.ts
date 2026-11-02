@@ -6,7 +6,9 @@ import {
 	AUTHORIZE_PARAM_KEYS,
 	type AuthorizeParams,
 	OAuthError,
+	baseUrl,
 	consentPage,
+	mcpPublicOrigin,
 	issueAuthorizationCode,
 	redirectWithParams,
 	validateAuthorizeRequest,
@@ -39,14 +41,18 @@ function pick(source: { get(key: string): string | null }): AuthorizeParams {
 }
 
 export async function GET(request: Request) {
+	// request.url ne sert qu'au chemin et a la requete : son origine est l'adresse
+	// d'ecoute du conteneur (0.0.0.0:3000), jamais une adresse publique.
 	const url = new URL(request.url);
 	const params = pick(url.searchParams);
 	const user = await isSignedIn();
 	const cookieStore = await cookies();
 	if (!user) {
+		// Login sur WEB_URL (443), retour ici sur MCP_PUBLIC_ORIGIN (8443) : les cookies
+		// ne sont pas cloisonnes par port, la session posee sur 443 est vue sur 8443.
 		const locale = cookieStore.get("locale")?.value === "ko" ? "ko" : "en";
-		const response = NextResponse.redirect(new URL(`/${locale}/auth/login`, url.origin));
-		response.cookies.set(RETURN_COOKIE, `${url.pathname}${url.search}`, cookieOpts);
+		const response = NextResponse.redirect(`${baseUrl()}/${locale}/auth/login`);
+		response.cookies.set(RETURN_COOKIE, `${mcpPublicOrigin()}${url.pathname}${url.search}`, cookieOpts);
 		return response;
 	}
 	try {
@@ -56,7 +62,13 @@ export async function GET(request: Request) {
 			consentPage({ clientName: client.clientName, userEmail: user.email, params, csrf }),
 			{
 				status: 200,
-				headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+				headers: {
+					"Content-Type": "text/html; charset=utf-8",
+					"Cache-Control": "no-store",
+					// Jamais dans un cadre : pas de clickjacking du bouton Autoriser.
+					"X-Frame-Options": "DENY",
+					"Content-Security-Policy": "frame-ancestors 'none'",
+				},
 			},
 		);
 		response.cookies.set(CSRF_COOKIE, csrf, cookieOpts);

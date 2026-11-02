@@ -57,6 +57,13 @@ async function callTool(ctx: ToolContext, params: Record<string, any> | undefine
 	if (!tool) {
 		return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
 	}
+	// Cle API : la portee de l'outil doit figurer dans api_keys.scopes. OAuth : tout.
+	if (ctx.scopes !== null && !ctx.scopes.includes(tool.scope)) {
+		return {
+			content: [{ type: "text", text: `This API key lacks the '${tool.scope}' scope required by ${name}` }],
+			isError: true,
+		};
+	}
 	const args = params?.arguments && typeof params.arguments === "object" ? params.arguments : {};
 	try {
 		const result = await tool.handler(ctx, args);
@@ -67,14 +74,14 @@ async function callTool(ctx: ToolContext, params: Record<string, any> | undefine
 		};
 	} catch (err: any) {
 		// Erreur d'outil lisible (isError), pas une erreur JSON-RPC : le modele peut
-		// corriger ses arguments. Les erreurs inattendues sont journalisees sans detail
-		// interne pour le client.
+		// corriger ses arguments. Une erreur inattendue reste generique pour le client ;
+		// le detail va dans le journal du worker (sans les arguments : ni jeton ni mail).
 		if (err instanceof McpToolError) {
 			return { content: [{ type: "text", text: err.message }], isError: true };
 		}
-		console.error(`[mcp] tool ${name} failed:`, err);
+		console.error(`[mcp] tool ${name} failed for user ${ctx.userId}:`, err?.stack ?? err);
 		return {
-			content: [{ type: "text", text: `Tool ${name} failed: ${err?.message ?? "internal error"}` }],
+			content: [{ type: "text", text: `Tool ${name} failed (internal error, see worker logs)` }],
 			isError: true,
 		};
 	}
@@ -122,10 +129,15 @@ export async function handleRpcMessage(
 	}
 }
 
+export const MAX_BATCH = 20;
+
 // Corps complet (objet ou lot) -> reponse a renvoyer (objet, lot) ou null (202 vide).
 export async function handleRpcBody(ctx: ToolContext, body: unknown) {
 	if (Array.isArray(body)) {
 		if (!body.length) return rpcError(null, INVALID_REQUEST, "Empty batch");
+		if (body.length > MAX_BATCH) {
+			return rpcError(null, INVALID_REQUEST, `Batch too large (max ${MAX_BATCH})`);
+		}
 		const responses = (await Promise.all(body.map((m) => handleRpcMessage(ctx, m)))).filter(
 			(r): r is JsonRpcResponse => r !== null,
 		);

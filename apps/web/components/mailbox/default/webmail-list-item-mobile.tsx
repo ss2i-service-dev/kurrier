@@ -108,7 +108,9 @@ export default function WebmailListItemMobile({
 	const canMarkAsRead = mailboxThreadItem.unreadCount > 0;
 	const canMarkAsUnread =
 		mailboxThreadItem.messageCount > 0 && mailboxThreadItem.unreadCount === 0;
-	const isRead = mailboxThreadItem.unreadCount === 0;
+	// ss2i : dans la corbeille, aucune distinction lu / non lu.
+	const isRead =
+		activeMailbox.kind === "trash" || mailboxThreadItem.unreadCount === 0;
 
 	const { state, setState } = useDynamicContext<{
 		selectedThreadIds: Set<string>;

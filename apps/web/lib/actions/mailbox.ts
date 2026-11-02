@@ -27,6 +27,7 @@ import {
 	or,
 	sql,
 	gt,
+	ne,
 } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
@@ -234,6 +235,14 @@ export const fetchMailboxUnreadCounts = cache(
 					`,
 				})
 				.from(mailboxThreads)
+				// ss2i : la corbeille n'affiche pas de compteur de non lus.
+				.innerJoin(
+					mailboxes,
+					and(
+						eq(mailboxes.id, mailboxThreads.mailboxId),
+						ne(mailboxes.kind, "trash"),
+					),
+				)
 				.where(
 					// ss2i : seuls les fils non lus comptent ; sans ce filtre, la politique RLS
 					// (sous-requete EXISTS par ligne) s'evaluait sur toute la table : 680 ms a

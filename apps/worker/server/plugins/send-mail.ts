@@ -8,6 +8,7 @@ import {
 import { getMessageAddress, getMessageName } from "@common/mail-client";
 import {
 	composeMessage,
+	formatQuoteDate,
 	generateSnippet,
 	quoteScopeOf,
 	upsertMailboxThreadItem,
@@ -500,16 +501,8 @@ export default defineNitroPlugin(async (nitroApp) => {
 				? (origMsg.date ?? origMsg.createdAt)!
 				: null;
 
-		// Human-friendly fallback
-		const origDateLabel = rawDate
-			? new Date(rawDate).toLocaleString(undefined, {
-				year: "numeric",
-				month: "short",
-				day: "2-digit",
-				hour: "2-digit",
-				minute: "2-digit",
-			})
-			: "";
+		// Dans le fuseau des utilisateurs (MAIL_TIMEZONE), pas celui du conteneur (UTC).
+		const origDateLabel = formatQuoteDate(rawDate, serverConfig.MAIL_TIMEZONE);
 
 		return composeMessage({
 			mode: data.mode,

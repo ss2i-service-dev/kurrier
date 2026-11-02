@@ -87,6 +87,7 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 			showEditorMode: "reply" | "forward" | "compose";
 			rfcStyle?: boolean;
 			draftRow?: MessageEntity | null;
+			publicConfig?: { MAIL_TIMEZONE?: string | null };
 		}>();
 
 		const [focusOnSubject, setFocusOnSubject] = useState<boolean>(false);
@@ -118,7 +119,11 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 						onQuoteScopeChange={(v) => setQuoteScope(quoteScopeOf(v))}
 					/>
 					{state.rfcStyle && isReply && state.message ? (
-						<ReplyQuotePreview message={state.message} quoteScope={quoteScope} />
+						<ReplyQuotePreview
+							message={state.message}
+							quoteScope={quoteScope}
+							timeZone={state.publicConfig?.MAIL_TIMEZONE}
+						/>
 					) : null}
 					<FocusTrap active={focusOnSubject}>
 						<RichTextEditor.Content className="prose min-h-96 text-sm p-2 leading-5" />

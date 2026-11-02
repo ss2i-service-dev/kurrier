@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 import {
 	closeOpenTags,
 	composeMessage,
+	formatQuoteDate,
+	isPlainHtml,
 	quoteTextLines,
 	stripQuotedHtml,
 	stripQuotedText,
@@ -266,7 +268,7 @@ test("last, message sans historique : cite en entier, identique a thread", () =>
 	assert.equal(a.text, b.text);
 });
 
-test("last, message texte seul : <pre> echappe du texte coupe, pas textAsHtml", () => {
+test("last, message texte seul : paragraphes echappes du texte coupe, pas textAsHtml", () => {
 	const r = composeMessage({
 		mode: "reply",
 		text: "ok",
@@ -274,7 +276,7 @@ test("last, message texte seul : <pre> echappe du texte coupe, pas textAsHtml", 
 		orig: { ...orig, html: null, text: "Oui <ok>.\n\n> old", textAsHtml: "<p>Oui &lt;ok&gt;.</p><p>&gt; old</p>" },
 		quoteScope: "last",
 	});
-	assert.ok(r.html.includes('<pre style="white-space:pre-wrap;margin:0;">Oui &lt;ok&gt;.</pre>'), r.html);
+	assert.ok(r.html.includes("<p>Oui &lt;ok&gt;.</p>"), r.html);
 	assert.ok(!r.html.includes("old"));
 });
 
@@ -308,6 +310,74 @@ test("closeOpenTags : balises ouvertes refermees, void et commentaires ignores",
 	assert.equal(closeOpenTags("<div><p>a<br><img src=x>"), "<div><p>a<br><img src=x></p></div>");
 	assert.equal(closeOpenTags("<div><!-- <span> --><b>x</b>"), "<div><!-- <span> --><b>x</b></div>");
 	assert.equal(closeOpenTags("<p>a</p>"), "<p>a</p>");
+});
+
+// --- Cas reel hlm (MCP reply, quote=last, style RFC), original texte seul envoye par
+// courrier : son HTML est le texte mis en paragraphes --------------------------------------
+
+const PROD_TEXT = "Bonjour Samuel,\n\nPeux-tu me confirmer le créneau de jeudi ?\n\n-- \nSam (Gmail)\n\nLe 1 nov. 2026, Client Ancien <ancien@example.com> a écrit :\n> Ancien historique...\n> Deuxième ligne...";
+const PROD_HTML = "<p>Bonjour Samuel,</p><p>Peux-tu me confirmer le créneau de jeudi ?</p><p>-- <br>Sam (Gmail)</p><p>Le 1 nov. 2026, Client Ancien &lt;ancien@example.com&gt; a écrit :<br>&gt; Ancien historique...<br>&gt; Deuxième ligne...</p>";
+
+test("hlm, last + RFC : texte ET HTML ne citent que le corps propre, sans signature ni historique", () => {
+	const r = composeMessage({
+		mode: "reply",
+		text: "Oui, jeudi 10 h.",
+		html: "<p>Oui, jeudi 10 h.</p>",
+		signatureHtml: SIG,
+		orig: { ...orig, text: PROD_TEXT, html: PROD_HTML, fromName: "Sam", fromAddress: "sam@example.com", dateLabel: "02 Nov 2026, 09:15" },
+		rfcStyle: true,
+		quoteScope: "last",
+	});
+	assert.equal(
+		r.text,
+		`On 02 Nov 2026, 09:15, Sam <sam@example.com> wrote:\n> Bonjour Samuel,\n>\n> Peux-tu me confirmer le créneau de jeudi ?\n\nOui, jeudi 10 h.\n\n-- \n${SIG_TEXT}`,
+	);
+	assert.equal(
+		r.html,
+		`<div class="quote-attribution">On 02 Nov 2026, 09:15, Sam &lt;sam@example.com&gt; wrote:</div>
+<blockquote type="cite" style="border-left:2px solid #ccc;margin:0;padding-left:8px;">
+  <p>Bonjour Samuel,</p><p>Peux-tu me confirmer le créneau de jeudi ?</p>
+</blockquote>
+<p>Oui, jeudi 10 h.</p><div class="signature" style="margin-top:1em"><div style="white-space:pre">-- </div>${SIG}</div>`,
+	);
+});
+
+test("hlm, meme HTML sans partie texte : reperes -- et &gt; reconnus, attribution retiree", () => {
+	assert.equal(stripQuotedHtml(PROD_HTML).html, "<p>Bonjour Samuel,</p><p>Peux-tu me confirmer le créneau de jeudi ?</p><p>-- <br>Sam (Gmail)</p>");
+	assert.equal(stripSignatureHtml("<p>Bonjour Samuel,</p><p>Peux-tu me confirmer le créneau de jeudi ?</p><p>-- <br>Sam (Gmail)</p>"), "<p>Bonjour Samuel,</p><p>Peux-tu me confirmer le créneau de jeudi ?</p>");
+	assert.equal(stripSignatureHtml("<div>a<br>-- <br>sig</div>"), "<div>a</div>");
+	assert.equal(stripSignatureHtml("<div>a</div><div>--<br>pas un separateur</div>"), "<div>a</div><div>--<br>pas un separateur</div>");
+	const r = composeMessage({ mode: "reply", text: "ok", html: "<p>ok</p>", orig: { ...orig, text: null, html: PROD_HTML }, rfcStyle: true, quoteScope: "last" });
+	assert.ok(r.html.includes("<p>Peux-tu me confirmer le créneau de jeudi ?</p>\n</blockquote>"), r.html);
+	assert.ok(!r.html.includes("Sam (Gmail)") && !r.html.includes("Ancien"));
+	assert.ok(r.text.includes("> Peux-tu me confirmer le créneau de jeudi ?\n\nok"), r.text);
+});
+
+test("hlm, portee thread hors RFC : sortie inchangee (HTML d'origine repris tel quel)", () => {
+	const r = composeMessage({ mode: "reply", text: "ok", html: "<p>ok</p>", orig: { ...orig, text: PROD_TEXT, html: PROD_HTML } });
+	assert.ok(r.html.includes(PROD_HTML));
+	assert.ok(r.text.endsWith(PROD_TEXT));
+});
+
+test("HTML simple reconnu ; HTML riche (table, img, blockquote) garde son HTML nettoye", () => {
+	assert.equal(isPlainHtml(PROD_HTML), true);
+	assert.equal(isPlainHtml('<html><body><div dir="ltr">a <a href="x">lien</a><br></div></body></html>'), true);
+	assert.equal(isPlainHtml("<p>a</p><table><tr><td>b</td></tr></table>"), false);
+	assert.equal(isPlainHtml(GMAIL), false);
+	const rich = `<div><b>Gras</b> et <i>italique</i></div><blockquote><p>old</p></blockquote>`;
+	const r = composeMessage({ mode: "reply", text: "ok", orig: { ...orig, text: "Gras et italique\n\n> old", html: rich }, quoteScope: "last" });
+	assert.ok(r.html.includes("<div><b>Gras</b> et <i>italique</i></div>"));
+});
+
+test("formatQuoteDate : fuseau MAIL_TIMEZONE, 24 h, anglais ; defaut Europe/Paris", () => {
+	const d = new Date("2026-11-02T08:15:00Z");
+	assert.equal(formatQuoteDate(d, "Europe/Paris"), "02 Nov 2026, 09:15");
+	assert.equal(formatQuoteDate(d, undefined), "02 Nov 2026, 09:15");
+	assert.equal(formatQuoteDate(d, "UTC"), "02 Nov 2026, 08:15");
+	assert.equal(formatQuoteDate(d, "America/Montreal"), "02 Nov 2026, 03:15");
+	assert.equal(formatQuoteDate(new Date("2026-07-14T12:00:00Z"), "Europe/Paris"), "14 Jul 2026, 14:00");
+	assert.equal(formatQuoteDate(d, "Not/AZone"), "02 Nov 2026, 09:15");
+	assert.equal(formatQuoteDate(null, "Europe/Paris"), "");
 });
 
 if (failures) {

@@ -30,6 +30,8 @@ export const ZServerConfig = z.object({
 	S3_ACCESS_KEY: z.string("S3_ACCESS_KEY must be present"),
 	S3_SECRET_KEY: z.string("S3_SECRET_KEY must be present"),
 	S3_FORCE_PATH_STYLE: z.string("S3_FORCE_PATH_STYLE must be present"),
+	// ss2i : fuseau des dates d'attribution des citations (defaut Europe/Paris).
+	MAIL_TIMEZONE: z.string().optional(),
 });
 
 /** Safe to expose to the browser */
@@ -39,6 +41,8 @@ export const ZPublicConfig = z.object({
 	DAV_URL: z.string("DAV_URL must be present"),
 	// ss2i : origine publique de l'MCP courrier et de ses endpoints OAuth (defaut WEB_URL).
 	MCP_PUBLIC_ORIGIN: z.string().optional(),
+	// ss2i : meme fuseau pour l'apercu de la citation dans l'editeur.
+	MAIL_TIMEZONE: z.string().optional(),
 	DISABLE_SIGNUP: z.string().optional().transform((val) => val === "true").default(false),
 });
 

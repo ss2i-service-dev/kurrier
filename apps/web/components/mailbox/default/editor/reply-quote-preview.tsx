@@ -2,31 +2,24 @@
 import { useMemo } from "react";
 import DOMPurify from "dompurify";
 import { MessageEntity } from "@db";
-import { buildQuote, type QuoteScope } from "@common/compose";
+import { buildQuote, formatQuoteDate, type QuoteScope } from "@common/compose";
 
 // ss2i : en style RFC, la reponse part sous la citation ; l'editeur montre donc la
 // citation (non modifiable) au-dessus de la zone de saisie, telle que le worker
 // l'assemblera (meme fonction buildQuote, meme portee « dernier message / tout le fil »).
-// Seule la date peut differer d'un cheveu : mise en forme ici par le navigateur, la-bas
-// par le serveur.
+// Meme date aussi : formatQuoteDate dans le fuseau MAIL_TIMEZONE.
 export default function ReplyQuotePreview({
 	message,
 	quoteScope,
+	timeZone,
 }: {
 	message: MessageEntity;
 	quoteScope: QuoteScope;
+	// MAIL_TIMEZONE (publicConfig) : le meme fuseau que le worker.
+	timeZone?: string | null;
 }) {
 	const html = useMemo(() => {
-		const raw = (message.date ?? message.createdAt) as Date | string | null;
-		const dateLabel = raw
-			? new Date(raw).toLocaleString(undefined, {
-					year: "numeric",
-					month: "short",
-					day: "2-digit",
-					hour: "2-digit",
-					minute: "2-digit",
-				})
-			: "";
+		const dateLabel = formatQuoteDate((message.date ?? message.createdAt) as Date | string | null, timeZone);
 		const quote = buildQuote(
 			{
 				html: message.html,
@@ -39,7 +32,7 @@ export default function ReplyQuotePreview({
 			{ quoteScope, rfcStyle: true },
 		);
 		return typeof window !== "undefined" ? DOMPurify.sanitize(quote.html) : "";
-	}, [message, quoteScope]);
+	}, [message, quoteScope, timeZone]);
 
 	return (
 		<div className="px-3 pt-2">

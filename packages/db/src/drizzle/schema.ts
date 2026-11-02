@@ -15,6 +15,7 @@ import {
 	numeric,
 	doublePrecision,
 	primaryKey,
+	check,
 	pgSchema
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -1668,7 +1669,8 @@ export const mailSubscriptions = pgTable(
         updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     },
     (t) => [
-		uniqueIndex("uniq_mail_subscriptions_workspace_key").on(t.workspaceId, t.subscriptionKey),
+		// ss2i : par utilisateur (migration 007), sinon deux utilisateurs d'un meme workspace se disputaient la ligne.
+		uniqueIndex("uniq_mail_subscriptions_workspace_key").on(t.workspaceId, t.ownerId, t.subscriptionKey),
 		index("idx_mail_subscriptions_status").on(t.ownerId, t.status),
 		index("idx_mail_subscriptions_last_seen").on(t.ownerId, t.lastSeenAt),
 		...workspaceCrudPolicies(t, "mail_subscriptions"),
@@ -2017,6 +2019,7 @@ export const blockedSenders = pgTable(
 	},
 	(t) => [
 		uniqueIndex("uniq_blocked_senders_owner_value").on(t.ownerId, t.kind, t.value),
+		check("blocked_senders_kind_check", sql`${t.kind} IN ('address', 'domain')`),
 		pgPolicy("blocked_senders_select_owner", {
 			for: "select",
 			to: "kurrier",

@@ -869,6 +869,8 @@ export class SesMailer implements Mailer {
 			from: string;
 			inReplyTo: string;
 			references: string[];
+			// ss2i : en-tetes supplementaires (ex. X-Kurrier-Auto) ajoutes tels quels au message.
+			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
 	): Promise<{ success: boolean; MessageId?: string }> {
@@ -951,7 +953,10 @@ export class SesMailer implements Mailer {
 										Attachments: base64Attachments,
 									}
 								: {}),
-							Headers: this.buildSesHeaders(opts.inReplyTo, opts.references),
+							Headers: [
+								...this.buildSesHeaders(opts.inReplyTo, opts.references),
+								...Object.entries(opts.extraHeaders ?? {}).map(([Name, Value]) => ({ Name, Value })),
+							],
 						},
 					},
 				}),

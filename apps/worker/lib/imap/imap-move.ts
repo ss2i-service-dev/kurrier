@@ -1,7 +1,9 @@
 import { db, mailboxes, messages, mailboxThreads } from "@db";
+import { upsertMailboxThreadItem } from "@common";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { ImapFlow } from "imapflow";
 import { initSmtpClient } from "./imap-client";
+import { planMessageMove } from "@common";
 import { resolveUids, type UidRow } from "./imap-resolve-uids";
 
 type MoveJob = {
@@ -15,6 +17,10 @@ type MoveJob = {
 	toMailboxId?: string; // required when op === "move"
 	moveImap: boolean;
 	messageId?: string;
+	// ss2i : quand il est fourni, seuls ces messages bougent (blocage d'expediteur) ; un fil
+	// qui n'a plus aucun autre message dans le dossier source part en entier. Sans lui (tous
+	// les appels existants), c'est le fil entier, comme avant. `messageId` reste ignore.
+	messageIds?: string[];
 };
 
 export const moveMail = async (
@@ -85,6 +91,7 @@ export const moveMail = async (
 			id: messages.id,
 			meta: messages.metaData,
 			messageId: messages.messageId,
+			threadId: messages.threadId,
 		})
 		.from(messages)
 		.where(
@@ -95,11 +102,19 @@ export const moveMail = async (
 		);
 	if (threadMsgs.length === 0) return;
 
+	// Grain du message : seuls les messages demandes sont deplaces.
+	const plan = data.messageIds?.length
+		? planMessageMove(threadMsgs, data.messageIds)
+		: null;
+	if (plan && !plan.messageIds.length) return;
+	const movingIds = plan ? new Set(plan.messageIds) : null;
+	const toMove = movingIds ? threadMsgs.filter((m) => movingIds.has(m.id)) : threadMsgs;
+
 	// A relever AVANT la mise a jour en base, qui reecrit imap.mailboxPath.
 	type Group = { path: string; rows: UidRow[] };
 	const byPath = new Map<string, Group>();
 	if (moveImap) {
-		for (const m of threadMsgs) {
+		for (const m of toMove) {
 			const im = (m.meta as any)?.imap;
 			const uid = im?.uid as number | undefined;
 			const srcPath = im?.mailboxPath as string | undefined;
@@ -134,11 +149,36 @@ export const moveMail = async (
 			.update(messages)
 			.set(set)
 			.where(
-				and(
-					inArray(messages.threadId, ids),
-					eq(messages.mailboxId, fromMailboxId),
-				),
+				plan
+					? and(inArray(messages.id, plan.messageIds), eq(messages.mailboxId, fromMailboxId))
+					: and(
+							inArray(messages.threadId, ids),
+							eq(messages.mailboxId, fromMailboxId),
+						),
 			);
+
+		if (plan) {
+			// Les recapitulatifs de fil sont par dossier : ceux de la destination sont recalcules,
+			// ceux de la source aussi (fil partiel) ou supprimes (fil parti en entier).
+			for (const threadId of [...plan.fullThreadIds, ...plan.partialThreadIds]) {
+				const movedOne = toMove.find((m) => m.threadId === threadId)!;
+				await upsertMailboxThreadItem(movedOne.id, tx as any);
+				const stay = threadMsgs.find((m) => m.threadId === threadId && !movingIds!.has(m.id));
+				if (stay) {
+					await upsertMailboxThreadItem(stay.id, tx as any);
+				} else {
+					await tx
+						.delete(mailboxThreads)
+						.where(
+							and(
+								eq(mailboxThreads.threadId, threadId),
+								eq(mailboxThreads.mailboxId, fromMailboxId),
+							),
+						);
+				}
+			}
+			return;
+		}
 
 		await tx
 			.update(mailboxThreads)

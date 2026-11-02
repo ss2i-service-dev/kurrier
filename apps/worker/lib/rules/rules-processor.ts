@@ -4,6 +4,7 @@ import { MailRuleMatchV1, mailRulesFieldsList, mailRulesOpsList } from "@schema"
 import { markAsRead } from "./rule-items/mark-read";
 import { toggleStar } from "./rule-items/mark-flag";
 import { moveToTrash } from "./rule-items/move-to-trash";
+import { trashIfBlocked } from "./blocked-senders";
 
 type AddressValue = { address?: string | null; name?: string | null };
 type AddressObjectLike =
@@ -213,6 +214,16 @@ export const processRules = async ({ messageId }: { messageId: string }) => {
 
     const [identity] = await db.select().from(identities).where(eq(identities.id, mailbox.identityId));
     if (!identity) return;
+
+    // ss2i : expediteur bloque par l'utilisateur -> corbeille, avant toute regle.
+    if (
+        await trashIfBlocked({
+            message: message as any,
+            mailbox: mailbox as any,
+            threadId: thread.id,
+            moveImap: !!identity.smtpAccountId,
+        })
+    ) return;
 
     const rules = await db
         .select()

@@ -139,6 +139,8 @@ export interface Mailer {
 			from: string;
 			inReplyTo: string;
 			references: string[];
+			// ss2i : en-tetes supplementaires (ex. X-Kurrier-Auto) ajoutes tels quels au message.
+			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
 	): Promise<{ success: boolean; MessageId?: string; error?: string }>;

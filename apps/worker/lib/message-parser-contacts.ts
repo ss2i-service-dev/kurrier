@@ -1,6 +1,7 @@
 import {db, addressBooks, contacts, identities, mailboxes, workspaceMembers, workspaceIdentityMembers} from "@db";
 import { upsertContactsFromOutgoing } from "./outgoing-contacts";
 import { ingestRecipientStats } from "./recipient-stats";
+import { autoMailKind } from "@common";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {ParsedMail} from "mailparser";
 
@@ -53,6 +54,8 @@ export async function upsertWorkspaceSharedContactFromMessage(opts: {
     // du dossier Envoyes (y compris ecrit hors kurrier, depuis Gmail par exemple)
     // y ajoute ses destinataires ; le courrier recu n'y ajoute plus personne.
     if (mb.kind === "sent") {
+        // ss2i : mail automatique de courrier (desinscription) : ni carnet ni suggestions.
+        if (autoMailKind(parsed.headers as Map<string, any>)) return null;
         try {
             await upsertContactsFromOutgoing({
                 ownerIds: [fallbackOwnerId],

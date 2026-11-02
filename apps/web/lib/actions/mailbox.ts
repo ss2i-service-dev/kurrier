@@ -44,7 +44,7 @@ import { isSignedIn } from "@/lib/actions/auth";
 import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
-import { draftSendStateOf, setDraftSendState, type DraftSendState } from "@common";
+import { extractListUnsubscribe, subscriptionKeyOf, draftSendStateOf, setDraftSendState, type DraftSendState } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import dayjs from "dayjs";
 import {fetchWorkspace} from "@/lib/actions/workspace";
@@ -1690,53 +1690,21 @@ export const fetchIdentitySnoozedThreads = async (): Promise<{ threads: MailboxT
 };
 
 
-function subscriptionKeyFromHeadersJson(headersJson: any) {
-	const list = headersJson?.list ?? null;
-	const rawListId = String(headersJson?.["list-id"] ?? "").trim() || null;
-
-	let unsubscribeHttpUrl: string | null = null;
-
-	const fromList = list?.unsubscribe?.url || list?.unsubscribe?.href;
-	if (typeof fromList === "string" && fromList) unsubscribeHttpUrl = fromList;
-
-	const fromHeader = headersJson?.["list-unsubscribe"];
-	if (!unsubscribeHttpUrl && typeof fromHeader === "string") {
-		const parts = fromHeader
-			.split(",")
-			.map((s: string) => s.trim().replace(/^<|>$/g, ""));
-		const http = parts.find((p: string) => /^https?:/i.test(p));
-		if (http) unsubscribeHttpUrl = http;
-	}
-
-	if (rawListId) {
-		const cleaned = rawListId
-			.replace(/^<|>$/g, "")
-			.replace(/\s+/g, "")
-			.toLowerCase();
-		return cleaned ? `list-id:${cleaned}` : null;
-	}
-
-	if (unsubscribeHttpUrl) {
-		try {
-			const u = new URL(unsubscribeHttpUrl);
-			const p = (u.pathname || "/").replace(/\/+$/, "") || "/";
-			return `${u.protocol}//${u.host.toLowerCase()}${p}`;
-		} catch {
-			return null;
-		}
-	}
-
-	return null;
+// ss2i : meme cle que l'ingestion du worker (@common list-unsubscribe), List-Id compris :
+// avant, la cle ignorait list.id et un routeur partage (Mailjet) fusionnait tous ses clients.
+function subscriptionKeyFromMessage(m: { headersJson: any; from?: any }) {
+	const fromEmail = String(m.from?.value?.[0]?.address ?? "").trim().toLowerCase() || null;
+	return subscriptionKeyOf(extractListUnsubscribe(m.headersJson), fromEmail);
 }
 
 export async function fetchThreadMailSubscriptions(opts: {
 	ownerId: string;
-	messages: Array<{ id: string; headersJson: any }>;
+	messages: Array<{ id: string; headersJson: any; from?: any }>;
 }) {
 	const keysByMessageId = new Map<string, string>();
 
 	for (const m of opts.messages) {
-		const key = subscriptionKeyFromHeadersJson(m.headersJson);
+		const key = subscriptionKeyFromMessage(m);
 		if (key) keysByMessageId.set(m.id, key);
 	}
 
@@ -1768,41 +1736,3 @@ export async function fetchThreadMailSubscriptions(opts: {
 export type FetchThreadMailSubsResult = Awaited<
 	ReturnType<typeof fetchThreadMailSubscriptions>
 >;
-
-
-export async function oneClickUnsubscribe(
-	_prev: FormState,
-	formData: FormData,
-): Promise<FormState> {
-	return handleAction(async () => {
-		const decodedForm = decode(formData);
-		const id = String(decodedForm.mailSubscriptionId);
-		const [sub] = await db
-			.select()
-			.from(mailSubscriptions)
-			.where(and(eq(mailSubscriptions.id, id)))
-			.limit(1);
-		if (!sub?.unsubscribeHttpUrl) return { success: false, error: "Subscription not found" };
-		await fetch(sub.unsubscribeHttpUrl, {
-			method: "POST",
-			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "List-Unsubscribe=One-Click",
-			redirect: "follow",
-		});
-		await db
-			.update(mailSubscriptions)
-			.set({
-				status: "unsubscribed",
-				unsubscribedAt: new Date(),
-				updatedAt: new Date(),
-			})
-			.where(eq(mailSubscriptions.id, id));
-		revalidatePath(String(decodedForm.pathname));
-		return { success: true };
-	});
-
-
-
-}
-
-

@@ -163,6 +163,7 @@ export async function getDraft(opts: {
 		text: row.text ?? "",
 		attachments: meta?.attachments ?? [],
 		includeSignature: meta?.includeSignature !== false,
+		quoteScope: meta?.quoteScope ?? null,
 	};
 }
 

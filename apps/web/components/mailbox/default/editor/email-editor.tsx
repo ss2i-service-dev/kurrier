@@ -26,6 +26,7 @@ import type { FormState, PublicConfig } from "@schema";
 import { DynamicContextProvider } from "@/hooks/use-dynamic-context";
 import { toast } from "sonner";
 import { useParams, useRouter } from "next/navigation";
+import { useRfcStyle } from "@/components/mailbox/default/compose-style-context";
 
 export type EmailEditorHandle = {
 	focus: () => void;
@@ -82,6 +83,7 @@ function readForm(form: HTMLFormElement) {
 		originalMessageId: str("originalMessageId") || null,
 		attachments: str("attachments"),
 		includeSignature: str("includeSignature"),
+		quoteScope: str("quoteScope") || null,
 	};
 	const empty =
 		!payload.to.trim() &&
@@ -99,6 +101,7 @@ function readForm(form: HTMLFormElement) {
 		payload.html,
 		payload.attachments,
 		payload.includeSignature,
+		payload.quoteScope,
 	]);
 	return { payload, key, empty };
 }
@@ -137,6 +140,8 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 		}, [onReady]);
 
 		const params = useParams() as { identityPublicId?: string };
+		// ss2i : style RFC de l'utilisateur, pour l'apercu de la citation en reponse.
+		const rfcStyle = useRfcStyle();
 		const signatureHtml = React.useMemo(() => {
 			const entry = (identityMailboxes ?? []).find(
 				(im) => im.identity.publicId === params.identityPublicId,
@@ -408,6 +413,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 							showEditorMode,
 							identityMailboxes,
 							signatureHtml,
+							rfcStyle,
 							draftRow: draft,
 							draft: draftContext,
 						}}

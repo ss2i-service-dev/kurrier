@@ -11,6 +11,8 @@ import NavUserWrapper from "@/components/ui/dashboards/workspace/nav-user-wrappe
 import {fetchIdentityMailboxList} from "@/lib/actions/mailbox";
 import {listPreviewMode} from "@/lib/actions/list-preview";
 import {ListPreviewProvider} from "@/components/mailbox/default/list-preview-context";
+import {rfcStyleEnabled} from "@/lib/actions/rfc-style";
+import {ComposeStyleProvider} from "@/components/mailbox/default/compose-style-context";
 
 export default async function DashboardLayout({
 	children
@@ -22,9 +24,11 @@ export default async function DashboardLayout({
 	const identityMailboxes = await fetchIdentityMailboxList();
 	// ss2i : contenu des lignes de liste (objet seul ou objet et extrait).
 	const previewMode = await listPreviewMode();
+	// ss2i : style RFC a l'envoi (apercu de la citation dans l'editeur de reponse).
+	const rfcStyle = await rfcStyleEnabled();
 
 	return (
-		<>
+		<ComposeStyleProvider rfcStyle={rfcStyle}>
 			<AppSidebar
 				workspacePublicId={workspacePublicId}
 				sidebarTopContent={
@@ -42,6 +46,6 @@ export default async function DashboardLayout({
 				}
 			/>
 			<SidebarInset><ListPreviewProvider mode={previewMode}>{children}</ListPreviewProvider></SidebarInset>
-		</>
+		</ComposeStyleProvider>
 	);
 }

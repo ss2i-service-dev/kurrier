@@ -2,8 +2,10 @@ import React from "react";
 import SettingsGeneral from "@/components/mailbox/settings/settings-general";
 import SettingsSignature from "@/components/mailbox/settings/settings-signature";
 import SettingsUnreadPanel from "@/components/mailbox/settings/settings-unread-panel";
+import SettingsComposeStyle from "@/components/mailbox/settings/settings-compose-style";
 import { unreadPanelEnabled } from "@/lib/actions/unread-panel";
 import { listPreviewMode } from "@/lib/actions/list-preview";
+import { rfcStyleEnabled } from "@/lib/actions/rfc-style";
 import { FormState, handleAction } from "@schema";
 import { decode } from "decode-formdata";
 import { rlsClient } from "@/lib/actions/clients";
@@ -18,6 +20,8 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
     // ss2i : option du panneau des non-lus (par utilisateur, cote serveur).
     const unreadPanelOn = await unreadPanelEnabled();
     const listPreview = await listPreviewMode();
+    // ss2i : style RFC a l'envoi (par utilisateur, cote serveur).
+    const rfcStyle = await rfcStyleEnabled();
     const rls = await rlsClient();
     const [identity] = await rls((tx) =>
         tx
@@ -72,6 +76,7 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
         <SettingsGeneral updateName={updateName} identity={identity} />
         <SettingsSignature updateSignature={updateSignature} identity={identity} />
         <SettingsUnreadPanel enabled={unreadPanelOn} listPreview={listPreview} />
+        <SettingsComposeStyle enabled={rfcStyle} />
     </>
 }
 

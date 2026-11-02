@@ -42,6 +42,20 @@ export const getMessageName = (
 	return value.value?.[0]?.name ?? null;
 };
 
+/**
+ * Name handed to an initials avatar: only letters and digits are kept, so that
+ * "Administrator (@Root)" gives "AR" and not "A(". Falls back to the raw value
+ * when nothing alphanumeric is left.
+ */
+export const avatarName = (name: string | null | undefined): string => {
+	const raw = (name ?? "").trim();
+	const cleaned = raw
+		.replace(new RegExp("[^\\p{L}\\p{N}\\s]+", "gu"), " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	return cleaned || raw;
+};
+
 export const getMessageAddress = (
 	message: MessageEntity,
 	field: "from" | "to" | "cc" | "bcc",

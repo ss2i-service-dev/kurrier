@@ -6,6 +6,7 @@ import {
 } from "@/lib/actions/mailbox";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
 import {fetchDraftCounts} from "@/lib/actions/drafts";
+import {collapsedIdentities} from "@/lib/actions/collapsed-identities";
 import {fetchLabelsWithCounts} from "@/lib/actions/labels";
 import IdentityMailboxesList from "@/components/dashboard/identity-mailboxes-list";
 import {DynamicContextProvider} from "@/hooks/use-dynamic-context";
@@ -21,12 +22,14 @@ async function IdentityMailboxesListWrapper() {
         globalLabels,
         workspacePublicId,
         draftCounts,
+        collapsed,
     ] = await Promise.all([
         fetchIdentityMailboxList(),
         fetchMailboxUnreadCounts(),
         fetchLabelsWithCounts(),
         getWorkspacePublicId(),
         fetchDraftCounts(),
+        collapsedIdentities(),
     ]);
 
     // ss2i : le dossier Drafts affiche son nombre de brouillons a la place des non-lus.
@@ -46,6 +49,7 @@ async function IdentityMailboxesListWrapper() {
                 scheduledDraftsPromise={scheduledDraftsPromise}
                 snoozedThreadsPromise={snoozedThreadsPromise}
                 workspacePublicId={workspacePublicId}
+                initialCollapsed={collapsed}
             />
 
             <DynamicContextProvider

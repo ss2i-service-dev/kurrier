@@ -10,7 +10,7 @@ import {
 	getSignedUrlsForMessage
 } from "@/lib/actions/mailbox";
 import { getPublicEnv } from "@schema";
-import { getMessageAddress, getMessageName } from "@common/mail-client";
+import { getMessageAddress, getMessageName, avatarName } from "@common/mail-client";
 import { Container } from "@/components/common/containers";
 import RenderInvite from "@/components/mailbox/default/render-invite";
 import {fetchEventPreviewItems} from "@/lib/actions/calendar";
@@ -63,21 +63,20 @@ export default async function ThreadItem({
 
 	return (
 		<>
-			<Container variant="wide">
-				<div className={"grid grid-cols-12 p-3"}>
-					<div className={"hidden md:block md:col-span-1 pt-4"}>
+			<Container variant="full" className="!px-2 lg:!px-4">
+				<div className={"flex gap-4 p-3"}>
+					<div className={"hidden md:block shrink-0 pt-4"}>
 						<Avatar
 							size="lg"
 							radius="xl"
-							name={
-								getMessageName(message, "from") ||
-								getMessageAddress(message, "from") ||
-								""
-							}
+							name={avatarName(
+							getMessageName(message, "from") ||
+								getMessageAddress(message, "from")?.split("@")[0],
+						)}
 							color="initials"
 						/>
 					</div>
-					<div className={"col-span-12 md:col-span-11"}>
+					<div className={"flex-1 min-w-0"}>
                         {preview?.calendarEvent && preview?.attendees && preview?.identity && (
                             <RenderInvite calendarEvent={preview.calendarEvent} attendees={preview.attendees ?? []} identity={preview.identity}/>
                         )}

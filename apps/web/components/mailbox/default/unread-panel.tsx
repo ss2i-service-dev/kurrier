@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMediaQuery } from "@mantine/hooks";
 import { Paperclip } from "lucide-react";
+import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
 import { fetchUnreadPanelThreads } from "@/lib/actions/unread-panel";
 import type { UnreadPanelThread } from "@/lib/actions/unread-panel";
 import { useHiddenThreads } from "@/lib/pending-moves";
@@ -52,6 +53,7 @@ export default function UnreadPanel({
 	// Le panneau est masque en CSS sous 1280 px ; on evite aussi d'y charger les donnees.
 	const isWide = useMediaQuery("(min-width: 1280px)");
 	const isHidden = useHiddenThreads();
+	const showSnippet = useShowSnippet();
 
 	const [threads, setThreads] = useState<UnreadPanelThread[] | null>(null);
 	const currentRef = useRef<HTMLLIElement>(null);
@@ -139,7 +141,7 @@ export default function UnreadPanel({
 										)}
 										{t.hasAttachments && <Paperclip className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
 									</div>
-									{t.previewText?.trim() && (
+									{showSnippet && t.previewText?.trim() && (
 										<p className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted-foreground">
 											{t.previewText.trim()}
 										</p>

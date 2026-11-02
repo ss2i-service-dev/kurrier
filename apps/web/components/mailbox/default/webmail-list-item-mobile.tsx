@@ -16,6 +16,7 @@ import { Temporal } from "@js-temporal/polyfill";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import { toast } from "sonner";
 import { moveWithUndo } from "@/lib/pending-moves";
+import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
 import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 
 type Props = {
@@ -33,6 +34,7 @@ export default function WebmailListItemMobile({
 	mailboxSync,
 	labelsByThreadId,
 }: Props) {
+	const showSnippet = useShowSnippet();
 	const router = useRouter();
 
 	const dateLabel = (() => {
@@ -173,8 +175,12 @@ export default function WebmailListItemMobile({
 						isRead={isRead}
 					/>
 					<span className="truncate">{mailboxThreadItem.subject}</span>
-					<span className="hidden sm:inline mx-1 text-muted-foreground">–</span>
-					<span className="truncate">{mailboxThreadItem.previewText}</span>
+					{showSnippet && (
+						<>
+							<span className="hidden sm:inline mx-1 text-muted-foreground">–</span>
+							<span className="truncate">{mailboxThreadItem.previewText}</span>
+						</>
+					)}
 					{mailboxThreadItem.hasAttachments && (
 						<Paperclip className="ml-1 h-4 w-4 text-muted-foreground hidden sm:inline" />
 					)}

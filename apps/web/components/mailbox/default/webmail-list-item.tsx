@@ -35,6 +35,7 @@ import { moveWithUndo } from "@/lib/pending-moves";
 import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 import ThreadLabelHoverButtons from "@/components/dashboard/labels/thread-label-hover-buttons";
 import SnoozeMail from "@/components/mailbox/default/snooze-mail";
+import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
 
 export default function WebmailListItem({
 	mailboxThreadItem,
@@ -46,6 +47,7 @@ export default function WebmailListItem({
 	workspacePublicId,
 	orderedThreadIds = [],
 }: Props) {
+	const showSnippet = useShowSnippet();
 	function formatDateLabel(input?: string | number | Date) {
 		const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 		if (!input) return "";
@@ -301,10 +303,14 @@ export default function WebmailListItem({
 						isRead={isRead}
 					/>
 					<span className="truncate">{mailboxThreadItem.subject}</span>
-					<span className="mx-1 text-muted-foreground">–</span>
-					<span className="truncate text-muted-foreground font-normal">
-						{mailboxThreadItem.previewText}
-					</span>
+					{showSnippet && (
+						<>
+							<span className="mx-1 text-muted-foreground">–</span>
+							<span className="truncate text-muted-foreground font-normal">
+								{mailboxThreadItem.previewText}
+							</span>
+						</>
+					)}
 					{mailboxThreadItem.hasAttachments && (
 						<Paperclip className="ml-1 hidden h-4 w-4 text-muted-foreground md:inline" />
 					)}

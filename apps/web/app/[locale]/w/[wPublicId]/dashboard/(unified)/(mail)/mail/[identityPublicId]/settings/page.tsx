@@ -3,6 +3,7 @@ import SettingsGeneral from "@/components/mailbox/settings/settings-general";
 import SettingsSignature from "@/components/mailbox/settings/settings-signature";
 import SettingsUnreadPanel from "@/components/mailbox/settings/settings-unread-panel";
 import { unreadPanelEnabled } from "@/lib/actions/unread-panel";
+import { listPreviewMode } from "@/lib/actions/list-preview";
 import { FormState, handleAction } from "@schema";
 import { decode } from "decode-formdata";
 import { rlsClient } from "@/lib/actions/clients";
@@ -16,6 +17,7 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
     const paramsResolved = await params;
     // ss2i : option du panneau des non-lus (par utilisateur, cote serveur).
     const unreadPanelOn = await unreadPanelEnabled();
+    const listPreview = await listPreviewMode();
     const rls = await rlsClient();
     const [identity] = await rls((tx) =>
         tx
@@ -69,7 +71,7 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
     return <>
         <SettingsGeneral updateName={updateName} identity={identity} />
         <SettingsSignature updateSignature={updateSignature} identity={identity} />
-        <SettingsUnreadPanel enabled={unreadPanelOn} />
+        <SettingsUnreadPanel enabled={unreadPanelOn} listPreview={listPreview} />
     </>
 }
 

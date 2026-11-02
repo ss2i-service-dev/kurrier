@@ -12,6 +12,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { IconStar, IconStarFilled } from "@tabler/icons-react";
 import type { ThreadHit } from "@schema";
+import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
 import { initSearch } from "@/lib/actions/mailbox";
 import { useRouter } from 'next/navigation'
 
@@ -27,6 +28,7 @@ export default function MailboxSearch({
 	workspacePublicId: string;
 }) {
 
+	const showSnippet = useShowSnippet();
 	const [open, setOpen] = React.useState(false);
 	const [query, setQuery] = React.useState("");
 	const [hasAttachment, setHasAttachment] = React.useState(false);
@@ -218,7 +220,7 @@ export default function MailboxSearch({
 											)}
 										</div>
 
-										{t.snippet && (
+										{showSnippet && t.snippet && (
 											<div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
 												{t.snippet}
 											</div>

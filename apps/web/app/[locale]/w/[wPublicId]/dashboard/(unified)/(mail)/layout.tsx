@@ -9,6 +9,8 @@ import Loading from "@/app/loading";
 import IdentityMailboxesListWrapper from "@/components/dashboard/workspaces/identity-mailboxes-list-wrapper";
 import NavUserWrapper from "@/components/ui/dashboards/workspace/nav-user-wrapper";
 import {fetchIdentityMailboxList} from "@/lib/actions/mailbox";
+import {listPreviewMode} from "@/lib/actions/list-preview";
+import {ListPreviewProvider} from "@/components/mailbox/default/list-preview-context";
 
 export default async function DashboardLayout({
 	children
@@ -18,6 +20,8 @@ export default async function DashboardLayout({
 	const publicConfig = getPublicEnv();
 	const workspacePublicId = await getWorkspacePublicId()
 	const identityMailboxes = await fetchIdentityMailboxList();
+	// ss2i : contenu des lignes de liste (objet seul ou objet et extrait).
+	const previewMode = await listPreviewMode();
 
 	return (
 		<>
@@ -37,7 +41,7 @@ export default async function DashboardLayout({
 					</Suspense>
 				}
 			/>
-			<SidebarInset>{children}</SidebarInset>
+			<SidebarInset><ListPreviewProvider mode={previewMode}>{children}</ListPreviewProvider></SidebarInset>
 		</>
 	);
 }

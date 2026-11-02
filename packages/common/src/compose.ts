@@ -38,6 +38,33 @@ export type ComposeInput = {
 export const quoteScopeOf = (value: unknown): QuoteScope =>
 	value === "last" ? "last" : "thread";
 
+export const DEFAULT_MAIL_TIMEZONE = "Europe/Paris";
+
+// Date de la ligne d'attribution (« 02 Nov 2026, 09:15 »), dans le fuseau des
+// utilisateurs (MAIL_TIMEZONE), jamais celui du conteneur. Meme fonction pour le
+// worker et l'apercu de l'editeur.
+export function formatQuoteDate(
+	date: Date | string | number | null | undefined,
+	timeZone?: string | null,
+): string {
+	if (!date) return "";
+	const d = new Date(date);
+	if (Number.isNaN(d.getTime())) return "";
+	const opts: Intl.DateTimeFormatOptions = {
+		year: "numeric",
+		month: "short",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		hour12: false,
+	};
+	try {
+		return d.toLocaleString("en-GB", { ...opts, timeZone: timeZone || DEFAULT_MAIL_TIMEZONE });
+	} catch {
+		return d.toLocaleString("en-GB", { ...opts, timeZone: DEFAULT_MAIL_TIMEZONE });
+	}
+}
+
 // --- HTML, outils minimaux ----------------------------------------------------------
 
 const VOID_TAGS = new Set([
@@ -80,13 +107,35 @@ export function htmlToPlain(html: string): string {
 		.replace(/&quot;/g, '"')
 		.replace(/&#39;|&apos;/g, "'")
 		.replace(/\r/g, "")
-		.replace(/[ \t]+\n/g, "\n")
+		.split("\n")
+		// La ligne « -- » garde son espace final (separateur de signature, RFC 3676).
+		.map((l) => (l === "-- " ? l : l.replace(/[ \t]+$/, "")))
+		.join("\n")
 		.replace(/\n{3,}/g, "\n\n")
 		.trim();
 }
 
 const hasVisibleContent = (html: string) =>
 	htmlToPlain(html) !== "" || /<img\b/i.test(html);
+
+// HTML « simple » : un texte mis en paragraphes (p, br, div, liens), comme textAsHtml
+// de mailparser ou le HTML derive du texte par le MCP. Rien n'y est perdu si la
+// citation est reconstruite depuis le texte nettoye.
+export function isPlainHtml(html: string): boolean {
+	const rest = blankComments(html)
+		.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+		.replace(/<\/?(?:html|head|body|meta|title|p|br|div|span|a|pre)\b[^>]*>/gi, "");
+	return !/<[a-zA-Z]/.test(rest);
+}
+
+// Texte brut -> paragraphes HTML echappes (meme forme que le MCP, bodyParts).
+export function textToHtml(text: string): string {
+	return text
+		.replace(/\r/g, "")
+		.split(/\n{2,}/)
+		.map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`)
+		.join("");
+}
 
 // Les commentaires (conditionnels Outlook compris) ne doivent pas servir de reperes :
 // remplaces par des blancs de meme longueur pour garder les positions.
@@ -124,9 +173,9 @@ const QUOTE_TAG_ATTRS =
 
 // Bloc d'en-tetes Outlook (« De : ... Envoye : ... » / « From: ... Sent: ... »).
 const OUTLOOK_FROM =
-	/<b\b[^>]*>(?:\s*<span\b[^>]*>)*\s*(?:From|De|Von|Da)\s*(?:&nbsp;|&#160;| |\s)*:/i;
+	/<b\b[^>]*>(?:\s*<span\b[^>]*>)*\s*(?:From|De|Von|Da)\s*(?:&nbsp;|&#160;|\u00a0|\s)*:/i;
 const OUTLOOK_SENT =
-	/(?:Sent|Envoy(?:é|&eacute;|&#233;|&#xe9;)|Gesendet|Date|Inviato)\s*(?:&nbsp;|&#160;| |\s)*:/i;
+	/(?:Sent|Envoy(?:é|&eacute;|&#233;|&#xe9;)|Gesendet|Date|Inviato)\s*(?:&nbsp;|&#160;|\u00a0|\s)*:/i;
 
 const ORIGINAL_MESSAGE =
 	/-{2,}\s*(?:Original Message|Message d(?:'|&#39;|&rsquo;|’)origine)\s*-{2,}/i;
@@ -176,6 +225,11 @@ export function findQuoteStart(html: string): number | null {
 		const lt = src.lastIndexOf("<", om);
 		candidates.push(lt >= 0 && om - lt < 200 ? lt : om);
 	}
+
+	// Texte mis en HTML (textAsHtml, HTML derive du texte) : une ligne « > » devenue
+	// « &gt; » en debut de paragraphe ou apres un saut de ligne.
+	const gt = src.search(/(?:<(?:p|div)\b[^>]*>|<br\s*\/?>)\s*&gt;/i);
+	if (gt >= 0) candidates.push(gt);
 
 	if (!candidates.length) return null;
 	return Math.min(...candidates);
@@ -251,17 +305,26 @@ export function stripSignatureText(text: string): string {
 }
 
 // Meme chose en HTML : bloc signature de courrier (class="signature" ouvert par la ligne
-// « -- ») ou de Thunderbird (moz-signature), seulement s'il termine le message (aucune
-// citation apres lui).
+// « -- ») ou de Thunderbird (moz-signature), ou une ligne « -- » seule en debut de
+// paragraphe ou apres un saut de ligne (texte mis en HTML) ; seulement si rien d'autre
+// qu'une signature ne suit (aucune citation apres).
 export function stripSignatureHtml(html: string): string {
 	const src = blankComments(html);
 	const re = /<(?:div|pre|p)\b[^>]*class=["'][^"']*\b(?:signature|moz-signature)\b[^"']*["'][^>]*>/gi;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(src))) {
 		const rest = src.slice(m.index);
-		const delimited = /moz-signature/i.test(m[0]) || /^[\s\S]{0,300}?--(?: |&nbsp;|&#160;| )/.test(rest);
+		const delimited = /moz-signature/i.test(m[0]) || /^[\s\S]{0,300}?--(?: |&nbsp;|&#160;|\u00a0)/.test(rest);
 		if (!delimited || /<blockquote\b/i.test(rest)) continue;
 		const kept = closeOpenTags(html.slice(0, m.index).replace(/\s+$/, ""));
+		return hasVisibleContent(kept) ? kept : html;
+	}
+	// Derniere ligne « -- » (exactement, suivie d'un saut de ligne ou de la fin du bloc).
+	const lineRe = /(?:<(?:p|div|pre)\b[^>]*>|<br\s*\/?>)\s*--(?: |&nbsp;|&#160;|\u00a0)(?:\s*<br\s*\/?>|\n|\s*<\/(?:p|div|pre)>)/gi;
+	let last: RegExpExecArray | null = null;
+	while ((m = lineRe.exec(src))) last = m;
+	if (last && !/<blockquote\b/i.test(src.slice(last.index))) {
+		const kept = closeOpenTags(html.slice(0, last.index).replace(/\s+$/, ""));
 		return hasVisibleContent(kept) ? kept : html;
 	}
 	return html;
@@ -293,6 +356,7 @@ export function quotedOriginal(
 	let html = orig.html || "";
 	let text = orig.text || "";
 	let fallbackHtml = orig.textAsHtml || "";
+	const givenText = (orig.text || "").trim();
 
 	if (scope === "last") {
 		if (text) text = stripQuotedText(text);
@@ -304,6 +368,12 @@ export function quotedOriginal(
 		if (!text && html) text = htmlToPlain(html);
 		text = stripSignatureText(text);
 		if (html) html = stripSignatureHtml(html);
+	}
+	// Quand le nettoyage (portee « last », style RFC) a change le texte et que le HTML
+	// n'est qu'un texte mis en paragraphes, le HTML cite est reconstruit depuis le texte
+	// nettoye : texte et HTML disent alors la meme chose. Sinon, rien ne change.
+	if (givenText && text.trim() !== givenText && isPlainHtml(orig.html || "")) {
+		html = textToHtml(text);
 	}
 	return { html, text, fallbackHtml };
 }

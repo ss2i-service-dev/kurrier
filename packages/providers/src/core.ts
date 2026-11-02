@@ -139,6 +139,9 @@ export interface Mailer {
 			from: string;
 			inReplyTo: string;
 			references: string[];
+			// ss2i : copies et copies cachees ; Bcc va dans l enveloppe SMTP, jamais dans les en-tetes.
+			cc?: string[];
+			bcc?: string[];
 			// ss2i : en-tetes supplementaires (ex. X-Kurrier-Auto) ajoutes tels quels au message.
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];

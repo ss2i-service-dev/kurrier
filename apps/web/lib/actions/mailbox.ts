@@ -162,7 +162,8 @@ export const fetchIdentityMailboxList = cache(async () => {
 				mailboxes,
 				and(
 					eq(identities.id, mailboxes.identityId),
-					sql`${mailboxes.kind} NOT IN ('outbox','drafts')`,
+					// ss2i : le dossier Drafts est affiche (brouillons IMAP).
+					sql`${mailboxes.kind} NOT IN ('outbox')`,
 				),
 			)
 			.where(eq(identities.kind, "email"))

@@ -5,6 +5,7 @@ import {
     fetchScheduledDraftCounts
 } from "@/lib/actions/mailbox";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
+import {fetchDraftCounts} from "@/lib/actions/drafts";
 import {fetchLabelsWithCounts} from "@/lib/actions/labels";
 import IdentityMailboxesList from "@/components/dashboard/identity-mailboxes-list";
 import {DynamicContextProvider} from "@/hooks/use-dynamic-context";
@@ -16,15 +17,23 @@ async function IdentityMailboxesListWrapper() {
 
     const [
         identityMailboxes,
-        unreadCounts,
+        unreadThreadCounts,
         globalLabels,
-        workspacePublicId
+        workspacePublicId,
+        draftCounts,
     ] = await Promise.all([
         fetchIdentityMailboxList(),
         fetchMailboxUnreadCounts(),
         fetchLabelsWithCounts(),
-        getWorkspacePublicId()
+        getWorkspacePublicId(),
+        fetchDraftCounts(),
     ]);
+
+    // ss2i : le dossier Drafts affiche son nombre de brouillons a la place des non-lus.
+    const unreadCounts = new Map(unreadThreadCounts);
+    for (const [mailboxId, n] of draftCounts) {
+        unreadCounts.set(mailboxId, { unreadThreads: n, unreadTotal: n });
+    }
 
     const scheduledDraftsPromise = fetchScheduledDraftCounts();
     const snoozedThreadsPromise = fetchIdentitySnoozedThreads()

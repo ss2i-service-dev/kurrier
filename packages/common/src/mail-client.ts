@@ -100,3 +100,23 @@ export const DEFAULT_COLORS_SWATCH = [
 ];
 
 export const PAGE_SIZE = 50;
+
+// ss2i : objet d'adresses (colonne to/cc/bcc) -> liste « Nom <adresse> » ou « adresse »,
+// pour pre-remplir l'editeur d'un brouillon et pour l'envoyer. Sans dependance serveur.
+export function addressObjToList(
+	obj:
+		| {
+				value?: Array<{ address?: string | null; name?: string | null }> | null;
+		  }
+		| null
+		| undefined,
+): string[] {
+	return (obj?.value ?? [])
+		.map((a) => {
+			const address = String(a?.address ?? "").trim();
+			if (!address) return "";
+			const name = String(a?.name ?? "").trim();
+			return name ? `${name} <${address}>` : address;
+		})
+		.filter(Boolean);
+}

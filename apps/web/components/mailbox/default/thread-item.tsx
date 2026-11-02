@@ -15,6 +15,8 @@ import { Container } from "@/components/common/containers";
 import RenderInvite from "@/components/mailbox/default/render-invite";
 import {fetchEventPreviewItems} from "@/lib/actions/calendar";
 import { remoteImagesAllowedForContact } from "@/lib/actions/contact-images";
+import { fetchDraftOriginal } from "@/lib/actions/drafts";
+import DraftThreadItem from "@/components/mailbox/default/draft-thread-item";
 
 export default async function ThreadItem({
 	message,
@@ -35,10 +37,26 @@ export default async function ThreadItem({
     identityPublicId: string;
     mailSubscription: FetchThreadMailSubsResult["byMessageId"] | null;
 }) {
-	const attachments = await getSignedUrlsForMessage(message.id)
 	const publicConfig = getPublicEnv();
-    const preview = await fetchEventPreviewItems(attachments, identityPublicId)
 	const identityMailboxes = await fetchIdentityMailboxList();
+
+	// ss2i : un brouillon s'ouvre dans l'editeur, pas dans le lecteur.
+	if (message.draft) {
+		const original = await fetchDraftOriginal(
+			(message.metaData as any)?.draft?.originalMessageId,
+		);
+		return (
+			<DraftThreadItem
+				draft={message}
+				original={original}
+				publicConfig={publicConfig}
+				identityMailboxes={identityMailboxes}
+			/>
+		);
+	}
+
+	const attachments = await getSignedUrlsForMessage(message.id)
+    const preview = await fetchEventPreviewItems(attachments, identityPublicId)
 	const remoteImagesAllowed = await remoteImagesAllowedForContact(
 		getMessageAddress(message, "from"),
 	);

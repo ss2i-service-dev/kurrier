@@ -1,7 +1,9 @@
 "use client";
 import React, {
+	useCallback,
 	useEffect,
 	useRef,
+	useState,
 	forwardRef,
 	useImperativeHandle,
 	useActionState,
@@ -19,14 +21,28 @@ import {
 	sendPendingNow,
 	waitPendingSend,
 } from "@/lib/actions/mailbox";
+import { discardDraft, flushDraft, saveDraft } from "@/lib/actions/drafts";
 import type { FormState, PublicConfig } from "@schema";
 import { DynamicContextProvider } from "@/hooks/use-dynamic-context";
 import { toast } from "sonner";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 export type EmailEditorHandle = {
 	focus: () => void;
 	getElement: () => HTMLElement | null;
+};
+
+// ss2i : etat du brouillon expose au pied de l'editeur (indicateur, Save draft, Discard).
+export type DraftStatus = {
+	state: "idle" | "saving" | "saved" | "error";
+	savedAt?: Date;
+	error?: string;
+};
+export type DraftContext = {
+	id: string | null;
+	status: DraftStatus;
+	save: () => Promise<void>;
+	discard: () => Promise<void>;
 };
 
 type Props = {
@@ -40,7 +56,52 @@ type Props = {
 	// ss2i : masque (true) ou reaffiche (false) le composeur sans le detruire, le temps
 	// de la fenetre d'annulation d'envoi. Sans elle, le composeur se ferme a l'envoi.
 	onParkedChange?: (parked: boolean) => void;
+	// ss2i : brouillon repris (ligne `messages` du dossier Drafts) ; l'editeur en part et
+	// continue de l'enregistrer.
+	draft?: MessageEntity | null;
 };
+
+// Enregistrement automatique : la base suit la frappe a 3 s pres (la version IMAP, plus
+// lente, est du ressort du worker). Le formulaire reflete tout l'etat de l'editeur par ses
+// champs caches : on le relit tel quel, une fois par seconde, et on compare.
+const DRAFT_DEBOUNCE_MS = 3_000;
+const DRAFT_POLL_MS = 1_000;
+
+function readForm(form: HTMLFormElement) {
+	const fd = new FormData(form);
+	const str = (k: string) => String(fd.get(k) ?? "");
+	const payload = {
+		identityPublicId: str("identityPublicId"),
+		to: str("to"),
+		cc: str("cc"),
+		bcc: str("bcc"),
+		subject: str("subject"),
+		html: str("html"),
+		text: str("text"),
+		mode: str("mode"),
+		originalMessageId: str("originalMessageId") || null,
+		attachments: str("attachments"),
+		includeSignature: str("includeSignature"),
+	};
+	const empty =
+		!payload.to.trim() &&
+		!payload.cc.trim() &&
+		!payload.bcc.trim() &&
+		!payload.subject.trim() &&
+		!payload.text.trim() &&
+		(payload.attachments === "" || payload.attachments === "[]");
+	const key = JSON.stringify([
+		payload.identityPublicId,
+		payload.to,
+		payload.cc,
+		payload.bcc,
+		payload.subject,
+		payload.html,
+		payload.attachments,
+		payload.includeSignature,
+	]);
+	return { payload, key, empty };
+}
 
 const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 	(
@@ -53,10 +114,13 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			handleClose,
 			identityMailboxes,
 			onParkedChange,
+			draft = null,
 		},
 		ref,
 	) => {
 		const textEditorRef = useRef<TextEditorHandle>(null);
+		const formRef = useRef<HTMLFormElement>(null);
+		const router = useRouter();
 
 		useImperativeHandle(
 			ref,
@@ -95,6 +159,146 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			};
 		}, []);
 
+		// --- brouillon ---------------------------------------------------------------
+		const [draftId, setDraftId] = useState<string | null>(draft?.id ?? null);
+		const draftIdRef = useRef<string | null>(draft?.id ?? null);
+		const [draftStatus, setDraftStatus] = useState<DraftStatus>(
+			draft ? { state: "saved", savedAt: draft.date ?? undefined } : { state: "idle" },
+		);
+		const lastSavedKey = useRef<string | null>(null);
+		const seenKey = useRef<string | null>(null);
+		// Brouillon repris : le premier releve (editeur rendu) est l'etat enregistre.
+		const baseline = useRef(!!draft);
+		// Envoi en cours ou brouillon abandonne : plus d'enregistrement.
+		const suspended = useRef(false);
+		const chain = useRef<Promise<void>>(Promise.resolve());
+		const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+		const submittedDraftId = useRef<string | null>(null);
+		// Dernier releve du formulaire : au demontage, le ref est deja detache.
+		const latest = useRef<ReturnType<typeof readForm> | null>(null);
+		const snapshot = () => {
+			const form = formRef.current;
+			if (form) latest.current = readForm(form);
+			return latest.current;
+		};
+
+		const persist = useCallback((flush = false) => {
+			const snap = snapshot();
+			if (!snap) return chain.current;
+			const run = async () => {
+				if (suspended.current) return;
+				const { payload, key, empty } = snap;
+				if (!payload.identityPublicId) return;
+				if (baseline.current) {
+					// Brouillon repris, rien n'a encore ete releve : c'est l'etat enregistre.
+					baseline.current = false;
+					lastSavedKey.current = key;
+					seenKey.current = key;
+					return;
+				}
+				if (key === lastSavedKey.current) {
+					if (flush && draftIdRef.current) {
+						await flushDraft(payload.identityPublicId, draftIdRef.current);
+					}
+					return;
+				}
+				// Rien a garder tant que l'editeur est vide.
+				if (empty && !draftIdRef.current) return;
+				setDraftStatus({ state: "saving" });
+				const res = await saveDraft({ ...payload, draftMessageId: draftIdRef.current });
+				if (!res.draftMessageId) {
+					setDraftStatus({ state: "error", error: res.error ?? "Draft could not be saved." });
+					return;
+				}
+				const savedId = res.draftMessageId;
+				draftIdRef.current = savedId;
+				setDraftId(savedId);
+				lastSavedKey.current = key;
+				setDraftStatus({
+					state: "saved",
+					savedAt: res.savedAt ? new Date(res.savedAt) : new Date(),
+				});
+				if (flush) await flushDraft(payload.identityPublicId, savedId);
+			};
+			// Les enregistrements d'un meme brouillon se suivent, jamais deux a la fois.
+			chain.current = chain.current.then(run).catch((e: any) => {
+				setDraftStatus({ state: "error", error: String(e?.message ?? e) });
+			});
+			return chain.current;
+		}, []);
+
+		useEffect(() => {
+			const tick = () => {
+				if (suspended.current) return;
+				const snap = snapshot();
+				if (!snap) return;
+				const { key } = snap;
+				if (baseline.current) {
+					baseline.current = false;
+					lastSavedKey.current = key;
+					seenKey.current = key;
+					return;
+				}
+				if (key === seenKey.current) return;
+				seenKey.current = key;
+				if (timer.current) clearTimeout(timer.current);
+				timer.current = setTimeout(() => {
+					timer.current = null;
+					void persist(false);
+				}, DRAFT_DEBOUNCE_MS);
+			};
+			const interval = setInterval(tick, DRAFT_POLL_MS);
+			// Fermeture de l'onglet ou de l'editeur : ce qui reste part tout de suite.
+			const onHide = () => void persist(true);
+			window.addEventListener("pagehide", onHide);
+			return () => {
+				clearInterval(interval);
+				window.removeEventListener("pagehide", onHide);
+				if (timer.current) clearTimeout(timer.current);
+				void persist(true);
+			};
+		}, [persist]);
+
+		const discard = useCallback(async () => {
+			suspended.current = true;
+			if (timer.current) clearTimeout(timer.current);
+			await chain.current.catch(() => {});
+			const id = draftIdRef.current;
+			if (id && params.identityPublicId) {
+				const res = await discardDraft(params.identityPublicId, id);
+				if (res && "error" in res && res.error) {
+					toast.error(res.error);
+					suspended.current = false;
+					return;
+				}
+			}
+			toast.success("Draft discarded", { position: "bottom-left" });
+			handleClose();
+			router.refresh();
+		}, [handleClose, params.identityPublicId, router]);
+
+		const draftContext: DraftContext = {
+			id: draftId,
+			status: draftStatus,
+			save: () => persist(true),
+			discard,
+		};
+
+		const onFormSubmit = () => {
+			// L'envoi emporte le brouillon tel que connu du formulaire ; plus rien a enregistrer.
+			suspended.current = true;
+			if (timer.current) clearTimeout(timer.current);
+			submittedDraftId.current = draftIdRef.current;
+		};
+
+		const onKeyDown = (e: React.KeyboardEvent) => {
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+				e.preventDefault();
+				void persist(true);
+			}
+		};
+		// -------------------------------------------------------------------------------
+
 		const startUndoWindow = (pendingSendId: string, undoMs: number) => {
 			// Filet si le composeur a disparu entre-temps (navigation) : le texte est
 			// recopie dans le presse-papiers au moment de « Undo ».
@@ -114,7 +318,10 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 						description: result.error,
 						position: "bottom-left",
 					});
+					return;
 				}
+				// Le brouillon envoye disparait du dossier Drafts : on rafraichit.
+				if (submittedDraftId.current) router.refresh();
 			};
 			const timer = setTimeout(finish, undoMs);
 
@@ -142,6 +349,8 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 						}
 						if (mounted.current) {
 							onParkedChange?.(false);
+							// Envoi annule : le brouillon reprend son cours.
+							suspended.current = false;
 							requestAnimationFrame(() => textEditorRef.current?.focus("end"));
 							toast.success("Sending cancelled", { position: "bottom-left" });
 						} else {
@@ -158,10 +367,20 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 
 		useEffect(() => {
 			if (formState.error) {
+				suspended.current = false;
 				toast.error("Error", {
 					description: formState.error,
 				});
 			} else if (formState.success) {
+				// Un enregistrement encore en vol au moment de l'envoi aurait cree un brouillon
+				// que le job d'envoi ne connait pas : on le retire.
+				const submitted = submittedDraftId.current;
+				void chain.current.then(() => {
+					const id = draftIdRef.current;
+					if (id && id !== submitted && params.identityPublicId) {
+						void discardDraft(params.identityPublicId, id);
+					}
+				});
 				const pending = (formState.data ?? {}) as {
 					pendingSendId?: string;
 					undoMs?: number;
@@ -180,18 +399,32 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 
 		return (
 			<>
-				<div className={"mt-4"} tabIndex={-1}>
+				<div className={"mt-4"} tabIndex={-1} onKeyDown={onKeyDown}>
 					<DynamicContextProvider
-						initialState={{ isPending, message, publicConfig, showEditorMode, identityMailboxes, signatureHtml}}
+						initialState={{
+							isPending,
+							message,
+							publicConfig,
+							showEditorMode,
+							identityMailboxes,
+							signatureHtml,
+							draftRow: draft,
+							draft: draftContext,
+						}}
 						syncOnChange
 					>
-						<Form action={formAction}>
+						<Form action={formAction} ref={formRef} onSubmit={onFormSubmit}>
 							<input
 								type={"hidden"}
 								name={"messageMailboxId"}
 								value={message?.mailboxId}
 							/>
-							<TextEditor name={"html"} ref={textEditorRef} />
+							<input type="hidden" name="draftMessageId" value={draftId ?? ""} />
+							<TextEditor
+								name={"html"}
+								ref={textEditorRef}
+								defaultValue={draft?.html ?? ""}
+							/>
 						</Form>
 					</DynamicContextProvider>
 				</div>

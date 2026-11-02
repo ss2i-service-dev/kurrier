@@ -1848,3 +1848,92 @@ export const authAccounts = pgTable(
 		...workspaceCrudPolicies(t, "auth_accounts"),
 	],
 ).enableRLS();
+
+// ss2i : serveur OAuth 2.1 integre pour le MCP courrier (meme principe que l'MCP
+// Organize-It). Ces tables ne sont lues et ecrites que par la connexion admin (web
+// pour /oauth/*, worker pour /api/kurrier/mcp) : RLS activee sans politique, le role
+// « kurrier » (RLS) n'y voit rien. Les jetons et codes sont stockes haches (sha256).
+export const mcpOauthClients = pgTable(
+	"mcp_oauth_clients",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clientId: text("client_id").notNull(),
+		clientSecretHash: text("client_secret_hash"),
+		clientName: text("client_name").notNull(),
+		redirectUris: jsonb("redirect_uris").$type<string[]>().notNull(),
+		tokenEndpointAuthMethod: text("token_endpoint_auth_method")
+			.notNull()
+			.default("none"),
+		grantTypes: jsonb("grant_types").$type<string[]>().notNull(),
+		responseTypes: jsonb("response_types").$type<string[]>().notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [uniqueIndex("ux_mcp_oauth_clients_client_id").on(t.clientId)],
+).enableRLS();
+
+export const mcpOauthAuthorizationCodes = pgTable(
+	"mcp_oauth_authorization_codes",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		codeHash: text("code_hash").notNull(),
+		clientId: uuid("client_id")
+			.references(() => mcpOauthClients.id, { onDelete: "cascade" })
+			.notNull(),
+		userId: uuid("user_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull(),
+		redirectUri: text("redirect_uri").notNull(),
+		codeChallenge: text("code_challenge").notNull(),
+		codeChallengeMethod: text("code_challenge_method").notNull().default("S256"),
+		scope: text("scope"),
+		resource: text("resource"),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [
+		uniqueIndex("ux_mcp_oauth_codes_code_hash").on(t.codeHash),
+		index("ix_mcp_oauth_codes_expires").on(t.expiresAt),
+	],
+).enableRLS();
+
+export const mcpOauthAccessTokens = pgTable(
+	"mcp_oauth_access_tokens",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		tokenHash: text("token_hash").notNull(),
+		refreshTokenHash: text("refresh_token_hash").notNull(),
+		clientId: uuid("client_id")
+			.references(() => mcpOauthClients.id, { onDelete: "cascade" })
+			.notNull(),
+		userId: uuid("user_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull(),
+		scope: text("scope"),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		refreshTokenExpiresAt: timestamp("refresh_token_expires_at", {
+			withTimezone: true,
+		}).notNull(),
+		revoked: boolean("revoked").notNull().default(false),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+		lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [
+		uniqueIndex("ux_mcp_oauth_tokens_token_hash").on(t.tokenHash),
+		uniqueIndex("ux_mcp_oauth_tokens_refresh_hash").on(t.refreshTokenHash),
+		index("ix_mcp_oauth_tokens_user").on(t.userId),
+		index("ix_mcp_oauth_tokens_expires").on(t.expiresAt),
+	],
+).enableRLS();

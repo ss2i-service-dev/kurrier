@@ -134,7 +134,17 @@ export async function createUserWithWorkspace(opts: {
 
 export async function signInUserAndRedirect(user: typeof users.$inferSelect,  locale?: string) {
 	await createSessionForUser(user.id);
-	redirect(await getWorkspaceRedirectUrl(user));
+	const target = await getWorkspaceRedirectUrl(user);
+	// ss2i : connexion demandee par la page de consentement OAuth de l'MCP courrier
+	// (/oauth/authorize a pose ce cookie) : on y retourne, le contexte du workspace
+	// etant pose par getWorkspaceRedirectUrl. Chemin relatif impose, pas d'open redirect.
+	const cookieStore = await cookies();
+	const oauthReturn = cookieStore.get("oauth_return")?.value ?? "";
+	if (oauthReturn.startsWith("/oauth/authorize?")) {
+		cookieStore.delete("oauth_return");
+		redirect(oauthReturn);
+	}
+	redirect(target);
 }
 
 export async function login(

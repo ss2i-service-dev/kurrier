@@ -66,7 +66,12 @@ export async function validateApiKey(event: H3Event) {
 	}
 
 	const token = auth.replace("Bearer ", "").trim();
+	return validateApiKeyToken(token);
+}
 
+// ss2i : la verification d'une cle API a partir de sa seule valeur, pour l'MCP (qui
+// accepte aussi la cle en parametre de requete). Memes controles qu'avant.
+export async function validateApiKeyToken(token: string) {
 	const parts = token.split(".");
 	if (parts.length < 2) {
 		throw createError({

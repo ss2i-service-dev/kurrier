@@ -45,6 +45,11 @@ const davWorkerEvents = new QueueEvents("dav-worker", redisConnection);
 // attendaient derriere lui (cf. server/plugins/smtp-worker.ts).
 const backfillQueue = new Queue("imap-backfill", redisConnection);
 
+// ss2i : rattachement des fils aux clients de la CRM (section « Clients » des boites
+// pro) : un job par fil a l'arrivee d'un message (jobId = fil + identite, retarde pour
+// l'anti-rebond) et un job de rattrapage par identite ; worker crm-link-worker.ts.
+const crmLinkQueue = new Queue("crm-link", redisConnection);
+
 export async function getRedis() {
 	await Promise.all([
 		smtpEvents.waitUntilReady(),
@@ -69,5 +74,6 @@ export async function getRedis() {
 		davWorkerQueue,
 		davWorkerEvents,
 		backfillQueue,
+		crmLinkQueue,
 	};
 }

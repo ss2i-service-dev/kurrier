@@ -3,6 +3,8 @@ import {fetchMailbox, fetchThreadMailSubscriptions, fetchWebMailThreadDetail} fr
 import ThreadItem from "@/components/mailbox/default/thread-item";
 import { Divider } from "@mantine/core";
 import {MessageEntity} from "@db";
+import ThreadClientsBar from "@/components/mailbox/default/thread-clients-bar";
+import {getWorkspacePublicId} from "@/lib/actions/clients";
 import Loading from "@/app/loading";
 
 async function Page({
@@ -31,8 +33,14 @@ async function Page({
             })) ?? [],
     });
 
+	// ss2i clients : pastille du ou des clients CRM du fil (identites pro).
+	const workspacePublicId = await getWorkspacePublicId();
+
 	return (
 		<>
+			{activeThread?.messages.length ? (
+				<ThreadClientsBar threadId={threadId} identityPublicId={identityPublicId} workspacePublicId={workspacePublicId} />
+			) : null}
 			{activeThread?.messages.map((message, threadIndex) => {
 				return (
 					<Suspense fallback={<Loading />}>

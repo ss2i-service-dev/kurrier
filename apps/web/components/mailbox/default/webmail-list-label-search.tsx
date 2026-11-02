@@ -27,6 +27,9 @@ type WebListProps = {
     labelsByThreadId: FetchMailboxThreadLabelsResult;
     workspacePublicId?: string;
     mailboxSync?: MailboxSyncEntity;
+    // ss2i : dossier virtuel (clients) : chaque fil garde son propre dossier pour l'ouverture
+    // et les actions ; activeMailbox ne sert alors qu'a l'en-tete et au contexte.
+    mailboxById?: Record<string, MailboxEntity>;
 };
 
 export default function WebmailListLabelSearch({
@@ -39,7 +42,9 @@ export default function WebmailListLabelSearch({
                                         globalLabels,
                                         workspacePublicId,
                                         labelsByThreadId,
+                                        mailboxById,
                                     }: WebListProps) {
+    const mailboxOf = (mailboxId: string) => mailboxById?.[mailboxId] ?? activeMailbox;
     const isMobile = useMediaQuery("(max-width: 768px)");
     const params = useParams();
 
@@ -75,7 +80,7 @@ export default function WebmailListLabelSearch({
                                             mailboxThreadItem.threadId + mailboxThreadItem.mailboxId
                                         }
                                         mailboxThreadItem={mailboxThreadItem}
-                                        activeMailbox={activeMailbox}
+                                        activeMailbox={mailboxOf(mailboxThreadItem.mailboxId)}
                                         identityPublicId={identityPublicId}
                                         mailboxSync={mailboxSync ?? undefined}
                                         labelsByThreadId={labelsByThreadId}
@@ -87,7 +92,7 @@ export default function WebmailListLabelSearch({
                                         }
                                         mailboxThreadItem={mailboxThreadItem}
                                         workspacePublicId={workspacePublicId}
-                                        activeMailbox={activeMailbox}
+                                        activeMailbox={mailboxOf(mailboxThreadItem.mailboxId)}
                                         identityPublicId={identityPublicId}
                                         mailboxSync={mailboxSync ?? undefined}
                                         globalLabels={globalLabels}

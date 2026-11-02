@@ -32,6 +32,20 @@ export const ZServerConfig = z.object({
 	S3_FORCE_PATH_STYLE: z.string("S3_FORCE_PATH_STYLE must be present"),
 	// ss2i : fuseau des dates d'attribution des citations (defaut Europe/Paris).
 	MAIL_TIMEZONE: z.string().optional(),
+	// ss2i : section « Clients » des boites pro. CRM_URL (defaut https://crm.ss2i-services.fr)
+	// et CRM_LORE_TOKEN (jeton partage de l'API api/lore/*, meme valeur que Lore) ; sans
+	// jeton, aucun rattachement n'est calcule. CRM_PRO_DOMAINS : domaines des identites
+	// concernees (defaut ss2i-digital.fr,ss2i-services.fr) ; CRM_INTERNAL_DOMAINS :
+	// adresses jamais soumises a la CRM (defaut ss2i-digital.fr,ss2i-services.fr,ss2i.ca,
+	// sous-domaines compris). CRM_MATCH_TTL_DAYS : age d'un rapprochement positif avant
+	// re-verification (defaut 30) ; CRM_MATCH_RETRY_DAYS : idem pour un negatif, et
+	// intervalle des passes de rattrapage (defaut 7).
+	CRM_URL: z.string().optional(),
+	CRM_LORE_TOKEN: z.string().optional(),
+	CRM_PRO_DOMAINS: z.string().optional(),
+	CRM_INTERNAL_DOMAINS: z.string().optional(),
+	CRM_MATCH_TTL_DAYS: z.string().optional(),
+	CRM_MATCH_RETRY_DAYS: z.string().optional(),
 });
 
 /** Safe to expose to the browser */

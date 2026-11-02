@@ -44,6 +44,7 @@ import { and, eq, sql } from "drizzle-orm";
 import addressparser from "addressparser";
 import { PgTransaction } from "drizzle-orm/pg-core";
 import { getRedis } from "../../lib/get-redis";
+import { enqueueCrmLinkByIdentity } from "../../lib/crm/enqueue";
 import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import {s3} from "../../lib/create-s3-client";
 import { upsertContactsFromOutgoing } from "../../lib/outgoing-contacts";
@@ -468,6 +469,10 @@ export default defineNitroPlugin(async (nitroApp) => {
 					{ messageId: newMessage.id },
 					{ removeOnComplete: true },
 				);
+				// ss2i clients : le fil rejoint (ou reste dans) le dossier client de ses destinataires.
+				if (newMessage.threadId && mailbox.mailbox.identityId) {
+					await enqueueCrmLinkByIdentity(newMessage.threadId, mailbox.mailbox.identityId);
+				}
 
 				// Les destinataires rejoignent le carnet de l'expediteur. Jamais
 				// bloquant : un echec ici ne doit pas faire echouer un envoi reussi.

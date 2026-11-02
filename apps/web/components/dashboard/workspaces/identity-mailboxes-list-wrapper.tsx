@@ -8,6 +8,7 @@ import {getWorkspacePublicId} from "@/lib/actions/clients";
 import {fetchDraftCounts} from "@/lib/actions/drafts";
 import {collapsedIdentities} from "@/lib/actions/collapsed-identities";
 import {fetchLabelsWithCounts} from "@/lib/actions/labels";
+import {fetchIdentityClients} from "@/lib/actions/thread-clients";
 import IdentityMailboxesList from "@/components/dashboard/identity-mailboxes-list";
 import {DynamicContextProvider} from "@/hooks/use-dynamic-context";
 import {LabelScope} from "@schema";
@@ -40,6 +41,8 @@ async function IdentityMailboxesListWrapper() {
 
     const scheduledDraftsPromise = fetchScheduledDraftCounts();
     const snoozedThreadsPromise = fetchIdentitySnoozedThreads()
+    // ss2i : clients (CRM) des identites pro ; vide (section absente) pour les autres.
+    const clientsPromise = fetchIdentityClients()
 
     return (
         <>
@@ -48,6 +51,7 @@ async function IdentityMailboxesListWrapper() {
                 unreadCounts={unreadCounts}
                 scheduledDraftsPromise={scheduledDraftsPromise}
                 snoozedThreadsPromise={snoozedThreadsPromise}
+                clientsPromise={clientsPromise}
                 workspacePublicId={workspacePublicId}
                 initialCollapsed={collapsed}
             />

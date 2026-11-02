@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, lt, notExists, or, sql } from "drizzle-orm";
 import {
 	db,
 	mcpOauthAccessTokens,
@@ -24,6 +24,39 @@ export const AUTH_CODE_TTL_SECONDS = 10 * 60;
 export const REFRESH_GRACE_SECONDS = 60;
 
 export const MCP_PATH = "/api/kurrier/mcp";
+const SUPPORTED_GRANT_TYPES = ["authorization_code", "refresh_token"];
+
+// Purge : codes expires, jetons dont le refresh est expire ou revoques depuis plus
+// d'un jour (au-dela de la fenetre de grace), clients de plus de 24 h sans aucun jeton
+// ni code (enregistrement sans suite). Appelee a chaque enregistrement de client.
+export async function purgeOauthLeftovers(now = new Date()) {
+	const dayAgo = new Date(now.getTime() - 24 * 3600 * 1000);
+	await db.delete(mcpOauthAuthorizationCodes).where(lt(mcpOauthAuthorizationCodes.expiresAt, now));
+	await db
+		.delete(mcpOauthAccessTokens)
+		.where(
+			or(
+				lt(mcpOauthAccessTokens.refreshTokenExpiresAt, now),
+				and(eq(mcpOauthAccessTokens.revoked, true), lt(mcpOauthAccessTokens.updatedAt, dayAgo)),
+			),
+		);
+	await db
+		.delete(mcpOauthClients)
+		.where(
+			and(
+				lt(mcpOauthClients.createdAt, dayAgo),
+				notExists(
+					db.select({ one: sql`1` }).from(mcpOauthAccessTokens).where(eq(mcpOauthAccessTokens.clientId, mcpOauthClients.id)),
+				),
+				notExists(
+					db
+						.select({ one: sql`1` })
+						.from(mcpOauthAuthorizationCodes)
+						.where(eq(mcpOauthAuthorizationCodes.clientId, mcpOauthClients.id)),
+				),
+			),
+		);
+}
 
 export class OAuthError extends Error {
 	constructor(
@@ -38,12 +71,36 @@ export class OAuthError extends Error {
 export const sha256 = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
 export const randomToken = (bytes = 48) => crypto.randomBytes(bytes).toString("base64url");
 
+// Adresse publique du webmail (login, session) : WEB_URL, https://mail.ss2i.ca.
 export function baseUrl() {
 	return String(getPublicEnv().WEB_URL ?? "").trim().replace(/\/+$/, "");
 }
 
+// Adresse publique de tout ce qui sert a l'MCP (ressource, decouverte, /oauth/*) :
+// MCP_PUBLIC_ORIGIN, https://mail.ss2i.ca:8443 sur hlm. L'entrypoint 443 de Traefik y
+// applique un middleware custom-errors qui remplace tout statut 400-599 par une page
+// HTML et perd les en-tetes : le 401 arrivait sans WWW-Authenticate. Par defaut WEB_URL.
+// Jamais request.url : dans le conteneur il vaut l'adresse d'ecoute (0.0.0.0:3000).
+export function mcpPublicOrigin() {
+	const configured = String(getPublicEnv().MCP_PUBLIC_ORIGIN ?? "").trim().replace(/\/+$/, "");
+	return configured || baseUrl();
+}
+
+// Retour vers /oauth/authorize apres le login (cookie oauth_return) : un chemin relatif
+// ou une URL absolue sur l'origine MCP, rien d'autre (pas de redirection libre).
+export function isSafeOauthReturn(value: string) {
+	if (value.startsWith("/oauth/authorize?")) return true;
+	try {
+		const url = new URL(value);
+		const origin = new URL(mcpPublicOrigin()).origin;
+		return url.origin === origin && url.pathname === "/oauth/authorize" && !url.username && !url.hash;
+	} catch {
+		return false;
+	}
+}
+
 export function protectedResourceMetadata() {
-	const base = baseUrl();
+	const base = mcpPublicOrigin();
 	return {
 		resource: `${base}${MCP_PATH}`,
 		authorization_servers: [base],
@@ -54,7 +111,7 @@ export function protectedResourceMetadata() {
 }
 
 export function authorizationServerMetadata() {
-	const base = baseUrl();
+	const base = mcpPublicOrigin();
 	return {
 		issuer: base,
 		authorization_endpoint: `${base}/oauth/authorize`,
@@ -138,10 +195,21 @@ export async function registerClient(body: Record<string, unknown>) {
 	if (!["none", "client_secret_post"].includes(method)) {
 		throw new OAuthError("invalid_client_metadata", "unsupported token_endpoint_auth_method");
 	}
+	// grant_types et response_types : seulement ce que le serveur sait faire.
 	const grantTypes = Array.isArray(body.grant_types)
 		? body.grant_types.map(String)
 		: ["authorization_code", "refresh_token"];
 	const responseTypes = Array.isArray(body.response_types) ? body.response_types.map(String) : ["code"];
+	const badGrant = grantTypes.filter((g) => !SUPPORTED_GRANT_TYPES.includes(g));
+	if (badGrant.length || !grantTypes.includes("authorization_code")) {
+		throw new OAuthError("invalid_client_metadata", `unsupported grant_types: ${badGrant.join(", ") || "authorization_code required"}`);
+	}
+	if (responseTypes.some((r) => r !== "code")) {
+		throw new OAuthError("invalid_client_metadata", "only response_type code is supported");
+	}
+	// Menage au fil de l'eau (pas de planificateur a ajouter) : codes expires, jetons
+	// morts, clients enregistres sans suite. Jamais bloquant.
+	purgeOauthLeftovers().catch((err) => console.error("[oauth] purge failed:", err?.message ?? err));
 	const clientId = crypto.randomUUID();
 	const clientSecret = method === "client_secret_post" ? randomToken(48) : null;
 	await db.insert(mcpOauthClients).values({
@@ -224,10 +292,15 @@ export async function validateAuthorizeRequest(params: AuthorizeParams) {
 	if (!params.code_challenge || params.code_challenge_method !== "S256") {
 		throw new OAuthError("invalid_request", "PKCE (code_challenge, S256) is required");
 	}
+	// Une seule portee existe ; tout autre libelle est refuse plutot qu'ignore.
+	const requested = String(params.scope ?? "").split(/\s+/).filter(Boolean);
+	if (requested.some((s) => s !== MCP_SCOPE)) {
+		throw new OAuthError("invalid_scope", `unknown scope (only ${MCP_SCOPE})`);
+	}
 	if (params.resource) {
 		let ok = false;
 		try {
-			ok = new URL(params.resource).origin === new URL(baseUrl()).origin;
+			ok = new URL(params.resource).origin === new URL(mcpPublicOrigin()).origin;
 		} catch {
 			ok = false;
 		}
@@ -299,14 +372,13 @@ export async function exchangeAuthorizationCode(params: Record<string, string | 
 	if (!code || !codeVerifier) {
 		throw new OAuthError("invalid_request", "code and code_verifier are required");
 	}
+	// Usage unique et atomique : la suppression renvoie la ligne a celui qui l'a
+	// consommee ; deux echanges simultanes du meme code n'en reussissent qu'un.
 	const [row] = await db
-		.select()
-		.from(mcpOauthAuthorizationCodes)
+		.delete(mcpOauthAuthorizationCodes)
 		.where(eq(mcpOauthAuthorizationCodes.codeHash, sha256(code)))
-		.limit(1);
+		.returning();
 	if (!row) throw new OAuthError("invalid_grant", "Invalid authorization code");
-	// Usage unique : le code disparait quel que soit le resultat de la suite.
-	await db.delete(mcpOauthAuthorizationCodes).where(eq(mcpOauthAuthorizationCodes.id, row.id));
 	if (row.expiresAt.getTime() < Date.now()) {
 		throw new OAuthError("invalid_grant", "Authorization code expired");
 	}
@@ -317,7 +389,10 @@ export async function exchangeAuthorizationCode(params: Record<string, string | 
 	if (!clientSecretMatches(client, params.client_secret)) {
 		throw new OAuthError("invalid_client", "Invalid client secret", 401);
 	}
-	if (params.redirect_uri && params.redirect_uri !== row.redirectUri) {
+	// redirect_uri a toujours figure a l'autorisation : il est donc obligatoire ici et
+	// doit etre identique (RFC 6749 4.1.3).
+	if (!params.redirect_uri) throw new OAuthError("invalid_request", "redirect_uri is required");
+	if (params.redirect_uri !== row.redirectUri) {
 		throw new OAuthError("invalid_grant", "redirect_uri mismatch");
 	}
 	const expected = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
@@ -346,7 +421,20 @@ export async function refreshAccessToken(params: Record<string, string | undefin
 		existing.revokedAt !== null &&
 		existing.revokedAt.getTime() > Date.now() - REFRESH_GRACE_SECONDS * 1000;
 	if (existing.revoked && !withinGrace) {
-		throw new OAuthError("invalid_grant", "Refresh token revoked");
+		// Un refresh deja tourne, presente apres la grace, est le signe d'un vol (RFC 6819
+		// 5.2.2.3) : toute la famille client + utilisateur est revoquee, le voleur comme le
+		// client legitime, qui n'a plus qu'a se reconnecter.
+		await db
+			.update(mcpOauthAccessTokens)
+			.set({ revoked: true, updatedAt: new Date() })
+			.where(
+				and(
+					eq(mcpOauthAccessTokens.clientId, existing.clientId),
+					eq(mcpOauthAccessTokens.userId, existing.userId),
+					eq(mcpOauthAccessTokens.revoked, false),
+				),
+			);
+		throw new OAuthError("invalid_grant", "Refresh token revoked (token family revoked)");
 	}
 	const client = await resolveClient(String(params.client_id ?? ""));
 	if (!client || client.id !== existing.clientId) {

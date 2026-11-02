@@ -8,6 +8,7 @@ import { Queue, QueueEvents } from "bullmq";
 import { decode } from "decode-formdata";
 import { eq } from "drizzle-orm";
 import { jwtVerify, JWTPayload, SignJWT } from "jose";
+import { isSafeOauthReturn } from "@/lib/mcp-oauth";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import * as crypto from "node:crypto";
@@ -137,10 +138,11 @@ export async function signInUserAndRedirect(user: typeof users.$inferSelect,  lo
 	const target = await getWorkspaceRedirectUrl(user);
 	// ss2i : connexion demandee par la page de consentement OAuth de l'MCP courrier
 	// (/oauth/authorize a pose ce cookie) : on y retourne, le contexte du workspace
-	// etant pose par getWorkspaceRedirectUrl. Chemin relatif impose, pas d'open redirect.
+	// etant pose par getWorkspaceRedirectUrl. Chemin relatif ou origine MCP_PUBLIC_ORIGIN
+	// seulement (isSafeOauthReturn), pas d'open redirect.
 	const cookieStore = await cookies();
 	const oauthReturn = cookieStore.get("oauth_return")?.value ?? "";
-	if (oauthReturn.startsWith("/oauth/authorize?")) {
+	if (oauthReturn && isSafeOauthReturn(oauthReturn)) {
 		cookieStore.delete("oauth_return");
 		redirect(oauthReturn);
 	}

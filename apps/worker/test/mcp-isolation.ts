@@ -21,8 +21,8 @@ import type { ToolContext } from "../lib/mcp/tools";
 async function main() {
 	const a = await createUserFixture("alice");
 	const b = await createUserFixture("bob");
-	const ctxA: ToolContext = { userId: a.user.id, email: a.email, authType: "oauth" };
-	const ctxB: ToolContext = { userId: b.user.id, email: b.email, authType: "oauth" };
+	const ctxA: ToolContext = { userId: a.user.id, email: a.email, authType: "oauth", scopes: null };
+	const ctxB: ToolContext = { userId: b.user.id, email: b.email, authType: "oauth", scopes: null };
 
 	console.log("# couche d'acces");
 	await expectThrow(() => resolveIdentity(b.user.id, a.identity.id), /Identity not found/, "identity of A by id, as B");
@@ -99,6 +99,30 @@ async function main() {
 	assert(trashB?.result?.isError === true && /Thread not found/.test(trashB.result.content[0].text), "trash A's thread as B -> isError");
 	const unknown = (await handleRpcBody(ctxB, { jsonrpc: "2.0", id: 3, method: "resources/read" })) as any;
 	assert(unknown?.error?.code === -32601, "unknown method -> -32601");
+	const batch = (await handleRpcBody(ctxB, Array.from({ length: 21 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "ping" })))) as any;
+	assert(batch?.error?.code === -32600 && /Batch too large/.test(batch.error.message), "batch of 21 refused");
+	const batchOk = (await handleRpcBody(ctxB, Array.from({ length: 20 }, (_, i) => ({ jsonrpc: "2.0", id: i, method: "ping" })))) as any;
+	assert(Array.isArray(batchOk) && batchOk.length === 20, "batch of 20 accepted");
+
+	console.log("# portees d'une cle API");
+	const keyReceive: ToolContext = { ...ctxB, authType: "api_key", scopes: ["emails:receive"] };
+	const keySend: ToolContext = { ...ctxB, authType: "api_key", scopes: ["emails:send"] };
+	const sendDenied = await call(keyReceive, "send_email", { to: ["x@test.invalid"], subject: "s", body_text: "b" });
+	assert(sendDenied?.result?.isError === true && /lacks the 'emails:send'/.test(sendDenied.result.content[0].text), "emails:receive key cannot send_email");
+	const readDenied = await call(keySend, "list_threads", {});
+	assert(readDenied?.result?.isError === true && /lacks the 'emails:receive'/.test(readDenied.result.content[0].text), "emails:send key cannot list_threads");
+	const readOk = await call(keyReceive, "list_threads", {});
+	assert(readOk?.result?.isError !== true, "emails:receive key can list_threads");
+	const replyDenied = await call(keyReceive, "reply", { message_id: b.message.id, body_text: "x" });
+	assert(replyDenied?.result?.isError === true && /lacks/.test(replyDenied.result.content[0].text), "emails:receive key cannot reply");
+
+	console.log("# injection d'en-tetes");
+	const crlfSubject = await call(ctxB, "send_email", { to: ["x@test.invalid"], subject: "Hello\nBcc: evil@test.invalid", body_text: "b" });
+	assert(crlfSubject?.result?.isError === true && /line breaks/.test(crlfSubject.result.content[0].text), "subject with LF refused");
+	const crlfTo = await call(ctxB, "send_email", { to: ["x@test.invalid\r\nBcc: evil@test.invalid"], subject: "s", body_text: "b" });
+	assert(crlfTo?.result?.isError === true && /line break in address|invalid address/.test(crlfTo.result.content[0].text), "recipient with CRLF refused");
+	const crlfFolder = await call(ctxB, "list_threads", { folder: "inbox\n" });
+	assert(crlfFolder?.result?.isError === true && /line breaks/.test(crlfFolder.result.content[0].text), "folder with LF refused");
 
 	console.log(process.exitCode ? "\nFAILURES" : "\nALL OK");
 	process.exit(process.exitCode ?? 0);

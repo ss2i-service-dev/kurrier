@@ -37,6 +37,8 @@ export const ZPublicConfig = z.object({
 	WEB_URL: z.string("WEB_URL must be present"),
 	DOCS_URL: z.string().optional(),
 	DAV_URL: z.string("DAV_URL must be present"),
+	// ss2i : origine publique de l'MCP courrier et de ses endpoints OAuth (defaut WEB_URL).
+	MCP_PUBLIC_ORIGIN: z.string().optional(),
 	DISABLE_SIGNUP: z.string().optional().transform((val) => val === "true").default(false),
 });
 

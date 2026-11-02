@@ -10,14 +10,18 @@ import {
 	authorizationServerMetadata,
 	exchangeAuthorizationCode,
 	isRedirectUriAllowed,
+	isSafeOauthReturn,
 	issueAuthorizationCode,
 	protectedResourceMetadata,
 	refreshAccessToken,
 	registerClient,
 	revokeToken,
+	sha256,
 	validateAuthorizeRequest,
 } from "../../web/lib/mcp-oauth";
-import { authenticateMcp } from "../lib/mcp/auth";
+import { authenticateMcp, setUnauthorizedHeader } from "../lib/mcp/auth";
+import { db, mcpOauthAccessTokens } from "@db";
+import { eq } from "drizzle-orm";
 import { handleRpcBody } from "../lib/mcp/rpc";
 
 async function main() {
@@ -28,6 +32,23 @@ async function main() {
 	const asm = authorizationServerMetadata();
 	assert(prm.resource.endsWith("/api/kurrier/mcp") && prm.authorization_servers[0] === asm.issuer, "resource metadata points to the issuer");
 	assert(asm.code_challenge_methods_supported.includes("S256") && asm.registration_endpoint.endsWith("/oauth/register"), "server metadata: S256 + registration");
+	assert(asm.issuer === process.env.MCP_PUBLIC_ORIGIN && prm.resource.startsWith(`${process.env.MCP_PUBLIC_ORIGIN}/`), `issuer and resource on MCP_PUBLIC_ORIGIN (${asm.issuer})`);
+	assert(asm.issuer !== process.env.WEB_URL, "MCP origin differs from WEB_URL in this test");
+	const unauthorized = fakeEvent({});
+	await authenticateMcp(unauthorized).catch(() => setUnauthorizedHeader(unauthorized));
+	assert(
+		unauthorized._resHeaders["www-authenticate"] === `Bearer resource_metadata="${process.env.MCP_PUBLIC_ORIGIN}/.well-known/oauth-protected-resource"`,
+		`WWW-Authenticate points to MCP_PUBLIC_ORIGIN (${unauthorized._resHeaders["www-authenticate"]})`,
+	);
+
+	console.log("# retour apres login");
+	assert(isSafeOauthReturn("/oauth/authorize?client_id=x"), "relative /oauth/authorize accepted");
+	assert(isSafeOauthReturn(`${process.env.MCP_PUBLIC_ORIGIN}/oauth/authorize?client_id=x`), "absolute on MCP_PUBLIC_ORIGIN accepted");
+	assert(!isSafeOauthReturn(`${process.env.WEB_URL}/oauth/authorize?client_id=x`), "absolute on WEB_URL (other port) refused");
+	assert(!isSafeOauthReturn("https://evil.example/oauth/authorize?x=1"), "foreign origin refused");
+	assert(!isSafeOauthReturn(`${process.env.MCP_PUBLIC_ORIGIN}/en/w/x`), "other path on MCP origin refused");
+	assert(!isSafeOauthReturn("//evil.example/oauth/authorize?x"), "protocol-relative refused");
+	assert(!isSafeOauthReturn("/oauth/authorize/../../evil"), "path without query refused");
 
 	console.log("# enregistrement dynamique");
 	await expectThrow(
@@ -98,6 +119,17 @@ async function main() {
 		/Invalid authorization code|redirect_uri mismatch/,
 		"redirect_uri mismatch refused",
 	);
+	const noRedirect = await issue();
+	await expectThrow(
+		() => exchangeAuthorizationCode({ grant_type: "authorization_code", code: noRedirect, code_verifier: verifier, client_id: client.client_id }),
+		/redirect_uri is required/,
+		"redirect_uri is mandatory at the token endpoint",
+	);
+	const raced = await issue();
+	const outcomes = await Promise.allSettled([1, 2, 3].map(() =>
+		exchangeAuthorizationCode({ grant_type: "authorization_code", code: raced, code_verifier: verifier, client_id: client.client_id, redirect_uri: redirectUri }),
+	));
+	assert(outcomes.filter((o) => o.status === "fulfilled").length === 1, "three concurrent exchanges of one code: exactly one succeeds");
 	const code2 = await issue();
 	const tokens = await exchangeAuthorizationCode({
 		grant_type: "authorization_code",
@@ -124,8 +156,18 @@ async function main() {
 	await expectThrow(() => authenticateMcp(fakeEvent({})), /Provide/, "missing token refused");
 	await expectThrow(
 		() => authenticateMcp(fakeEvent({}, `/api/kurrier/mcp?api_key=${tokens.access_token}`)),
-		/Invalid or expired/,
-		"OAuth token is not accepted as ?api_key= (query is for API keys only)",
+		/Provide/,
+		"a token in the query string is ignored (never read from the URL)",
+	);
+	await expectThrow(
+		() => registerClient({ client_name: "x", redirect_uris: ["http://localhost/cb"], grant_types: ["implicit"] }),
+		/unsupported grant_types/,
+		"grant_type implicit refused at registration",
+	);
+	await expectThrow(
+		() => validateAuthorizeRequest({ response_type: "code", client_id: client.client_id, redirect_uri: redirectUri, code_challenge: challenge, code_challenge_method: "S256", scope: "mcp:full admin" }),
+		/unknown scope/,
+		"unknown scope refused",
 	);
 
 	console.log("# refresh avec rotation");
@@ -143,11 +185,31 @@ async function main() {
 	const fresh = await authenticateMcp(fakeEvent({ authorization: `Bearer ${refreshed.access_token}` }));
 	assert(fresh.userId === a.user.id, "new access token is valid");
 
-	console.log("# revocation");
-	await revokeToken(refreshed.access_token);
-	await expectThrow(() => authenticateMcp(fakeEvent({ authorization: `Bearer ${refreshed.access_token}` })), /Invalid or expired/, "revoked access token refused");
+	console.log("# rejeu d'un refresh apres la grace : famille revoquee");
+	const family = await refreshAccessToken({ grant_type: "refresh_token", refresh_token: refreshed.refresh_token, client_id: client.client_id });
+	assert(Boolean(family.access_token), "second rotation issues a token");
+	await db
+		.update(mcpOauthAccessTokens)
+		.set({ revokedAt: new Date(Date.now() - 120_000) })
+		.where(eq(mcpOauthAccessTokens.refreshTokenHash, sha256(refreshed.refresh_token)));
 	await expectThrow(
 		() => refreshAccessToken({ grant_type: "refresh_token", refresh_token: refreshed.refresh_token, client_id: client.client_id }),
+		/family revoked/,
+		"rotated refresh token replayed after the grace window is refused",
+	);
+	await expectThrow(() => authenticateMcp(fakeEvent({ authorization: `Bearer ${family.access_token}` })), /Invalid or expired/, "the latest access token of the family is revoked too");
+	await expectThrow(
+		() => refreshAccessToken({ grant_type: "refresh_token", refresh_token: family.refresh_token, client_id: client.client_id }),
+		/revoked/,
+		"the latest refresh token of the family is revoked too",
+	);
+
+	console.log("# revocation");
+	const tokens2 = await exchangeAuthorizationCode({ grant_type: "authorization_code", code: await issue(), code_verifier: verifier, client_id: client.client_id, redirect_uri: redirectUri });
+	await revokeToken(tokens2.access_token);
+	await expectThrow(() => authenticateMcp(fakeEvent({ authorization: `Bearer ${tokens2.access_token}` })), /Invalid or expired/, "revoked access token refused");
+	await expectThrow(
+		() => refreshAccessToken({ grant_type: "refresh_token", refresh_token: tokens2.refresh_token, client_id: client.client_id }),
 		/revoked/,
 		"revoked refresh token refused (no grace window)",
 	);

@@ -1,4 +1,4 @@
-import { H3Event, getQuery, setResponseHeader } from "h3";
+import { H3Event, setResponseHeader } from "h3";
 import { db, mcpOauthAccessTokens, users } from "@db";
 import { and, eq, gt } from "drizzle-orm";
 import crypto from "node:crypto";
@@ -6,15 +6,20 @@ import { validateApiKeyToken } from "../api-helpers";
 
 // Authentification de l'MCP courrier, sur le meme principe que l'MCP Organize-It :
 // 1. Authorization: Bearer <jeton OAuth emis par /oauth/token du web> (stocke hache) ;
-// 2. Authorization: Bearer <cle API kurrier> (repli) ;
-// 3. ?api_key=<cle API> ou X-API-Key (clients qui ne transmettent pas d'en-tete).
+// 2. Authorization: Bearer <cle API kurrier> ou X-API-Key: <cle API> (repli).
+// Jamais la cle en parametre de requete : elle finirait dans les journaux de Traefik.
 // Un 401 porte WWW-Authenticate avec resource_metadata, ce qui declenche la decouverte
 // OAuth chez Claude Code et claude.ai (RFC 9728).
+// Portees : un jeton OAuth donne l'acces complet (mcp:full) ; une cle API garde ses
+// api_keys.scopes (emails:send pour envoyer, emails:receive pour le reste), verifiees
+// par outil dans rpc.ts.
 
 export type McpPrincipal = {
 	userId: string;
 	email: string;
 	authType: "oauth" | "api_key";
+	// null = acces complet (OAuth) ; sinon les portees de la cle API.
+	scopes: string[] | null;
 };
 
 export class McpAuthError extends Error {
@@ -25,10 +30,14 @@ export function sha256(value: string) {
 	return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-// Base publique du web (WEB_URL en prod : https://mail.ss2i.ca). A defaut, l'hote de
-// la requete tel que Traefik le transmet.
+// Origine publique de l'MCP et de sa decouverte OAuth : MCP_PUBLIC_ORIGIN
+// (https://mail.ss2i.ca:8443 sur hlm, entrypoint Traefik sans custom-errors, qui
+// sinon avalait le 401 et son WWW-Authenticate), a defaut WEB_URL, a defaut l'hote de
+// la requete tel que Traefik le transmet. Meme valeur que apps/web/lib/mcp-oauth.ts.
 export function publicBaseUrl(event: H3Event) {
-	const fromEnv = String(process.env.WEB_URL ?? "").trim().replace(/\/+$/, "");
+	const fromEnv = String(process.env.MCP_PUBLIC_ORIGIN || process.env.WEB_URL || "")
+		.trim()
+		.replace(/\/+$/, "");
 	if (fromEnv) return fromEnv;
 	const h = event.node.req.headers;
 	const proto = String(h["x-forwarded-proto"] ?? "https").split(",")[0].trim();
@@ -49,11 +58,6 @@ function extractToken(event: H3Event): { token: string; fromBearer: boolean } | 
 	if (auth && /^Bearer\s+/i.test(auth)) {
 		const token = auth.replace(/^Bearer\s+/i, "").trim();
 		if (token) return { token, fromBearer: true };
-	}
-	const query = getQuery(event);
-	const fromQuery = query.api_key ?? query.key;
-	if (typeof fromQuery === "string" && fromQuery.trim()) {
-		return { token: fromQuery.trim(), fromBearer: false };
 	}
 	const xApiKey = event.node.req.headers["x-api-key"];
 	if (typeof xApiKey === "string" && xApiKey.trim()) {
@@ -86,19 +90,25 @@ async function resolveOauthToken(token: string): Promise<McpPrincipal | null> {
 		.set({ lastUsedAt: now })
 		.where(eq(mcpOauthAccessTokens.id, row.id))
 		.catch(() => {});
-	return { userId: row.userId, email: row.email, authType: "oauth" };
+	return { userId: row.userId, email: row.email, authType: "oauth", scopes: null };
 }
 
 async function resolveApiKey(token: string): Promise<McpPrincipal | null> {
 	try {
-		const { ownerId } = await validateApiKeyToken(token);
+		const { ownerId, apiKey } = await validateApiKeyToken(token);
+		if (apiKey.expiresAt && apiKey.expiresAt.getTime() < Date.now()) return null;
 		const [user] = await db
 			.select({ email: users.email })
 			.from(users)
 			.where(eq(users.id, ownerId))
 			.limit(1);
 		if (!user) return null;
-		return { userId: ownerId, email: user.email, authType: "api_key" };
+		return {
+			userId: ownerId,
+			email: user.email,
+			authType: "api_key",
+			scopes: Array.isArray(apiKey.scopes) ? apiKey.scopes.map(String) : [],
+		};
 	} catch {
 		return null;
 	}

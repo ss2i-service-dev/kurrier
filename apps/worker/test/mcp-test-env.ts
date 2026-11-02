@@ -28,6 +28,8 @@ const defaults: Record<string, string> = {
 	S3_SECRET_KEY: "x",
 	S3_FORCE_PATH_STYLE: "true",
 	WEB_URL: "https://mail.test.invalid",
+	// Origine MCP distincte du webmail, comme en prod (8443 sans custom-errors Traefik).
+	MCP_PUBLIC_ORIGIN: "https://mail.test.invalid:8443",
 	DAV_URL: "http://127.0.0.1:1",
 	NODE_ENV: "test",
 };

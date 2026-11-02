@@ -6,3 +6,4 @@ export * from "./common-utils";
 export * from "./drafts";
 export * from "./compose";
 export * from "./recipient-suggest";
+export * from "./crm-match";

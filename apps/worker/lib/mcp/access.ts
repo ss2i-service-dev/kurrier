@@ -1,4 +1,5 @@
 import {
+	crmCompanies,
 	db,
 	identities,
 	mailboxes,
@@ -6,6 +7,7 @@ import {
 	mailboxThreads,
 	messageAttachments,
 	messages,
+	threadClients,
 } from "@db";
 import { and, asc, desc, eq, gt, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
 
@@ -360,4 +362,105 @@ export async function searchThreadsSql(opts: {
 		.where(and(...conditions))
 		.orderBy(desc(mailboxThreads.lastActivityAt))
 		.limit(opts.limit);
+}
+
+// ---------------------------------------------------------------------------
+// Clients (section « Clients » des boites pro : fils rattaches aux societes de la CRM)
+// ---------------------------------------------------------------------------
+
+// Societes d'une identite de l'utilisateur, derniere activite en premier, avec le
+// nombre de fils (hors corbeille et spam, hors fils detaches a la main). `query`
+// filtre sur le nom.
+export async function listClients(opts: { userId: string; identityId: string; query?: string | null; limit: number }) {
+	const q = (opts.query ?? "").trim();
+	const conditions = [
+		eq(threadClients.ownerId, opts.userId),
+		eq(threadClients.identityId, opts.identityId),
+		eq(threadClients.detached, false),
+		liveThreadCondition,
+	];
+	if (q) conditions.push(ilike(crmCompanies.name, `%${q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`));
+	return db
+		.select({
+			companyId: threadClients.crmCompanyId,
+			name: crmCompanies.name,
+			ebpCustomerId: crmCompanies.ebpCustomerId,
+			threadCount: sql<number>`count(*)`,
+			lastActivityAt: sql<Date>`max(${threadClients.lastActivityAt})`,
+		})
+		.from(threadClients)
+		.innerJoin(crmCompanies, eq(crmCompanies.id, threadClients.crmCompanyId))
+		.where(and(...conditions))
+		.groupBy(threadClients.crmCompanyId, crmCompanies.name, crmCompanies.ebpCustomerId)
+		.orderBy(desc(sql`max(${threadClients.lastActivityAt})`), asc(crmCompanies.name))
+		.limit(opts.limit);
+}
+
+// Le fil a encore une place hors corbeille et spam dans les dossiers de l'identite.
+const liveThreadCondition = sql`EXISTS (
+	SELECT 1 FROM mailbox_threads mt
+	JOIN mailboxes mb ON mb.id = mt.mailbox_id
+	WHERE mt.thread_id = ${threadClients.threadId}
+	  AND mt.identity_id = ${threadClients.identityId}
+	  AND mb.kind NOT IN ('trash', 'spam')
+)`;
+
+// Fils d'un client pour une identite de l'utilisateur : une ligne mailbox_threads par
+// fil (sa place la plus recente hors corbeille et spam), derniere activite en premier.
+export async function listClientThreads(opts: {
+	userId: string;
+	identityId: string;
+	companyId: number;
+	limit: number;
+	offset: number;
+}) {
+	const ranked = db
+		.select({
+			threadId: mailboxThreads.threadId,
+			mailboxId: mailboxThreads.mailboxId,
+			rn: sql<number>`row_number() over (partition by ${mailboxThreads.threadId} order by ${mailboxThreads.lastActivityAt} desc, ${mailboxThreads.mailboxId})`.as("rn"),
+		})
+		.from(threadClients)
+		.innerJoin(
+			mailboxThreads,
+			and(eq(mailboxThreads.threadId, threadClients.threadId), eq(mailboxThreads.identityId, threadClients.identityId)),
+		)
+		.innerJoin(mailboxes, and(eq(mailboxes.id, mailboxThreads.mailboxId), sql`${mailboxes.kind} NOT IN ('trash', 'spam')`))
+		.where(
+			and(
+				eq(threadClients.ownerId, opts.userId),
+				eq(threadClients.identityId, opts.identityId),
+				eq(threadClients.crmCompanyId, opts.companyId),
+				eq(threadClients.detached, false),
+			),
+		)
+		.as("ranked");
+	return db
+		.select({ thread: mailboxThreads })
+		.from(ranked)
+		.innerJoin(mailboxThreads, and(eq(mailboxThreads.threadId, ranked.threadId), eq(mailboxThreads.mailboxId, ranked.mailboxId)))
+		.where(and(eq(ranked.rn, 1), eq(mailboxThreads.ownerId, opts.userId)))
+		.orderBy(desc(mailboxThreads.lastActivityAt), desc(mailboxThreads.threadId))
+		.offset(opts.offset)
+		.limit(opts.limit + 1)
+		.then((rows) => rows.map((r) => r.thread));
+}
+
+// Clients connus d'une liste de fils de l'utilisateur, pour decorer les listes.
+export async function clientsForThreads(userId: string, threadIds: string[]) {
+	const ids = Array.from(new Set(threadIds.filter(isUuid)));
+	const out = new Map<string, { client_id: number; name: string }[]>();
+	if (!ids.length) return out;
+	const rows = await db
+		.select({ threadId: threadClients.threadId, companyId: threadClients.crmCompanyId, name: crmCompanies.name })
+		.from(threadClients)
+		.innerJoin(crmCompanies, eq(crmCompanies.id, threadClients.crmCompanyId))
+		.where(and(eq(threadClients.ownerId, userId), eq(threadClients.detached, false), inArray(threadClients.threadId, ids)))
+		.orderBy(asc(crmCompanies.name));
+	for (const r of rows) {
+		const list = out.get(r.threadId) ?? [];
+		if (!list.some((c) => c.client_id === r.companyId)) list.push({ client_id: r.companyId, name: r.name });
+		out.set(r.threadId, list);
+	}
+	return out;
 }

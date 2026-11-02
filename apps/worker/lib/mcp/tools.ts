@@ -12,9 +12,12 @@ import {
 	type Message,
 	McpToolError,
 	attachmentsForMessages,
+	clientsForThreads,
 	getOwnedAttachment,
 	getOwnedMessage,
 	isUuid,
+	listClientThreads,
+	listClients,
 	listIdentities,
 	listMailboxes,
 	listThreads,
@@ -164,6 +167,15 @@ const threadSummary = (t: MailboxThread) => ({
 	starred: t.starred,
 	has_attachments: t.hasAttachments,
 });
+
+// ss2i : nom du client (societe de la CRM) sur les fils rattaches, quand il est connu.
+async function withClients<T extends { thread_id: string }>(userId: string, items: T[]) {
+	const clients = await clientsForThreads(userId, items.map((i) => i.thread_id));
+	return items.map((i) => {
+		const c = clients.get(i.thread_id);
+		return c ? { ...i, clients: c } : i;
+	});
+}
 
 const attachmentSummary = (a: Attachment) => ({
 	attachment_id: a.id,
@@ -742,7 +754,7 @@ async function searchThreads(ctx: ToolContext, args: Record<string, any>) {
 			query,
 			limit,
 		});
-		return { engine, total: rows.length, items: rows.map(threadSummary) };
+		return { engine, total: rows.length, items: await withClients(ctx.userId, rows.map(threadSummary)) };
 	}
 
 	if (!hits.length) return { engine, total, items: [] };
@@ -763,7 +775,7 @@ async function searchThreads(ctx: ToolContext, args: Record<string, any>) {
 		.map((h) => byKey.get(`${h.threadId}:${h.mailboxId}`) ?? byThread.get(h.threadId))
 		.filter(Boolean)
 		.map((r) => threadSummary(r!));
-	return { engine, total, items };
+	return { engine, total, items: await withClients(ctx.userId, items) };
 }
 
 // ---------------------------------------------------------------------------
@@ -917,7 +929,7 @@ export const TOOLS: ToolDefinition[] = [
 				offset,
 				has_more: hasMore,
 				next_offset: hasMore ? offset + limit : null,
-				items: rows.slice(0, limit).map(threadSummary),
+				items: await withClients(ctx.userId, rows.slice(0, limit).map(threadSummary)),
 			};
 		},
 	},
@@ -989,12 +1001,82 @@ export const TOOLS: ToolDefinition[] = [
 				await setSeen(ctx, { thread_ids: [threadId] }, true);
 				marked = true;
 			}
+			const clients = (await clientsForThreads(ctx.userId, [threadId])).get(threadId);
 			return {
 				thread_id: threadId,
 				subject: rows[rows.length - 1].message.subject ?? rows[0].message.subject ?? "",
+				...(clients ? { clients } : {}),
 				message_count: items.length,
 				marked_read: marked,
 				messages: items,
+			};
+		},
+	},
+	{
+		name: "list_clients",
+		scope: "emails:receive",
+		description:
+			"Clients (CRM companies) with threads in a professional identity, most recent activity first, with thread counts. Threads are linked to clients automatically from the external addresses of their participants.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				identity: identityProp,
+				query: { type: "string", description: "Filter on the client name (substring, case-insensitive)." },
+				limit: { type: "integer", minimum: 1, maximum: 500, description: "Default 100." },
+			},
+			additionalProperties: false,
+		},
+		handler: async (ctx, args) => {
+			const identity = await resolveIdentity(ctx.userId, str(args.identity, "identity", { optional: true }));
+			const rows = await listClients({
+				userId: ctx.userId,
+				identityId: identity.id,
+				query: str(args.query, "query", { optional: true }),
+				limit: int(args.limit, "limit", 100, 1, 500),
+			});
+			return {
+				identity: identity.value,
+				items: rows.map((r) => ({
+					client_id: r.companyId,
+					name: r.name,
+					ebp_customer_id: r.ebpCustomerId,
+					thread_count: Number(r.threadCount),
+					last_activity_at: r.lastActivityAt,
+				})),
+			};
+		},
+	},
+	{
+		name: "list_client_threads",
+		scope: "emails:receive",
+		description:
+			"Threads linked to a client (from list_clients) in a professional identity, all folders except trash and spam, most recent activity first. Paginate with offset.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				client_id: { type: "integer", description: "CRM company id (client_id from list_clients)." },
+				identity: identityProp,
+				limit: { type: "integer", minimum: 1, maximum: 100, description: "Default 25." },
+				offset: { type: "integer", minimum: 0, description: "Default 0." },
+			},
+			required: ["client_id"],
+			additionalProperties: false,
+		},
+		handler: async (ctx, args) => {
+			const identity = await resolveIdentity(ctx.userId, str(args.identity, "identity", { optional: true }));
+			const companyId = int(args.client_id, "client_id", 0, 0, 2_147_483_647);
+			if (!companyId) throw new McpToolError("'client_id' is required");
+			const limit = int(args.limit, "limit", 25, 1, 100);
+			const offset = int(args.offset, "offset", 0, 0, 1_000_000);
+			const rows = await listClientThreads({ userId: ctx.userId, identityId: identity.id, companyId, limit, offset });
+			const hasMore = rows.length > limit;
+			return {
+				identity: identity.value,
+				client_id: companyId,
+				offset,
+				has_more: hasMore,
+				next_offset: hasMore ? offset + limit : null,
+				items: rows.slice(0, limit).map(threadSummary),
 			};
 		},
 	},

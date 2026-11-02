@@ -15,6 +15,7 @@ import {
 	ChevronDown,
 	MoreVertical,
 	Clock4,
+	Building2,
 } from "lucide-react";
 import * as React from "react";
 import { Suspense, use, useEffect } from "react";
@@ -33,6 +34,7 @@ import AddNewFolder from "@/components/mailbox/default/add-new-folder";
 import { Menu, Select } from "@mantine/core";
 import DeleteMailboxFolder from "@/components/mailbox/default/delete-folder";
 import { setIdentityCollapsed } from "@/lib/actions/collapsed-identities";
+import type { IdentityClients as IdentityClientsData } from "@/lib/actions/thread-clients";
 import { IconMailFast } from "@tabler/icons-react";
 
 const ORDER: MailboxKind[] = [
@@ -181,11 +183,93 @@ function IdentityExtraCounts({
 	);
 }
 
+// ss2i : section « Clients » d'une identite pro : un dossier virtuel par societe de la
+// CRM, derniere activite en premier, nombre de fils entre parentheses (pas de non lus :
+// rien a annoncer). Au-dela de SIDEBAR_CLIENTS, un champ filtre la liste complete.
+const SIDEBAR_CLIENTS = 20;
+
+function IdentityClients({
+	identity,
+	clientsPromise,
+	workspacePublicId,
+	pathname,
+}: {
+	identity: IdentityEntity;
+	clientsPromise: Promise<IdentityClientsData[]>;
+	workspacePublicId: string | undefined;
+	pathname: string;
+}) {
+	const all = use(clientsPromise);
+	const entry = all.find((e) => e.identityId === identity.id);
+	const [filter, setFilter] = React.useState("");
+	if (!entry || entry.clients.length === 0) return null;
+
+	const base = `/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/clients`;
+	const needle = filter.trim().toLowerCase();
+	const shown = (needle ? entry.clients.filter((c) => c.name.toLowerCase().includes(needle)) : entry.clients).slice(
+		0,
+		SIDEBAR_CLIENTS,
+	);
+	const isIndex = pathname === base;
+
+	return (
+		<div className="mt-2">
+			<Link
+				href={base}
+				className={`px-1 mb-1 text-xs font-semibold flex items-center gap-1 hover:text-sidebar-foreground ${
+					isIndex ? "text-sidebar-foreground" : "text-sidebar-foreground/60"
+				}`}
+				title="All clients"
+			>
+				<Building2 className="h-3.5 w-3.5 shrink-0" />
+				<span>Clients ({entry.clients.length})</span>
+			</Link>
+			{entry.clients.length > SIDEBAR_CLIENTS && (
+				<input
+					type="text"
+					value={filter}
+					onChange={(e) => setFilter(e.target.value)}
+					placeholder="Filter clients"
+					className="mx-1.5 my-1 w-[calc(100%-12px)] rounded border bg-transparent px-2 py-1 text-xs outline-none focus:border-brand"
+				/>
+			)}
+			<div className="space-y-0.5">
+				{shown.map((c) => {
+					const href = `${base}/${c.companyId}`;
+					const active = pathname === href || pathname.startsWith(`${href}/`);
+					return (
+						<Link
+							key={c.companyId}
+							href={href}
+							title={c.name}
+							className={`mx-1.5 rounded hover:dark:bg-neutral-800 ${
+								active ? "dark:bg-neutral-800 dark:text-brand-foreground bg-brand-200 text-brand" : ""
+							} flex items-center gap-1 w-full p-1.5 pl-2`}
+						>
+							<span className="truncate font-normal text-sm">{c.name}</span>
+							<span className="ml-auto shrink-0 text-xs text-sidebar-foreground/60">{c.threadCount}</span>
+						</Link>
+					);
+				})}
+				{needle && shown.length === 0 && (
+					<div className="px-2 py-1 text-xs text-sidebar-foreground/60">No client matches</div>
+				)}
+				{!needle && entry.clients.length > SIDEBAR_CLIENTS && (
+					<Link href={base} className="mx-1.5 block p-1.5 pl-2 text-xs text-sidebar-foreground/60 hover:text-sidebar-foreground">
+						All clients ({entry.clients.length})
+					</Link>
+				)}
+			</div>
+		</div>
+	);
+}
+
 export default function IdentityMailboxesList({
 												  identityMailboxes,
 												  unreadCounts,
 												  scheduledDraftsPromise,
 												  snoozedThreadsPromise,
+												  clientsPromise,
 												  workspacePublicId,
 												  initialCollapsed = [],
 												  onComplete,
@@ -194,6 +278,8 @@ export default function IdentityMailboxesList({
 	unreadCounts: FetchMailboxUnreadCountsResult;
 	scheduledDraftsPromise: Promise<DraftMessageEntity[]>;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
+	// ss2i : clients (CRM) des identites pro, section sous les dossiers.
+	clientsPromise?: Promise<IdentityClientsData[]>;
 	workspacePublicId: string | undefined;
 	// ss2i : publicId des identites repliees (preference serveur par utilisateur).
 	initialCollapsed?: string[];
@@ -406,6 +492,17 @@ export default function IdentityMailboxesList({
 								currentSlug={currentSlug}
 							/>
 						</Suspense>
+
+						{clientsPromise && (
+							<Suspense fallback={null}>
+								<IdentityClients
+									identity={identity}
+									clientsPromise={clientsPromise}
+									workspacePublicId={workspacePublicId}
+									pathname={pathname}
+								/>
+							</Suspense>
+						)}
 						</>)}
 					</div>
 				);

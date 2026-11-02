@@ -18,6 +18,7 @@ import { getRedis } from "../lib/get-redis";
 import {s3} from "../lib/create-s3-client";
 import {PutObjectCommand} from "@aws-sdk/client-s3";
 import {upsertWorkspaceSharedContactFromMessage} from "../lib/message-parser-contacts";
+import { enqueueCrmLinks, type CrmLinkRequest } from "../lib/crm/enqueue";
 
 const SEARCH_BATCH_SIZE = 100;
 const WEBHOOK_BATCH_SIZE = 100;
@@ -39,20 +40,28 @@ type ICSJob = {
 type RulesJob = {
 	messageId: string;
 };
-
 let searchBuffer: SearchJob[] = [];
 let webhookBuffer: WebhookJob[] = [];
 let icsBuffer: ICSJob[] = [];
 let rulesBuffer: RulesJob[] = [];
+// ss2i clients : fils a rattacher aux clients de la CRM (lib/crm/enqueue.ts).
+let crmLinkBuffer: CrmLinkRequest[] = [];
 let flushTimer: any = null;
 
 async function flushBatches() {
-	if (!searchBuffer.length && !webhookBuffer.length && !icsBuffer.length && !rulesBuffer.length)
+	if (!searchBuffer.length && !webhookBuffer.length && !icsBuffer.length && !rulesBuffer.length && !crmLinkBuffer.length)
 		return;
 
 	try {
 		const { searchIngestQueue, commonWorkerQueue, davWorkerQueue } =
 			await getRedis();
+
+		// ss2i clients : un job par (fil, identite), retarde et dedoublonne.
+		if (crmLinkBuffer.length) {
+			const pending = crmLinkBuffer;
+			crmLinkBuffer = [];
+			await enqueueCrmLinks(pending);
+		}
 
 		if (searchBuffer.length) {
 			const messageIds = searchBuffer.map((job) => job.messageId);
@@ -486,6 +495,8 @@ export async function parseAndStoreEmail(
 	}
 
 	if (mode === "live") {
+		// ss2i clients : en mode backfill, la passe de rattrapage crm-link couvre l'identite.
+		crmLinkBuffer.push({ threadId: thread.id, mailboxId });
 		webhookBuffer.push({ message, rawEmail });
 		rulesBuffer.push({ messageId: message.id });
 		if ((webhookBuffer.length >= WEBHOOK_BATCH_SIZE) || (rulesBuffer.length >= RULES_BATCH_SIZE)) {

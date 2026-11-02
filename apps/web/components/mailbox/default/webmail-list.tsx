@@ -18,6 +18,7 @@ import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-ite
 import { usePathname } from "next/navigation";
 import {use} from "react";
 import { useHiddenThreads } from "@/lib/pending-moves";
+import { anySendTracked, useSendRefresh } from "@/components/mailbox/default/draft-send-status";
 
 type WebListProps = {
 	mailboxThreadPromise: Promise<{ mailboxThreads: FetchMailboxThreadsResult, labelsByThreadId: FetchMailboxThreadLabelsResult }>;
@@ -52,6 +53,9 @@ export default function WebmailList({
 	const mailboxThreads = serverThreads.filter(
 		(t) => !isHidden(String(t.mailboxId), String(t.threadId)),
 	);
+
+	// ss2i : tant qu'un brouillon de la liste est en cours d'envoi, la liste est actualisee.
+	useSendRefresh(anySendTracked(mailboxThreads.map((t) => t.draftSend)));
 
 	return (
 		<div className={onThread ? "hidden" : ""}>

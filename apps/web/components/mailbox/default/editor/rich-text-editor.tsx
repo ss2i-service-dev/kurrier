@@ -27,8 +27,9 @@ type TextEditorProps = {
 import { Temporal } from "@js-temporal/polyfill";
 import EditorHeader from "@/components/mailbox/default/editor/editor-header";
 import EditorFooter from "@/components/mailbox/default/editor/editor-footer";
-import ReplyQuotePreview from "@/components/mailbox/default/editor/reply-quote-preview";
-import { quoteScopeOf, type QuoteScope } from "@common/compose";
+import ReplyQuoteEditor from "@/components/mailbox/default/editor/reply-quote-editor";
+import { quoteModeOf, quoteScopeOf, type QuoteMode, type QuoteScope } from "@common/compose";
+import { modals } from "@mantine/modals";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import { MessageEntity } from "@db";
 import { FocusTrap } from "@mantine/core";
@@ -101,6 +102,45 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 			return saved === "thread" ? "thread" : "last";
 		});
 		const isReply = editorMode === "reply" || editorMode === "replyAll";
+		// Citation modifiable (quoteMode auto / custom / none, quoteHtml si custom) ; brouillon
+		// repris : mode et HTML enregistres.
+		const [quoteMode, setQuoteMode] = useState<QuoteMode>(() =>
+			quoteModeOf((state.draftRow?.metaData as any)?.draft?.quoteMode),
+		);
+		const [quoteHtml, setQuoteHtml] = useState<string>(
+			() => String((state.draftRow?.metaData as any)?.draft?.quoteHtml ?? ""),
+		);
+		// Changer de portee recharge la citation : confirmation (modal Mantine, pas
+		// window.confirm) quand elle a ete modifiee a la main.
+		const changeQuoteScope = (v: string) => {
+			const next = quoteScopeOf(v);
+			if (quoteMode !== "custom") return setQuoteScope(next);
+			modals.openConfirmModal({
+				title: "Reload the quoted message?",
+				children: "Changing the quote scope discards your edits to the quoted message.",
+				labels: { confirm: "Discard edits", cancel: "Keep editing" },
+				onConfirm: () => {
+					setQuoteMode("auto");
+					setQuoteHtml("");
+					setQuoteScope(next);
+				},
+			});
+		};
+		const quoteEditor =
+			isReply && state.message ? (
+				<ReplyQuoteEditor
+					message={state.message}
+					quoteScope={quoteScope}
+					timeZone={state.publicConfig?.MAIL_TIMEZONE}
+					rfcStyle={Boolean(state.rfcStyle)}
+					mode={quoteMode}
+					customHtml={quoteHtml}
+					onChange={(m, html) => {
+						setQuoteMode(m);
+						setQuoteHtml(m === "custom" ? html : "");
+					}}
+				/>
+			) : null;
 
 		return (
 			<div ref={containerRef} className="scroll-mt-[72px]">
@@ -116,18 +156,13 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 						focusOnSubject={setFocusOnSubject}
 						onModeChange={setEditorMode}
 						quoteScope={quoteScope}
-						onQuoteScopeChange={(v) => setQuoteScope(quoteScopeOf(v))}
+						onQuoteScopeChange={changeQuoteScope}
 					/>
-					{state.rfcStyle && isReply && state.message ? (
-						<ReplyQuotePreview
-							message={state.message}
-							quoteScope={quoteScope}
-							timeZone={state.publicConfig?.MAIL_TIMEZONE}
-						/>
-					) : null}
+					{state.rfcStyle ? quoteEditor : null}
 					<FocusTrap active={focusOnSubject}>
 						<RichTextEditor.Content className="prose min-h-96 text-sm p-2 leading-5" />
 					</FocusTrap>
+					{!state.rfcStyle ? quoteEditor : null}
 					<EditorFooter />
 				</RichTextEditor>
 
@@ -141,6 +176,8 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 					</>
 				) : null}
 				<input type="hidden" name="quoteScope" value={isReply ? quoteScope : ""} readOnly />
+				<input type="hidden" name="quoteMode" value={isReply && state.message ? quoteMode : ""} readOnly />
+				<input type="hidden" name="quoteHtml" value={isReply && quoteMode === "custom" ? quoteHtml : ""} readOnly />
 			</div>
 		);
 	},

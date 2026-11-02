@@ -50,6 +50,7 @@ import {
 	draftSyncJobOptions,
 	getDraftRow,
 	listDraftRows,
+	setDraftSendState,
 	upsertDraftRow,
 } from "@common";
 import { db, identities, mailboxes, messages } from "@db";
@@ -193,6 +194,14 @@ export async function sendDraft(opts: {
 	const job = await sendMailQueue.add("send-and-reconcile", payload, {
 		jobId: `undo-send-${crypto.randomUUID()}`,
 		delay,
+	});
+	// Marque « envoi en cours » : la liste Drafts et l'ouverture du brouillon l'affichent.
+	await setDraftSendState(opts.draftMessageId, {
+		pendingSend: {
+			jobId: String(job.id),
+			sendAt: new Date(Date.now() + delay).toISOString(),
+		},
+		sendError: null,
 	});
 	return { pendingSendId: String(job.id), undoMs: delay };
 }

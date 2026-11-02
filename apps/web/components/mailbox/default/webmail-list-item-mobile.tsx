@@ -27,6 +27,7 @@ type Props = {
 	labelsByThreadId: FetchMailboxThreadLabelsResult;
 };
 
+import { DraftSendBadge } from "@/components/mailbox/default/draft-send-status";
 export default function WebmailListItemMobile({
 	mailboxThreadItem,
 	activeMailbox,
@@ -180,6 +181,9 @@ export default function WebmailListItemMobile({
 						labelsByThreadId={labelsByThreadId}
 						isRead={isRead}
 					/>
+					{activeMailbox.kind === "drafts" && (
+						<DraftSendBadge state={mailboxThreadItem.draftSend} />
+					)}
 					<span className="truncate">{mailboxThreadItem.subject}</span>
 					{showSnippet && (
 						<>

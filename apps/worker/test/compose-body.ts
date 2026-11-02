@@ -10,6 +10,7 @@ import {
 	composeMessage,
 	formatQuoteDate,
 	isPlainHtml,
+	quoteOverrideOf,
 	quoteTextLines,
 	stripQuotedHtml,
 	stripQuotedText,
@@ -426,6 +427,54 @@ test("signature image seule, RFC + thread : signature de l'original retiree, son
 	const r2 = composeMessage({ mode: "reply", text: "Oui.", html: "<p>Oui.</p>", signatureHtml: IMG_SIG, orig: { ...orig, text: "Merci.\n\n> ancien" }, rfcStyle: true, quoteScope: "thread" });
 	assert.ok(r2.text.endsWith("> Merci.\n>\n>> ancien\n\nOui.\n\n-- \n"), r2.text);
 	assert.ok(r.html.endsWith(`${IMG_SIG}</div>`));
+});
+
+// --- Citation modifiee ou supprimee (quoteOverride) ---------------------------------------
+
+const ORIG_SIG = { ...orig, text: "Bonjour,\n\nPouvez-vous chiffrer ?\n\n-- \nJean Client\nACME", html: "<p>Bonjour,</p><p>Pouvez-vous chiffrer ?</p><div class=\"signature\">-- <br>Jean Client<br>ACME</div>" };
+const EDITED = "<p>Pouvez-vous chiffrer ?</p>";
+
+test("quoteOverride custom, RFC : texte « > » derive du HTML modifie, attribution gardee", () => {
+	const r = composeMessage({ mode: "reply", text: "Oui.", html: "<p>Oui.</p>", signatureHtml: SIG, orig: ORIG_SIG, rfcStyle: true, quoteOverride: { mode: "custom", html: EDITED } });
+	assert.ok(r.text.startsWith("On 02 Nov 2026, 09:15, Jean Client <jean@client.example> wrote:\n> Pouvez-vous chiffrer ?\n\nOui."), r.text);
+	assert.ok(!r.text.includes("ACME") && !r.html.includes("ACME"));
+	assert.ok(!r.text.includes("Bonjour"));
+	assert.ok(r.html.includes(`<blockquote type="cite"`) && r.html.includes(EDITED));
+	assert.ok(r.html.includes("quote-attribution") && r.html.includes("Jean Client"));
+});
+
+test("quoteOverride custom, style d'origine : enveloppe hr + attribution + blockquote", () => {
+	const r = composeMessage({ mode: "reply", text: "Oui.", html: "<p>Oui.</p>", orig: ORIG_SIG, quoteOverride: { mode: "custom", html: EDITED } });
+	assert.equal(r.text, "Oui.\n\nOn 02 Nov 2026, 09:15, Jean Client <jean@client.example> wrote:\nPouvez-vous chiffrer ?");
+	assert.ok(r.html.startsWith("<p>Oui.</p><hr>\n<p>On 02 Nov 2026, 09:15, Jean Client &lt;jean@client.example&gt; wrote:</p>\n<blockquote"), r.html);
+	assert.ok(r.html.includes(EDITED) && !r.html.includes("ACME"));
+});
+
+test("quoteOverride none : aucune attribution ni blockquote, style d'origine et RFC", () => {
+	for (const rfcStyle of [false, true]) {
+		const r = composeMessage({ mode: "reply", text: "Oui.", html: "<p>Oui.</p>", signatureHtml: SIG, orig, rfcStyle, quoteOverride: { mode: "none" } });
+		assert.equal(r.subject, "Re: Devis serveur");
+		assert.ok(!/wrote|blockquote|<hr|quote-attribution|Jean/.test(r.text + r.html), r.text + r.html);
+		assert.ok(r.text.startsWith("Oui.") && r.html.startsWith("<p>Oui.</p>"));
+		assert.ok(r.text.includes(SIG_TEXT));
+	}
+});
+
+test("quoteOverride ignore par un transfert, null et absent inchanges", () => {
+	const base = { mode: "forward" as const, text: "Voir ci-dessous.", html: "<p>Voir</p>", orig };
+	const ref = composeMessage(base);
+	assert.deepEqual(composeMessage({ ...base, quoteOverride: { mode: "none" } }), ref);
+	assert.deepEqual(composeMessage({ ...base, quoteOverride: { mode: "custom", html: EDITED } }), ref);
+	const rep = { mode: "reply" as const, text: "Oui.", html: "<p>Oui.</p>", orig, rfcStyle: true };
+	assert.deepEqual(composeMessage({ ...rep, quoteOverride: null }), composeMessage(rep));
+});
+
+test("quoteOverrideOf : champs du formulaire / brouillon", () => {
+	assert.deepEqual(quoteOverrideOf("none", ""), { mode: "none" });
+	assert.deepEqual(quoteOverrideOf("custom", "<p>x</p>"), { mode: "custom", html: "<p>x</p>" });
+	assert.equal(quoteOverrideOf("custom", "  "), null);
+	assert.equal(quoteOverrideOf("auto", "<p>x</p>"), null);
+	assert.equal(quoteOverrideOf(undefined, undefined), null);
 });
 
 if (failures) {

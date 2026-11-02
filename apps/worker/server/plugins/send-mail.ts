@@ -10,8 +10,11 @@ import {
 	composeMessage,
 	formatQuoteDate,
 	generateSnippet,
+	quoteOverrideOf,
 	quoteScopeOf,
+	setDraftSendState,
 	upsertMailboxThreadItem,
+	type QuoteOverride,
 	type QuoteScope,
 } from "@common";
 const serverConfig = getServerEnv();
@@ -70,9 +73,14 @@ export default defineNitroPlugin(async (nitroApp) => {
 				case "send-scheduled-draft":
 					await processDraft(job.data);
 					return { success: true };
-				case "send-and-reconcile":
-					await send(job.data);
+				case "send-and-reconcile": {
+					// Un refus du fournisseur rendu comme valeur (et non leve) compte comme un echec.
+					const result = await send(job.data);
+					if (result && (result as any).success === false) {
+						throw new Error(String((result as any).error ?? "Sending failed"));
+					}
 					return { success: true };
+				}
 				default:
 					return { success: true };
 			}
@@ -85,6 +93,21 @@ export default defineNitroPlugin(async (nitroApp) => {
 	});
 	worker.on("failed", (job, err) => {
 		console.error(`[send-mail] ${job?.id} failed: ${err?.message}`);
+		// Echec definitif d'un envoi issu d'un brouillon : la marque « envoi en cours » est
+		// retiree et l'erreur gardee sur le brouillon (badge « Not sent »).
+		const draftMessageId = (job?.data as any)?.draftMessageId;
+		if (
+			job?.name === "send-and-reconcile" &&
+			draftMessageId &&
+			job.attemptsMade >= (job.opts?.attempts ?? 1)
+		) {
+			setDraftSendState(String(draftMessageId), {
+				pendingSend: null,
+				sendError: { message: err?.message ?? "Sending failed", at: new Date().toISOString() },
+			}).catch((e: any) =>
+				console.error("[send-mail] sendError mark failed:", e?.message ?? e),
+			);
+		}
 	});
 
 	const getOriginalMessage = async (decodedForm: Record<any, any>) => {
@@ -298,6 +321,8 @@ export default defineNitroPlugin(async (nitroApp) => {
 				String(decodedForm.senderUserId ?? "") || mailbox.identity.ownerId;
 			const rfcStyle = await rfcStyleEnabled(mailbox.mailbox.workspaceId, senderUserId);
 			const quoteScope = quoteScopeOf(decodedForm.quoteScope);
+			// Citation modifiee dans l'editeur (quoteMode custom + quoteHtml) ou supprimee (none).
+			const quoteOverride = quoteOverrideOf(decodedForm.quoteMode, decodedForm.quoteHtml);
 
 			const { subject, text, html } = generateMailAttrs({
 				data,
@@ -305,6 +330,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 				signatureHtml,
 				rfcStyle,
 				quoteScope,
+				quoteOverride,
 			});
 
 			const mailboxIdForMessage = String(decodedForm.sentMailboxId);
@@ -493,12 +519,14 @@ export default defineNitroPlugin(async (nitroApp) => {
 		signatureHtml,
 		rfcStyle,
 		quoteScope,
+		quoteOverride,
 	}: {
 		data: MailComposeInput;
 		orig: GetOriginalMessageType | null;
 		signatureHtml?: string;
 		rfcStyle: boolean;
 		quoteScope: QuoteScope;
+		quoteOverride: QuoteOverride;
 	}) => {
 		const origMsg = orig?.message ?? null;
 
@@ -519,6 +547,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 			signatureHtml,
 			rfcStyle,
 			quoteScope,
+			quoteOverride,
 			orig: origMsg
 				? {
 					html: origMsg.html,

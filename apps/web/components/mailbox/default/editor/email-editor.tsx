@@ -84,6 +84,8 @@ function readForm(form: HTMLFormElement) {
 		attachments: str("attachments"),
 		includeSignature: str("includeSignature"),
 		quoteScope: str("quoteScope") || null,
+		quoteMode: str("quoteMode") || null,
+		quoteHtml: str("quoteHtml") || null,
 	};
 	const empty =
 		!payload.to.trim() &&
@@ -102,6 +104,8 @@ function readForm(form: HTMLFormElement) {
 		payload.attachments,
 		payload.includeSignature,
 		payload.quoteScope,
+		payload.quoteMode,
+		payload.quoteHtml,
 	]);
 	return { payload, key, empty };
 }
@@ -323,10 +327,12 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 						description: result.error,
 						position: "bottom-left",
 					});
+					// Le badge « Not sent » du brouillon.
+					router.refresh();
 					return;
 				}
 				// Le brouillon envoye disparait du dossier Drafts : on rafraichit.
-				if (submittedDraftId.current) router.refresh();
+				router.refresh();
 			};
 			const timer = setTimeout(finish, undoMs);
 

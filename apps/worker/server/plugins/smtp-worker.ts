@@ -20,6 +20,8 @@ import { discoverMailboxes } from "../../lib/imap/backfill/discover/discover-mai
 import {startBackfillForIdentity} from "../../lib/imap/backfill/backfill-full";
 import {db, mailboxSync} from "@db";
 import { eq, gt } from "drizzle-orm";
+import { DRAFT_DELETE_JOB, DRAFT_SYNC_JOB } from "@common";
+import { deleteDraftFromImap, syncDraftToImap } from "../../lib/drafts/draft-service";
 
 export default defineNitroPlugin(async (nitroApp) => {
 	console.info("**********************SMTP-WORKER***************************");
@@ -111,6 +113,11 @@ export default defineNitroPlugin(async (nitroApp) => {
 				);
 			} else if (job.name === "mail:delete-permanent") {
 				await deleteMail(job.data, imapInstances);
+			} else if (job.name === DRAFT_SYNC_JOB) {
+				// ss2i : brouillons, version IMAP (cf. lib/drafts/draft-service.ts).
+				await syncDraftToImap(job.data, imapInstances);
+			} else if (job.name === DRAFT_DELETE_JOB) {
+				await deleteDraftFromImap(job.data, imapInstances);
 			} else if (job.name === "smtp:append:sent") {
 			} else if (job.name === "imap:backfill-account") {
 				// ss2i : simple relais vers la file du rattrapage (le web continue de poster ici).

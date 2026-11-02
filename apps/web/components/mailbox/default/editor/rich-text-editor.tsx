@@ -54,6 +54,12 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 			immediatelyRender: false,
 			parseOptions: { preserveWhitespace: "full" },
 			extensions: [StarterKit, Link, Image],
+			// ss2i : reprise d'un brouillon, le corps enregistre est le contenu initial.
+			content: defaultValue,
+			onCreate: ({ editor }) => {
+				setTextValue(editor.getText().trim());
+				setValue(editor.getHTML().trim());
+			},
 			onUpdate: ({ editor }) => {
 				setTextValue(editor.getText().trim());
 				setValue(editor.getHTML().trim());

@@ -36,6 +36,7 @@ import { getRedis } from "../../lib/get-redis";
 import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import {s3} from "../../lib/create-s3-client";
 import { upsertContactsFromOutgoing } from "../../lib/outgoing-contacts";
+import { deleteDraft } from "../../lib/drafts/draft-service";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 // import MailComposer from "nodemailer/lib/mail-composer";
 const connection = new IORedis({
@@ -178,7 +179,31 @@ export default defineNitroPlugin(async (nitroApp) => {
 		}
 	};
 
+	// ss2i : un envoi parti d'un brouillon le supprime (base, puis IMAP par le job
+	// draft:delete). Un envoi annule ou en echec le laisse en place.
 	const send = async (decodedForm: Record<any, unknown>) => {
+		const result = await sendTx(decodedForm);
+		if (result?.success && decodedForm.draftMessageId) {
+			try {
+				const [ident] = await db
+					.select({ id: identities.id, ownerId: identities.ownerId })
+					.from(identities)
+					.where(eq(identities.id, String(decodedForm.identityId ?? "")));
+				if (ident) {
+					await deleteDraft({
+						ownerId: ident.ownerId,
+						identityId: ident.id,
+						draftMessageId: String(decodedForm.draftMessageId),
+					});
+				}
+			} catch (err: any) {
+				console.error("[send-mail] draft cleanup failed:", err?.message ?? err);
+			}
+		}
+		return result;
+	};
+
+	const sendTx = async (decodedForm: Record<any, unknown>) => {
 		return await db.transaction(async (tx) => {
 			const [mailbox] = await tx
 				.select({

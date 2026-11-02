@@ -16,6 +16,7 @@ import { useMediaQuery } from "@mantine/hooks";
 import EmailHeaderContacts from "@/components/mailbox/default/editor/email-header-contacts";
 import {FetchIdentityMailboxListResult} from "@/lib/actions/mailbox";
 import {useParams} from "next/navigation";
+import { addressObjToList } from "@common/mail-client";
 
 function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 	const { state } = useDynamicContext<{
@@ -23,10 +24,31 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 		message: MessageEntity;
 		showEditorMode: "reply" | "replyAll" | "forward" | "compose";
 		identityMailboxes: FetchIdentityMailboxListResult;
+		draftRow?: MessageEntity | null;
 	}>();
 
 	type Mode = "reply" | "replyAll" | "forward" | "compose";
-	const [mode, setMode] = useState<Mode>(state.showEditorMode);
+
+	// ss2i : brouillon repris, les champs partent de ce qui a ete enregistre (tant que le
+	// mode n'est pas change) ; sinon des destinataires calcules depuis le message d'origine.
+	const draftRow = state.draftRow ?? null;
+	const draftValues = useMemo(
+		() => ({
+			to: addressObjToList(draftRow?.to),
+			cc: addressObjToList(draftRow?.cc),
+			bcc: addressObjToList(draftRow?.bcc),
+		}),
+		[draftRow],
+	);
+	const [initialMode] = useState<Mode>(() => {
+		if (!draftRow) return state.showEditorMode;
+		const m = (draftRow.metaData as any)?.draft?.mode;
+		if (m === "reply" && state.message) return draftValues.cc.length ? "replyAll" : "reply";
+		if (m === "forward" && state.message) return "forward";
+		return "compose";
+	});
+	const [mode, setMode] = useState<Mode>(initialMode);
+	const fromDraft = !!draftRow && mode === initialMode;
 
 	// Destinataires calcules depuis le message d'origine : Reply-To ou expediteur
 	// en « To » ; en « Reply all », les autres destinataires passent en « Cc »,
@@ -40,16 +62,22 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 		[state.message, state.identityMailboxes],
 	);
 	const toValues = useMemo(
-		() => (mode === "forward" || mode === "compose" ? [] : recipients.to),
-		[mode, recipients],
+		() =>
+			fromDraft
+				? draftValues.to
+				: mode === "forward" || mode === "compose"
+					? []
+					: recipients.to,
+		[fromDraft, draftValues, mode, recipients],
 	);
 	const ccValues = useMemo(
-		() => (mode === "replyAll" ? recipients.cc : []),
-		[mode, recipients],
+		() => (fromDraft ? draftValues.cc : mode === "replyAll" ? recipients.cc : []),
+		[fromDraft, draftValues, mode, recipients],
 	);
+	const bccValues = fromDraft ? draftValues.bcc : [];
 
 	const [ccActive, setCcActive] = useState(ccValues.length > 0);
-	const [bccActive, setBccActive] = useState(false);
+	const [bccActive, setBccActive] = useState(bccValues.length > 0);
 	useEffect(() => {
 		if (ccValues.length > 0) setCcActive(true);
 	}, [ccValues]);
@@ -95,9 +123,18 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 		return cleaned;
 	}, [state.message, mode]);
 
-	const [subject, setSubject] = useState(computedSubject);
+	const [subject, setSubject] = useState(
+		draftRow ? (draftRow.subject ?? "") : computedSubject,
+	);
 
+	// L'objet enregistre du brouillon prime au premier rendu ; un changement de mode
+	// recalcule ensuite l'objet comme d'habitude.
+	const keepDraftSubject = useRef(!!draftRow);
 	useEffect(() => {
+		if (keepDraftSubject.current) {
+			keepDraftSubject.current = false;
+			return;
+		}
 		setSubject(computedSubject);
 	}, [computedSubject]);
 
@@ -213,6 +250,7 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 					</span>
 					<EmailHeaderContacts
 						name={"bcc"}
+						defaultValues={bccValues}
 						onChange={(value) => {
 							if (value.length > 0) {
 								setSubjectFocus(true);
@@ -322,6 +360,7 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 								<span className="text-sm text-muted-foreground">Bcc</span>
 								<EmailHeaderContacts
 									name={"bcc"}
+									defaultValues={bccValues}
 									onChange={(value) => {
 										if (value.length > 0) {
 											setSubjectFocus(true);

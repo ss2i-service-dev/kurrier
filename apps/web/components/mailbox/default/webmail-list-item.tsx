@@ -196,7 +196,11 @@ export default function WebmailListItem({
 		return shown.join(", ") + suffix;
 	}
 
-	const allNames = getAllNames(mailboxThreadItem.participants);
+	// ss2i : dans le dossier Drafts, les destinataires (« To: ... ») et non l'expediteur.
+	const isDrafts = activeMailbox.kind === "drafts";
+	const allNames = isDrafts
+		? `To: ${getAllNames({ to: mailboxThreadItem.participants?.to, cc: mailboxThreadItem.participants?.cc, bcc: mailboxThreadItem.participants?.bcc }) || "(no recipient)"}`
+		: getAllNames(mailboxThreadItem.participants);
 
 	const canMarkAsRead = mailboxThreadItem.unreadCount > 0;
 	const canMarkAsUnread =

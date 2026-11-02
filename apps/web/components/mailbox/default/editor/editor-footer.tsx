@@ -3,8 +3,9 @@
 import React, { useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { Checkbox } from "@mantine/core";
-import { ActionIcon, Button, Popover, Progress } from "@mantine/core";
-import { Baseline, Paperclip, X as IconX } from "lucide-react";
+import { ActionIcon, Button, Popover, Progress, Tooltip } from "@mantine/core";
+import { Baseline, Paperclip, Save, Trash2, X as IconX } from "lucide-react";
+import type { DraftContext } from "@/components/mailbox/default/editor/email-editor";
 import { RichTextEditor } from "@mantine/tiptap";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import { v4 as uuidv4 } from "uuid";
@@ -36,9 +37,19 @@ export default function EditorFooter() {
 		isPending: boolean;
 		message: MessageEntity;
 		signatureHtml?: string;
+		draftRow?: MessageEntity | null;
+		draft?: DraftContext;
 	}>();
 
-	const [includeSignature, setIncludeSignature] = useState(true);
+	// ss2i : brouillon repris, pieces jointes et choix de signature enregistres.
+	const draftMeta = (state.draftRow?.metaData as any)?.draft ?? null;
+	const initialAttachments: any[] = Array.isArray(draftMeta?.attachments)
+		? draftMeta.attachments
+		: [];
+
+	const [includeSignature, setIncludeSignature] = useState(
+		draftMeta ? draftMeta.includeSignature !== false : true,
+	);
 	const signaturePreview = useMemo(
 		() =>
 			state?.signatureHtml && typeof window !== "undefined"
@@ -48,8 +59,15 @@ export default function EditorFooter() {
 	);
 
 	const inputRef = useRef<HTMLInputElement | null>(null);
-	const [uploads, setUploads] = useState<UploadItem[]>([]);
-	const [attachments, setAttachments] = useState<any[]>([]);
+	const [uploads, setUploads] = useState<UploadItem[]>(() =>
+		initialAttachments.map((a) => ({
+			name: String(a.filenameOriginal || "attachment"),
+			size: Number(a.sizeBytes ?? 0),
+			progress: 100,
+			status: "done" as const,
+		})),
+	);
+	const [attachments, setAttachments] = useState<any[]>(initialAttachments);
 
 	const newMessageId = useRef(uuidv4());
 
@@ -152,7 +170,22 @@ export default function EditorFooter() {
 
 	const removeUpload = (name: string) => {
 		setUploads((prev) => prev.filter((u) => u.name !== name));
+		// La piece retiree ne doit plus partir avec le message ni rester dans le brouillon.
+		setAttachments((prev) => prev.filter((a) => a.filenameOriginal !== name));
 	};
+
+	const draft = state.draft;
+	const draftLabel =
+		draft?.status.state === "saving"
+			? "Saving…"
+			: draft?.status.state === "error"
+				? "Not saved"
+				: draft?.status.state === "saved" && draft.status.savedAt
+					? `Saved ${new Date(draft.status.savedAt).toLocaleTimeString(undefined, {
+							hour: "2-digit",
+							minute: "2-digit",
+						})}`
+					: "";
 	console.log("isPending", state)
 
 	return (
@@ -309,6 +342,38 @@ export default function EditorFooter() {
 				>
 					<Paperclip size={18} />
 				</ActionIcon>
+
+				{draft && (
+					<div className="ml-auto flex items-center gap-1 text-xs text-neutral-500">
+						<span
+							className={draft.status.state === "error" ? "text-red-600" : undefined}
+							title={draft.status.error}
+						>
+							{draftLabel}
+						</span>
+						<Tooltip label="Save draft (Ctrl+S)" withArrow>
+							<ActionIcon
+								variant="transparent"
+								aria-label="Save draft"
+								onClick={() => void draft.save()}
+							>
+								<Save size={18} />
+							</ActionIcon>
+						</Tooltip>
+						{draft.id && (
+							<Tooltip label="Discard draft" withArrow>
+								<ActionIcon
+									variant="transparent"
+									color="red"
+									aria-label="Discard draft"
+									onClick={() => void draft.discard()}
+								>
+									<Trash2 size={18} />
+								</ActionIcon>
+							</Tooltip>
+						)}
+					</div>
+				)}
 
 				{state?.message && (
 					<input

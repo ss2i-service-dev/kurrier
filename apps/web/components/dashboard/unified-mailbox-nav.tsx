@@ -85,17 +85,15 @@ export function UnifiedMailboxNav({
 		custom: Folder,
 	};
 
-	const system = unifiedMailboxes
-		.filter((m) => m.mailbox.kind !== "drafts")
-		.sort((a, b) => {
-			const ai = orderIndex(a.mailbox.kind);
-			const bi = orderIndex(b.mailbox.kind);
-			if (ai !== bi) return ai - bi;
-			// tie-break: alphabetical for customs (same index)
-			const an = (a.mailbox.name ?? a.mailbox.slug ?? "").toLowerCase();
-			const bn = (b.mailbox.name ?? b.mailbox.slug ?? "").toLowerCase();
-			return an.localeCompare(bn);
-		});
+	const system = unifiedMailboxes.sort((a, b) => {
+		const ai = orderIndex(a.mailbox.kind);
+		const bi = orderIndex(b.mailbox.kind);
+		if (ai !== bi) return ai - bi;
+		// tie-break: alphabetical for customs (same index)
+		const an = (a.mailbox.name ?? a.mailbox.slug ?? "").toLowerCase();
+		const bn = (b.mailbox.name ?? b.mailbox.slug ?? "").toLowerCase();
+		return an.localeCompare(bn);
+	});
 
 	const Item = ({
 		m,

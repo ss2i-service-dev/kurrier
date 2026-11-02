@@ -28,7 +28,8 @@ function MoveToFolder({
 			(im) => im.identity.publicId === params.identityPublicId,
 		) ?? null;
 
-	const mailboxes = entry?.mailboxes ?? [];
+	// ss2i : le dossier Drafts est visible dans la barre laterale mais n'est pas une destination.
+	const mailboxes = (entry?.mailboxes ?? []).filter((m) => m.kind !== "drafts");
 	const { options: mailboxOptions } = useMailboxOptions({
 		mailboxes,
 		identityLabel: entry?.identity?.value ?? "Folders",

@@ -18,7 +18,18 @@ import {FetchIdentityMailboxListResult} from "@/lib/actions/mailbox";
 import {useParams} from "next/navigation";
 import { addressObjToList } from "@common/mail-client";
 
-function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
+function EditorHeader({
+	focusOnSubject,
+	onModeChange,
+	quoteScope = "last",
+	onQuoteScopeChange,
+}: {
+	focusOnSubject?: () => void;
+	// ss2i : le mode et la portee de la citation remontent a l'editeur (apercu, formulaire).
+	onModeChange?: (mode: "reply" | "replyAll" | "forward" | "compose") => void;
+	quoteScope?: "last" | "thread";
+	onQuoteScopeChange?: (scope: string) => void;
+}) {
 	const { state } = useDynamicContext<{
 		isPending: boolean;
 		message: MessageEntity;
@@ -49,6 +60,15 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 	});
 	const [mode, setMode] = useState<Mode>(initialMode);
 	const fromDraft = !!draftRow && mode === initialMode;
+	useEffect(() => {
+		onModeChange?.(mode);
+	}, [mode, onModeChange]);
+	// ss2i : portee de la citation d'une reponse, modifiable avant l'envoi.
+	const isReplyMode = mode === "reply" || mode === "replyAll";
+	const quoteOptions = [
+		{ value: "last", label: "Quote last message" },
+		{ value: "thread", label: "Quote whole thread" },
+	];
 
 	// Destinataires calcules depuis le message d'origine : Reply-To ou expediteur
 	// en « To » ; en « Reply all », les autres destinataires passent en « Cc »,
@@ -179,6 +199,16 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 								zIndex: 2000,
 							}}
 						/>
+						{isReplyMode && (
+							<Select
+								value={quoteScope}
+								onChange={(v) => v && onQuoteScopeChange?.(v)}
+								data={quoteOptions}
+								variant="unstyled"
+								className="text-sm"
+								comboboxProps={{ withinPortal: true, position: "bottom", offset: 8, zIndex: 2000 }}
+							/>
+						)}
 					</div>
 				) : null}
 				<input type="hidden" name="mode" value={serverMode} />
@@ -318,6 +348,18 @@ function EditorHeader({ focusOnSubject }: { focusOnSubject?: () => void }) {
 								offset: 12,
 								zIndex: 2000,
 							}}
+						/>
+					</div>
+				) : null}
+				{state.message && isReplyMode ? (
+					<div className="flex-shrink-0">
+						<Select
+							value={quoteScope}
+							onChange={(v) => v && onQuoteScopeChange?.(v)}
+							data={quoteOptions}
+							variant="unstyled"
+							w={190}
+							comboboxProps={{ withinPortal: true, position: "bottom", offset: 12, zIndex: 2000 }}
 						/>
 					</div>
 				) : null}

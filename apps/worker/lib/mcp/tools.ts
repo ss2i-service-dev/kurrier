@@ -26,7 +26,8 @@ import {
 	threadPlacements,
 	unreadCountsByMailbox,
 } from "./access";
-import { htmlToText, messageBodyText, stripQuotedText, truncate } from "./html-text";
+import { htmlToText, messageBodyText, truncate } from "./html-text";
+import { type QuoteScope, stripQuotedText } from "@common";
 
 // Registre des outils de l'MCP courrier. Chaque outil recoit l'utilisateur authentifie
 // et des arguments deja validés par son schema JSON (cote client) ; il revalide ce
@@ -290,6 +291,7 @@ async function sendViaQueue(opts: {
 	mode: "new" | "reply" | "forward";
 	originalMessageId?: string;
 	includeSignature: boolean;
+	quoteScope?: QuoteScope;
 	attachments: unknown;
 	extraAttachments?: UploadedAttachment[];
 }) {
@@ -322,6 +324,7 @@ async function sendViaQueue(opts: {
 		mode: opts.mode,
 		originalMessageId: opts.originalMessageId,
 		includeSignature: opts.includeSignature ? "true" : "false",
+		quoteScope: opts.quoteScope,
 		newMessageId,
 		apiMessageId: newMessageId,
 		attachments: JSON.stringify(attachments),
@@ -425,6 +428,7 @@ async function saveDraftViaService(opts: {
 	mode: "new" | "reply" | "forward";
 	originalMessageId?: string;
 	includeSignature: boolean;
+	quoteScope?: QuoteScope;
 	attachments: unknown;
 	extraAttachments?: UploadedAttachment[];
 }) {
@@ -454,6 +458,7 @@ async function saveDraftViaService(opts: {
 			originalMessageId: opts.originalMessageId ?? null,
 			attachments,
 			includeSignature: opts.includeSignature,
+			quoteScope: opts.quoteScope,
 		});
 	} catch (err: any) {
 		throw new McpToolError(err?.message ?? "Draft could not be saved");
@@ -1049,7 +1054,7 @@ export const TOOLS: ToolDefinition[] = [
 		name: "reply",
 		scope: (args) => (args.as_draft ? "emails:receive" : "emails:send"),
 		description:
-			"Reply to a message (by message_id from get_thread). Recipients, subject (Re:), quoting, In-Reply-To and References are computed like the web editor. reply_all adds the other recipients in cc. With as_draft, saves a draft attached to the thread for the user to review in courrier instead of sending.",
+			"Reply to a message (by message_id from get_thread). Recipients, subject (Re:), quoting, In-Reply-To and References are computed like the web editor. quote chooses what is quoted: 'last' (default) quotes only the message replied to, without the history it quotes itself; 'thread' quotes it whole. Where the body goes depends on the user's composing setting: above the quote by default, or below it with the '-- ' signature separator when the user enabled the RFC style. reply_all adds the other recipients in cc. With as_draft, saves a draft attached to the thread for the user to review in courrier instead of sending.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -1058,6 +1063,11 @@ export const TOOLS: ToolDefinition[] = [
 				to: { type: "array", items: { type: "string" }, description: "Override the computed recipients." },
 				cc: { type: "array", items: { type: "string" }, description: "Extra cc recipients." },
 				bcc: { type: "array", items: { type: "string" } },
+				quote: {
+					type: "string",
+					enum: ["last", "thread"],
+					description: "What to quote: 'last' (default) the message only, 'thread' the message with the history it quotes.",
+				},
 				as_draft: asDraftProp,
 				...bodyProps,
 			},
@@ -1087,6 +1097,7 @@ export const TOOLS: ToolDefinition[] = [
 				mode: "reply" as const,
 				originalMessageId: message.id,
 				includeSignature: bool(args.include_signature, true),
+				quoteScope: args.quote === "thread" ? ("thread" as const) : ("last" as const),
 				attachments: args.attachments,
 			};
 			if (bool(args.as_draft, false)) return saveDraftViaService(outgoing);
@@ -1192,6 +1203,7 @@ export const TOOLS: ToolDefinition[] = [
 				body_text: detail.text || htmlToText(detail.html),
 				body_html: detail.html,
 				include_signature: detail.includeSignature,
+				quote: detail.quoteScope ?? "thread",
 				attachments: detail.attachments.map((a) => ({
 					filename: a.filenameOriginal,
 					content_type: a.contentType,
@@ -1274,6 +1286,7 @@ export const TOOLS: ToolDefinition[] = [
 				mode: current.mode === "reply" || current.mode === "forward" ? current.mode : "new",
 				originalMessageId: current.originalMessageId ?? undefined,
 				includeSignature: args.include_signature === undefined ? current.includeSignature : bool(args.include_signature, true),
+				quoteScope: current.quoteScope ?? undefined,
 				attachments: args.attachments,
 				extraAttachments: current.attachments.map((a) => ({
 					path: a.path,

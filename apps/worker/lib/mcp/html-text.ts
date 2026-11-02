@@ -100,29 +100,8 @@ export function messageBodyText(message: {
 	return html ? htmlToText(html) : "";
 }
 
-// Coupe les citations usuelles (« Le ... a ecrit : », « On ... wrote: », lignes « > »,
-// separateur « -----Original Message----- ») pour ne garder que la partie nouvelle.
-export function stripQuotedText(text: string): string {
-	const lines = text.split("\n");
-	const markers = [
-		/^On .{3,200} wrote:\s*$/i,
-		/^Le .{3,200} a (e|é)crit\s*:\s*$/i,
-		/^-{2,}\s*(Original|Forwarded) Message\s*-{2,}\s*$/i,
-		/^_{10,}\s*$/,
-		/^De\s*:\s.+$/i,
-		/^From:\s.+$/i,
-	];
-	let cut = lines.length;
-	for (let i = 0; i < lines.length; i++) {
-		const l = lines[i].trim();
-		if (l.startsWith(">") || markers.some((re) => re.test(l))) {
-			cut = i;
-			break;
-		}
-	}
-	const kept = lines.slice(0, cut).join("\n").trim();
-	return kept || text;
-}
+// La coupe des citations (stripQuotedText) vit dans packages/common/src/compose.ts,
+// partagee avec l'assemblage des reponses (portee « dernier message seulement »).
 
 export function truncate(text: string, max: number) {
 	if (text.length <= max) return { text, truncated: false };

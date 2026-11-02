@@ -27,6 +27,8 @@ type TextEditorProps = {
 import { Temporal } from "@js-temporal/polyfill";
 import EditorHeader from "@/components/mailbox/default/editor/editor-header";
 import EditorFooter from "@/components/mailbox/default/editor/editor-footer";
+import ReplyQuotePreview from "@/components/mailbox/default/editor/reply-quote-preview";
+import { quoteScopeOf, type QuoteScope } from "@common/compose";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import { MessageEntity } from "@db";
 import { FocusTrap } from "@mantine/core";
@@ -83,9 +85,21 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 			isPending: boolean;
 			message: MessageEntity;
 			showEditorMode: "reply" | "forward" | "compose";
+			rfcStyle?: boolean;
+			draftRow?: MessageEntity | null;
 		}>();
 
 		const [focusOnSubject, setFocusOnSubject] = useState<boolean>(false);
+
+		// ss2i : mode courant (choisi dans l'en-tete) et portee de la citation d'une reponse
+		// (dernier message seulement par defaut ; brouillon repris : son choix enregistre).
+		// La portee part avec le formulaire (quoteScope) jusqu'au worker qui cite.
+		const [editorMode, setEditorMode] = useState<string>(state.showEditorMode);
+		const [quoteScope, setQuoteScope] = useState<QuoteScope>(() => {
+			const saved = (state.draftRow?.metaData as any)?.draft?.quoteScope;
+			return saved === "thread" ? "thread" : "last";
+		});
+		const isReply = editorMode === "reply" || editorMode === "replyAll";
 
 		return (
 			<div ref={containerRef} className="scroll-mt-[72px]">
@@ -97,7 +111,15 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 							: "!border !rounded-t-md !border-neutral-200"
 					}
 				>
-					<EditorHeader focusOnSubject={setFocusOnSubject} />
+					<EditorHeader
+						focusOnSubject={setFocusOnSubject}
+						onModeChange={setEditorMode}
+						quoteScope={quoteScope}
+						onQuoteScopeChange={(v) => setQuoteScope(quoteScopeOf(v))}
+					/>
+					{state.rfcStyle && isReply && state.message ? (
+						<ReplyQuotePreview message={state.message} quoteScope={quoteScope} />
+					) : null}
 					<FocusTrap active={focusOnSubject}>
 						<RichTextEditor.Content className="prose min-h-96 text-sm p-2 leading-5" />
 					</FocusTrap>
@@ -113,6 +135,7 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 						<input type="hidden" name={`text`} value={textValue} readOnly />
 					</>
 				) : null}
+				<input type="hidden" name="quoteScope" value={isReply ? quoteScope : ""} readOnly />
 			</div>
 		);
 	},

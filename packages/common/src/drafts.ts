@@ -9,6 +9,7 @@ import {
 import type { AddressObjectJSON } from "@schema";
 import { and, desc, eq, notExists, sql } from "drizzle-orm";
 import { generateSnippet, upsertMailboxThreadItem } from "./mail";
+import type { QuoteScope } from "./compose";
 import { addressObjToList } from "./mail-client";
 
 export { addressObjToList };
@@ -75,6 +76,8 @@ export type DraftMeta = {
 	originalMessageId: string | null;
 	attachments: DraftAttachment[];
 	includeSignature: boolean;
+	// Portee de la citation d'une reponse (cf. compose.ts) ; absente = message entier.
+	quoteScope?: QuoteScope;
 	revision: number;
 	imapRevision?: number;
 	savedAt?: string;
@@ -95,6 +98,7 @@ export type DraftInput = {
 	originalMessageId?: string | null;
 	attachments?: DraftAttachment[] | string | null;
 	includeSignature?: boolean | string | null;
+	quoteScope?: QuoteScope | string | null;
 };
 
 // Ce qu'il faut pour retrouver la version IMAP d'un brouillon une fois la ligne supprimee.
@@ -269,6 +273,10 @@ export async function upsertDraftRow(input: DraftInput) {
 		input.includeSignature == null
 			? (prevMeta?.includeSignature ?? true)
 			: input.includeSignature !== false && input.includeSignature !== "false";
+	const quoteScope: QuoteScope | undefined =
+		input.quoteScope === "last" || input.quoteScope === "thread"
+			? input.quoteScope
+			: prevMeta?.quoteScope;
 	const html = input.html ?? "";
 	const text = input.text ?? "";
 	const subject = (input.subject ?? "").trim();
@@ -283,6 +291,7 @@ export async function upsertDraftRow(input: DraftInput) {
 		originalMessageId,
 		attachments,
 		includeSignature,
+		...(quoteScope ? { quoteScope } : {}),
 		revision,
 		savedAt: now.toISOString(),
 	};
@@ -554,6 +563,7 @@ export async function draftSendPayload(opts: {
 		originalMessageId: meta?.originalMessageId ?? undefined,
 		attachments: JSON.stringify(meta?.attachments ?? []),
 		includeSignature: meta?.includeSignature === false ? "false" : "true",
+		quoteScope: meta?.quoteScope,
 		newMessageId: crypto.randomUUID(),
 		draftMessageId: row.id,
 	};

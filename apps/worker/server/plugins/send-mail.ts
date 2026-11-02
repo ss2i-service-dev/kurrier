@@ -6,7 +6,13 @@ import {
 	MailComposeInput,
 } from "@schema";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
-import { generateSnippet, upsertMailboxThreadItem } from "@common";
+import {
+	composeMessage,
+	generateSnippet,
+	quoteScopeOf,
+	upsertMailboxThreadItem,
+	type QuoteScope,
+} from "@common";
 const serverConfig = getServerEnv();
 import IORedis from "ioredis";
 import { Worker } from "bullmq";
@@ -26,10 +32,11 @@ import {
 	smtpAccounts,
 	smtpAccountSecrets,
 	threads,
+	workspaces,
 } from "@db";
 import { createMailer } from "@providers";
 import { toArray } from "drizzle-orm/mysql-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import addressparser from "addressparser";
 import { PgTransaction } from "drizzle-orm/pg-core";
 import { getRedis } from "../../lib/get-redis";
@@ -275,10 +282,21 @@ export default defineNitroPlugin(async (nitroApp) => {
 					? String((mailbox.identity.metaData as any)?.signatureHtml ?? "").trim()
 					: "";
 
-			const { subject, text, html } = await generateMailAttrs({
+			// ss2i : style RFC (reponse sous la citation, « -- » devant la signature), option
+			// de l'utilisateur qui envoie (workspaces.meta.ss2iRfcStyle[userId], cf.
+			// apps/web/lib/actions/rfc-style.ts). Portee de la citation choisie dans l'editeur ;
+			// absente (job deja en file) = message entier.
+			const senderUserId =
+				String(decodedForm.senderUserId ?? "") || mailbox.identity.ownerId;
+			const rfcStyle = await rfcStyleEnabled(mailbox.mailbox.workspaceId, senderUserId);
+			const quoteScope = quoteScopeOf(decodedForm.quoteScope);
+
+			const { subject, text, html } = generateMailAttrs({
 				data,
 				orig: origRow,
 				signatureHtml,
+				rfcStyle,
+				quoteScope,
 			});
 
 			const mailboxIdForMessage = String(decodedForm.sentMailboxId);
@@ -327,7 +345,8 @@ export default defineNitroPlugin(async (nitroApp) => {
 				from: mailbox.identity.value,
 				cc: toAddressObj(data?.cc || []),
 				bcc: toAddressObj(data.bcc || []),
-				snippet: generateSnippet(text || html || ""),
+				// En style RFC le texte commence par la citation : l'extrait reste la reponse.
+				snippet: generateSnippet((rfcStyle && data.text) || text || html || ""),
 				subject,
 				text,
 				html,
@@ -440,60 +459,45 @@ export default defineNitroPlugin(async (nitroApp) => {
 		});
 	};
 
-	// Signature de l'identite : apres le corps, avant la citation du message
-	// d'origine. Le HTML est repris tel quel (tableaux, styles en ligne) ; le texte
-	// brut en est une version depouillee de ses balises.
-	const signatureBlocks = (signatureHtml?: string) => {
-		const sig = (signatureHtml ?? "").trim();
-		if (!sig) return { html: "", text: "" };
-		const text = sig
-			.replace(/<br\s*\/?>/gi, "\n")
-			.replace(/<\/(p|div|tr|li|h[1-6])>/gi, "\n")
-			.replace(/<[^>]+>/g, "")
-			.replace(/&nbsp;/g, " ")
-			.replace(/&amp;/g, "&")
-			.replace(/&lt;/g, "<")
-			.replace(/&gt;/g, ">")
-			.replace(/\n{3,}/g, "\n\n")
-			.trim();
-		return {
-			html: `<div class="signature" style="margin-top:1em">${sig}</div>`,
-			text: `\n\n-- \n${text}`,
-		};
-	};
+	// Option « style RFC » de l'utilisateur qui envoie, lue dans le meta du workspace
+	// (meme rangement que les autres options par utilisateur : ss2iUnreadPanel, ss2iListPreview).
+	async function rfcStyleEnabled(workspaceId: string, userId: string) {
+		try {
+			const [row] = await db
+				.select({
+					on: sql<boolean>`coalesce((${workspaces.metaData}->'ss2iRfcStyle'->>${userId}::text)::boolean, false)`,
+				})
+				.from(workspaces)
+				.where(eq(workspaces.id, workspaceId))
+				.limit(1);
+			return Boolean(row?.on);
+		} catch (err: any) {
+			console.error("[send-mail] rfc style lookup failed:", err?.message ?? err);
+			return false;
+		}
+	}
 
-	const generateMailAttrs = async ({
-										 data,
-										 orig,
-										 signatureHtml,
-									 }: {
+	// Objet, texte et HTML du message a envoyer : l'assemblage (citation, signature,
+	// ordre) est dans packages/common/src/compose.ts, partage avec l'editeur web.
+	const generateMailAttrs = ({
+		data,
+		orig,
+		signatureHtml,
+		rfcStyle,
+		quoteScope,
+	}: {
 		data: MailComposeInput;
 		orig: GetOriginalMessageType | null;
 		signatureHtml?: string;
+		rfcStyle: boolean;
+		quoteScope: QuoteScope;
 	}) => {
-		const signature = signatureBlocks(signatureHtml);
-		if (!orig) {
-			return {
-				subject: data.subject ?? "(no subject)",
-				text: `${data.text ?? ""}${signature.text}`,
-				html: `${data.html ?? ""}${signature.html}`,
-			};
-		}
-		const isReply = data.mode === "reply";
-		const isForward = data.mode === "forward";
-		const hasOrig = Boolean(orig?.message);
-
 		const origMsg = orig?.message ?? null;
-
-		const fromNameStr = hasOrig ? getMessageName(origMsg!, "from") || "" : "";
-		const fromAddrStr = hasOrig
-			? getMessageAddress(origMsg!, "from") || ""
-			: "";
 
 		// Prefer RFC822 Date, then createdAt, else empty
 		const rawDate: Date | null =
-			hasOrig && (origMsg!.date ?? origMsg!.createdAt)
-				? (origMsg!.date ?? origMsg!.createdAt)!
+			origMsg && (origMsg.date ?? origMsg.createdAt)
+				? (origMsg.date ?? origMsg.createdAt)!
 				: null;
 
 		// Human-friendly fallback
@@ -507,52 +511,26 @@ export default defineNitroPlugin(async (nitroApp) => {
 			})
 			: "";
 
-		const origHtml = hasOrig ? origMsg!.html || origMsg!.textAsHtml || "" : "";
-		const origText = hasOrig ? origMsg!.text || "" : "";
-
-		// Subject
-		const baseSubj = (data.subject ?? "").trim();
-		let subject = baseSubj;
-		if (isReply && hasOrig) {
-			const s = (origMsg!.subject ?? "").trim();
-			subject = s.startsWith("Re:") ? s : `Re: ${s || "(no subject)"}`;
-		} else if (isForward && hasOrig) {
-			const s = (origMsg!.subject ?? "").trim();
-			subject = s.startsWith("Fwd:") ? s : `Fwd: ${s || "(no subject)"}`;
-		} else if (!baseSubj) {
-			subject = "(no subject)";
-		}
-
-		// Quoted blocks (only with original)
-		const quotedText = hasOrig
-			? `On ${origDateLabel}, ${fromNameStr} <${fromAddrStr}> wrote:\n${origText}`
-			: "";
-
-		const quotedHtml = hasOrig
-			? `<hr>
-<p>On ${origDateLabel}, ${fromNameStr} &lt;${fromAddrStr}&gt; wrote:</p>
-<blockquote style="border-left:2px solid #ccc;margin:0;padding-left:8px;">
-  ${origHtml || `<pre style="white-space:pre-wrap;margin:0;">${origText}</pre>`}
-</blockquote>`
-			: "";
-
-		// Bodies
-		const bodyText = `${data.text ?? ""}${signature.text}`;
-		const bodyHtml = `${data.html ?? ""}${signature.html}`;
-
-		const text = isReply
-			? `${bodyText}${hasOrig ? `\n\n${quotedText}` : ""}`
-			: isForward
-				? `${bodyText}${hasOrig ? `\n\nForwarded message:\n${quotedText}` : ""}`
-				: bodyText;
-
-		const html = isReply
-			? `${bodyHtml}${quotedHtml}`
-			: isForward
-				? `${bodyHtml}${hasOrig ? `<p>Forwarded message:</p>${quotedHtml}` : ""}`
-				: bodyHtml; // for "new", don't auto-pull orig html
-
-		return { subject, text, html };
+		return composeMessage({
+			mode: data.mode,
+			subject: data.subject,
+			text: data.text,
+			html: data.html,
+			signatureHtml,
+			rfcStyle,
+			quoteScope,
+			orig: origMsg
+				? {
+					html: origMsg.html,
+					text: origMsg.text,
+					textAsHtml: origMsg.textAsHtml,
+					subject: origMsg.subject,
+					fromName: getMessageName(origMsg, "from") || "",
+					fromAddress: getMessageAddress(origMsg, "from") || "",
+					dateLabel: origDateLabel,
+				}
+				: null,
+		});
 	};
 
 

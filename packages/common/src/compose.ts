@@ -289,8 +289,10 @@ export function stripQuotedText(text: string): string {
 // --- Signature delimitee « -- » (RFC 3676) ------------------------------------------
 
 // Retire la signature d'un texte brut quand elle est delimitee par la ligne « -- »
-// (tiret, tiret, espace). Aucune heuristique sur les signatures non delimitees.
-export function stripSignatureText(text: string): string {
+// (tiret, tiret, espace). Aucune heuristique sur les signatures non delimitees. Avec
+// keepQuoteAfter (portee « thread »), un historique cite qui suit la signature (lignes
+// « > », ligne d'attribution) est garde : seule la signature part.
+export function stripSignatureText(text: string, opts: { keepQuoteAfter?: boolean } = {}): string {
 	const lines = text.replace(/\r/g, "").split("\n");
 	let cut = -1;
 	for (let i = lines.length - 1; i >= 0; i--) {
@@ -300,15 +302,27 @@ export function stripSignatureText(text: string): string {
 		}
 	}
 	if (cut < 0) return text;
-	const kept = lines.slice(0, cut).join("\n").replace(/\s+$/, "");
-	return kept || text;
+	let resume = lines.length;
+	if (opts.keepQuoteAfter) {
+		for (let i = cut + 1; i < lines.length; i++) {
+			const l = lines[i].trim();
+			if (l.startsWith(">") || QUOTE_LINE_MARKERS.some((re) => re.test(l))) {
+				resume = i;
+				break;
+			}
+		}
+	}
+	const before = lines.slice(0, cut).join("\n").replace(/\s+$/, "");
+	const after = resume < lines.length ? lines.slice(resume).join("\n") : "";
+	const kept = after ? `${before}\n\n${after}` : before;
+	return kept.trim() ? kept : text;
 }
 
 // Meme chose en HTML : bloc signature de courrier (class="signature" ouvert par la ligne
 // « -- ») ou de Thunderbird (moz-signature), ou une ligne « -- » seule en debut de
 // paragraphe ou apres un saut de ligne (texte mis en HTML) ; seulement si rien d'autre
 // qu'une signature ne suit (aucune citation apres).
-export function stripSignatureHtml(html: string): string {
+export function stripSignatureHtml(html: string, opts: { keepQuoteAfter?: boolean } = {}): string {
 	const src = blankComments(html);
 	const re = /<(?:div|pre|p)\b[^>]*class=["'][^"']*\b(?:signature|moz-signature)\b[^"']*["'][^>]*>/gi;
 	let m: RegExpExecArray | null;
@@ -323,7 +337,11 @@ export function stripSignatureHtml(html: string): string {
 	const lineRe = /(?:<(?:p|div|pre)\b[^>]*>|<br\s*\/?>)\s*--(?: |&nbsp;|&#160;|\u00a0)(?:\s*<br\s*\/?>|\n|\s*<\/(?:p|div|pre)>)/gi;
 	let last: RegExpExecArray | null = null;
 	while ((m = lineRe.exec(src))) last = m;
-	if (last && !/<blockquote\b/i.test(src.slice(last.index))) {
+	// Un historique qui suit la ligne « -- » : en portee « thread » le HTML est laisse (le
+	// texte, lui, est nettoye ; un HTML simple est alors reconstruit depuis le texte).
+	const quoteFollows = (rest: string) =>
+		/<blockquote\b/i.test(rest) || (opts.keepQuoteAfter && findQuoteStart(rest) != null);
+	if (last && !quoteFollows(src.slice(last.index))) {
 		const kept = closeOpenTags(html.slice(0, last.index).replace(/\s+$/, ""));
 		return hasVisibleContent(kept) ? kept : html;
 	}
@@ -366,8 +384,8 @@ export function quotedOriginal(
 	}
 	if (rfc) {
 		if (!text && html) text = htmlToPlain(html);
-		text = stripSignatureText(text);
-		if (html) html = stripSignatureHtml(html);
+		text = stripSignatureText(text, { keepQuoteAfter: scope === "thread" });
+		if (html) html = stripSignatureHtml(html, { keepQuoteAfter: scope === "thread" });
 	}
 	// Quand le nettoyage (portee « last », style RFC) a change le texte et que le HTML
 	// n'est qu'un texte mis en paragraphes, le HTML cite est reconstruit depuis le texte

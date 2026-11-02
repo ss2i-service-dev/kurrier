@@ -27,6 +27,7 @@ import {
 	unreadCountsByMailbox,
 } from "./access";
 import { htmlToText, messageBodyText, truncate } from "./html-text";
+import { pickSenderIdentity } from "./sender-identity";
 import { type QuoteScope, stripQuotedText } from "@common";
 
 // Registre des outils de l'MCP courrier. Chaque outil recoit l'utilisateur authentifie
@@ -277,6 +278,32 @@ async function uploadAttachments(
 		});
 	}
 	return out;
+}
+
+// Identite d'envoi d'une reponse ou d'un transfert (cf. sender-identity.ts) : parametre
+// `identity` s'il est donne, sinon l'identite destinataire du message d'origine, sinon
+// celle de son dossier.
+async function senderIdentityFor(
+	ctx: ToolContext,
+	message: Message,
+	mailboxIdentityId: string,
+	identityArg: unknown,
+) {
+	const own = await listIdentities(ctx.userId);
+	const explicit = identityArg
+		? await resolveIdentity(ctx.userId, str(identityArg, "identity"))
+		: null;
+	type Ident = (typeof own)[number] & { id: string; value: string };
+	try {
+		return pickSenderIdentity({
+			identities: own as Ident[],
+			message,
+			explicit: explicit as Ident | null,
+			mailboxIdentityId,
+		}).identity;
+	} catch (err: any) {
+		throw new McpToolError(err?.message ?? "No sending identity");
+	}
 }
 
 async function sendViaQueue(opts: {
@@ -1063,6 +1090,11 @@ export const TOOLS: ToolDefinition[] = [
 				to: { type: "array", items: { type: "string" }, description: "Override the computed recipients." },
 				cc: { type: "array", items: { type: "string" }, description: "Extra cc recipients." },
 				bcc: { type: "array", items: { type: "string" } },
+				identity: {
+					...identityProp,
+					description:
+						"Identity to send from (email address, id or public id). Default: the identity that received the message (To, Cc, Delivered-To), else the identity of its folder.",
+				},
 				quote: {
 					type: "string",
 					enum: ["last", "thread"],
@@ -1075,7 +1107,8 @@ export const TOOLS: ToolDefinition[] = [
 			additionalProperties: false,
 		},
 		handler: async (ctx, args) => {
-			const { message, identity } = await getOwnedMessage(ctx.userId, str(args.message_id, "message_id")!);
+			const { message, identity: mailboxIdentity } = await getOwnedMessage(ctx.userId, str(args.message_id, "message_id")!);
+			const identity = await senderIdentityFor(ctx, message, mailboxIdentity.id, args.identity);
 			const own = (await listIdentities(ctx.userId)).map((i) => i.value);
 			const computed = replyRecipients(message, own);
 			const to = args.to ? emails(args.to, "to", true) : computed.to;
@@ -1117,6 +1150,11 @@ export const TOOLS: ToolDefinition[] = [
 				cc: { type: "array", items: { type: "string" } },
 				bcc: { type: "array", items: { type: "string" } },
 				include_attachments: { type: "boolean", description: "Default true." },
+				identity: {
+					...identityProp,
+					description:
+						"Identity to send from (email address, id or public id). Default: the identity that received the message (To, Cc, Delivered-To), else the identity of its folder.",
+				},
 				as_draft: asDraftProp,
 				...bodyProps,
 			},
@@ -1124,7 +1162,8 @@ export const TOOLS: ToolDefinition[] = [
 			additionalProperties: false,
 		},
 		handler: async (ctx, args) => {
-			const { message, identity } = await getOwnedMessage(ctx.userId, str(args.message_id, "message_id")!);
+			const { message, identity: mailboxIdentity } = await getOwnedMessage(ctx.userId, str(args.message_id, "message_id")!);
+			const identity = await senderIdentityFor(ctx, message, mailboxIdentity.id, args.identity);
 			const bodyGiven = args.body_text || args.body || args.body_html;
 			const { text, html } = bodyGiven ? bodyParts(args) : { text: "", html: "" };
 			const original = bool(args.include_attachments, true)

@@ -69,7 +69,18 @@ export default function WebmailListItemMobile({
 
 	const pathname = usePathname();
 
+	// ss2i : des qu'au moins un fil est coche, toucher la ligne coche ou decoche.
+	const toggleSelected = () => {
+		const next = new Set(state?.selectedThreadIds ?? new Set<string>());
+		if (next.has(mailboxThreadItem.threadId)) next.delete(mailboxThreadItem.threadId);
+		else next.add(mailboxThreadItem.threadId);
+		setState({ ...state, selectedThreadIds: next });
+	};
 	const openThread = () => {
+		if ((state?.selectedThreadIds?.size ?? 0) > 0) {
+			toggleSelected();
+			return;
+		}
 		const url = pathname.match("/dashboard/mail")
 			? // ss2i : meme lien que la liste bureau, avec le segment /w/<id>/ (404 sinon).
 			  `/w/${pathname.match(/\/w\/([^/]+)/)?.[1]}/dashboard/mail/${identityPublicId}/${activeMailbox.slug}/threads/${mailboxThreadItem.threadId}`
@@ -130,20 +141,22 @@ export default function WebmailListItemMobile({
 		>
 			{/* controls (checkbox + star) */}
 			<div className="flex items-start gap-2 pt-1">
-				<input
-					type="checkbox"
-					onClick={(e) => e.stopPropagation()}
-					checked={state?.selectedThreadIds?.has(mailboxThreadItem.threadId)}
-					onChange={(e) => {
-						const next = new Set(state?.selectedThreadIds ?? new Set<string>());
-						e.target.checked
-							? next.add(mailboxThreadItem.threadId)
-							: next.delete(mailboxThreadItem.threadId);
-						setState({ selectedThreadIds: next });
+				{/* ss2i : zone de toucher elargie autour de la case */}
+				<span
+					className="-m-2 p-2 cursor-pointer"
+					onClick={(e) => {
+						e.stopPropagation();
+						toggleSelected();
 					}}
-					aria-label={`Select ${mailboxThreadItem.subject}`}
-					className="h-4 w-4 rounded border-muted-foreground/40"
-				/>
+				>
+					<input
+						type="checkbox"
+						checked={!!state?.selectedThreadIds?.has(mailboxThreadItem.threadId)}
+						onChange={toggleSelected}
+						aria-label={`Select ${mailboxThreadItem.subject}`}
+						className="h-4 w-4 rounded border-muted-foreground/40 pointer-events-none"
+					/>
+				</span>
 				<button
 					aria-label="Star"
 					onClick={(e) => {

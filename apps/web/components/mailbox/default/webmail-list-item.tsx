@@ -153,7 +153,13 @@ export default function WebmailListItem({
 	const pathname = usePathname();
 	const isOnSnoozedPage = pathname.split("/").includes("snoozed");
 
-	const openThread = async () => {
+	// ss2i : des qu'au moins un fil est coche, on est en mode selection : un clic sur
+	// la ligne coche ou decoche au lieu d'ouvrir le fil (Maj+clic = plage).
+	const openThread = async (e?: React.MouseEvent) => {
+		if ((state?.selectedThreadIds?.size ?? 0) > 0) {
+			toggleSelection(!!e?.shiftKey);
+			return;
+		}
 		const url = pathname.match("/dashboard/mail")
 			? `/w/${workspacePublicId}/dashboard/mail/${identityPublicId}/${activeMailbox.slug}/threads/${mailboxThreadItem.threadId}`
 			: `/mail/${identityPublicId}/${activeMailbox.slug}/threads/${mailboxThreadItem.threadId}`;
@@ -253,20 +259,30 @@ export default function WebmailListItem({
 					`pr-[${ACTIONS_W}]`,
 				].join(" ")}
 			>
-				<div className="flex items-center">
+				{/* ss2i : toute la cellule de la case est cliquable (hauteur de la ligne,
+				    debord a gauche), pas seulement les 16 px de la case. La case ne capte
+				    plus la souris ; au clavier (espace), onChange coche toujours. */}
+				<div
+					className={
+						isOnSnoozedPage
+							? "flex items-center"
+							: "flex items-center self-stretch -my-2 -ml-3 pl-3 pr-2 cursor-pointer"
+					}
+					onClick={(e) => {
+						if (isOnSnoozedPage) return;
+						e.stopPropagation();
+						toggleSelection(e.shiftKey);
+					}}
+				>
 					{!isOnSnoozedPage && (
 						<input
 							type="checkbox"
-							onChange={() => {}}
-							checked={state?.selectedThreadIds?.has(
+							onChange={() => toggleSelection(false)}
+							checked={!!state?.selectedThreadIds?.has(
 								mailboxThreadItem.threadId,
 							)}
 							aria-label={`Select thread ${mailboxThreadItem.subject}`}
-							className="h-4 w-4 rounded border-muted-foreground/40"
-							onClick={(e) => {
-								e.stopPropagation();
-								toggleSelection(e.shiftKey);
-							}}
+							className="h-4 w-4 rounded border-muted-foreground/40 pointer-events-none"
 						/>
 					)}
 				</div>

@@ -12,6 +12,10 @@
 
 export type ComposeMode = "new" | "reply" | "forward";
 export type QuoteScope = "last" | "thread";
+// Citation d'une reponse : « auto » (calculee), « custom » (corps cite modifie par
+// l'utilisateur dans l'editeur) ou « none » (aucune citation).
+export type QuoteMode = "auto" | "custom" | "none";
+export type QuoteOverride = { mode: "custom"; html: string } | { mode: "none" } | null;
 
 export type ComposeOriginal = {
 	html?: string | null;
@@ -33,10 +37,24 @@ export type ComposeInput = {
 	orig?: ComposeOriginal | null;
 	rfcStyle?: boolean;
 	quoteScope?: QuoteScope | null;
+	// Reponse seulement : corps cite modifie par l'utilisateur, ou citation supprimee.
+	quoteOverride?: QuoteOverride;
 };
 
 export const quoteScopeOf = (value: unknown): QuoteScope =>
 	value === "last" ? "last" : "thread";
+
+export const quoteModeOf = (value: unknown): QuoteMode =>
+	value === "custom" || value === "none" ? value : "auto";
+
+// Override de citation a partir des champs du formulaire / du brouillon (quoteMode,
+// quoteHtml). « custom » sans HTML retombe sur « auto ».
+export function quoteOverrideOf(mode: unknown, html: unknown): QuoteOverride {
+	const m = quoteModeOf(mode);
+	if (m === "none") return { mode: "none" };
+	if (m === "custom" && typeof html === "string" && html.trim()) return { mode: "custom", html };
+	return null;
+}
 
 export const DEFAULT_MAIL_TIMEZONE = "Europe/Paris";
 
@@ -396,25 +414,34 @@ export function quotedOriginal(
 	return { html, text, fallbackHtml };
 }
 
-// Citation complete (ligne d'attribution + corps), en texte et en HTML.
+// Citation complete (ligne d'attribution + corps), en texte et en HTML. `customHtml` :
+// corps deja pret (modifie par l'utilisateur) qui remplace le corps calcule ; le texte
+// en est derive, l'attribution et l'enveloppe restent les memes.
 export function buildQuote(
 	orig: ComposeOriginal,
-	opts: { quoteScope?: QuoteScope | null; rfcStyle?: boolean },
+	opts: { quoteScope?: QuoteScope | null; rfcStyle?: boolean; customHtml?: string | null },
 ) {
-	const q = quotedOriginal(orig, opts);
+	const q =
+		opts.customHtml != null
+			? { html: opts.customHtml, text: htmlToPlain(opts.customHtml), fallbackHtml: "" }
+			: quotedOriginal(orig, opts);
 	const attribution = attributionText(orig);
+	// Corps cite seul (ce que l'editeur propose a la modification).
+	const body = q.html || q.fallbackHtml || `<pre style="white-space:pre-wrap;margin:0;">${escapeHtml(q.text)}</pre>`;
 	if (opts.rfcStyle) {
 		return {
 			attribution,
+			body,
 			text: `${attribution}\n${quoteTextLines(q.text)}`,
 			html: `<div class="quote-attribution">${escapeHtml(attribution)}</div>
 <blockquote type="cite" style="${QUOTE_STYLE}">
-  ${q.html || q.fallbackHtml || `<pre style="white-space:pre-wrap;margin:0;">${escapeHtml(q.text)}</pre>`}
+  ${body}
 </blockquote>`,
 		};
 	}
 	return {
 		attribution,
+		body,
 		text: `${attribution}\n${q.text}`,
 		html: `<hr>
 <p>On ${orig.dateLabel ?? ""}, ${orig.fromName ?? ""} &lt;${orig.fromAddress ?? ""}&gt; wrote:</p>
@@ -478,7 +505,16 @@ export function composeMessage(input: ComposeInput) {
 		subject = "(no subject)";
 	}
 
-	const quote = buildQuote(orig, { quoteScope: input.quoteScope, rfcStyle: rfc });
+	// Citation modifiee ou supprimee : reponse seulement, un transfert l'ignore.
+	const override = isReply ? (input.quoteOverride ?? null) : null;
+	const noQuote = override?.mode === "none";
+	const quote = noQuote
+		? { attribution: "", text: "", html: "" }
+		: buildQuote(orig, {
+				quoteScope: input.quoteScope,
+				rfcStyle: rfc,
+				customHtml: override?.mode === "custom" ? override.html : null,
+			});
 	const userText = input.text ?? "";
 	const userHtml = input.html ?? "";
 
@@ -486,12 +522,16 @@ export function composeMessage(input: ComposeInput) {
 		// Citation, puis la reponse, puis « -- » et la signature ; un transfert garde
 		// son texte en tete et le message transfere dessous, la signature tout en bas.
 		const text = isReply
-			? `${quote.text}\n\n${userText}${signature.text}`
+			? noQuote
+				? `${userText}${signature.text}`
+				: `${quote.text}\n\n${userText}${signature.text}`
 			: isForward
 				? `${userText}\n\nForwarded message:\n${quote.text}${signature.text}`
 				: `${userText}${signature.text}`;
 		const html = isReply
-			? `${quote.html}\n${userHtml}${signature.html}`
+			? noQuote
+				? `${userHtml}${signature.html}`
+				: `${quote.html}\n${userHtml}${signature.html}`
 			: isForward
 				? `${userHtml}<p>Forwarded message:</p>${quote.html}${signature.html}`
 				: `${userHtml}${signature.html}`;
@@ -502,12 +542,16 @@ export function composeMessage(input: ComposeInput) {
 	const bodyText = `${userText}${signature.text}`;
 	const bodyHtml = `${userHtml}${signature.html}`;
 	const text = isReply
-		? `${bodyText}\n\n${quote.text}`
+		? noQuote
+			? bodyText
+			: `${bodyText}\n\n${quote.text}`
 		: isForward
 			? `${bodyText}\n\nForwarded message:\n${quote.text}`
 			: bodyText;
 	const html = isReply
-		? `${bodyHtml}${quote.html}`
+		? noQuote
+			? bodyHtml
+			: `${bodyHtml}${quote.html}`
 		: isForward
 			? `${bodyHtml}<p>Forwarded message:</p>${quote.html}`
 			: bodyHtml;

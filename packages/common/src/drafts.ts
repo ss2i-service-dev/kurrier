@@ -9,10 +9,12 @@ import {
 import type { AddressObjectJSON } from "@schema";
 import { and, desc, eq, notExists, sql } from "drizzle-orm";
 import { generateSnippet, upsertMailboxThreadItem } from "./mail";
-import type { QuoteScope } from "./compose";
+import type { QuoteMode, QuoteScope } from "./compose";
 import { addressObjToList } from "./mail-client";
 
 export { addressObjToList };
+export * from "./draft-send";
+import { mergeDraftMeta, type DraftPendingSend, type DraftSendError } from "./draft-send";
 
 /**
  * ss2i : brouillons, couche base de donnees (partagee par le web et le worker).
@@ -78,10 +80,44 @@ export type DraftMeta = {
 	includeSignature: boolean;
 	// Portee de la citation d'une reponse (cf. compose.ts) ; absente = message entier.
 	quoteScope?: QuoteScope;
+	// Citation modifiee (custom + quoteHtml) ou supprimee (none) ; absent = auto.
+	quoteMode?: QuoteMode;
+	quoteHtml?: string;
 	revision: number;
 	imapRevision?: number;
 	savedAt?: string;
+	// Envoi en cours (job send-and-reconcile differe ou en traitement) : pose par l'envoi
+	// (web et MCP), efface par l'annulation ou le worker. Le brouillon disparait au succes.
+	pendingSend?: DraftPendingSend;
+	// Dernier envoi echoue (pose par le worker a l'echec definitif du job).
+	sendError?: DraftSendError;
 };
+
+// Ecrit (objet) ou efface (null) pendingSend / sendError dans meta.draft, par jsonb_set
+// sur ces seules cles : un autosave ou la synchro IMAP (meta.imap) en parallele n'est pas
+// ecrase. Une cle absente du patch n'est pas touchee.
+export async function setDraftSendState(
+	draftMessageId: string,
+	patch: {
+		pendingSend?: DraftPendingSend | null;
+		sendError?: DraftSendError | null;
+	},
+) {
+	let expr = sql`coalesce(${messages.metaData}, '{}'::jsonb)`;
+	for (const key of ["pendingSend", "sendError"] as const) {
+		if (!(key in patch)) continue;
+		const value = patch[key];
+		const path = `{draft,${key}}`;
+		expr =
+			value == null
+				? sql`(${expr}) #- ${path}::text[]`
+				: sql`jsonb_set(${expr}, ${path}::text[], ${JSON.stringify(value)}::jsonb, true)`;
+	}
+	await db
+		.update(messages)
+		.set({ metaData: expr })
+		.where(and(eq(messages.id, draftMessageId), eq(messages.draft, true)));
+}
 
 export type DraftInput = {
 	ownerId: string;
@@ -99,6 +135,8 @@ export type DraftInput = {
 	attachments?: DraftAttachment[] | string | null;
 	includeSignature?: boolean | string | null;
 	quoteScope?: QuoteScope | string | null;
+	quoteMode?: QuoteMode | string | null;
+	quoteHtml?: string | null;
 };
 
 // Ce qu'il faut pour retrouver la version IMAP d'un brouillon une fois la ligne supprimee.
@@ -277,6 +315,17 @@ export async function upsertDraftRow(input: DraftInput) {
 		input.quoteScope === "last" || input.quoteScope === "thread"
 			? input.quoteScope
 			: prevMeta?.quoteScope;
+	// Une valeur absente garde la precedente ; « auto » efface le HTML modifie.
+	const quoteMode: QuoteMode | undefined =
+		input.quoteMode === "auto" || input.quoteMode === "custom" || input.quoteMode === "none"
+			? input.quoteMode
+			: prevMeta?.quoteMode;
+	const quoteHtml: string | undefined =
+		quoteMode === "custom"
+			? typeof input.quoteHtml === "string" && input.quoteHtml !== ""
+				? input.quoteHtml
+				: prevMeta?.quoteHtml
+			: undefined;
 	const html = input.html ?? "";
 	const text = input.text ?? "";
 	const subject = (input.subject ?? "").trim();
@@ -284,17 +333,18 @@ export async function upsertDraftRow(input: DraftInput) {
 	const revision = (prevMeta?.revision ?? 0) + 1;
 	const draftId = prevMeta?.draftId ?? crypto.randomUUID();
 
-	const draftMeta: DraftMeta = {
-		...(prevMeta ?? {}),
+	const draftMeta: DraftMeta = mergeDraftMeta(prevMeta, {
 		draftId,
 		mode,
 		originalMessageId,
 		attachments,
 		includeSignature,
 		...(quoteScope ? { quoteScope } : {}),
+		...(quoteMode && quoteMode !== "auto" ? { quoteMode } : {}),
+		...(quoteMode === "custom" && quoteHtml ? { quoteHtml } : {}),
 		revision,
 		savedAt: now.toISOString(),
-	};
+	});
 
 	const fields = {
 		subject,
@@ -321,7 +371,9 @@ export async function upsertDraftRow(input: DraftInput) {
 			.update(messages)
 			.set({
 				...fields,
-				metaData: sql`jsonb_set(coalesce(${messages.metaData}, '{}'::jsonb), '{draft}', ${JSON.stringify(draftMeta)}::jsonb, true)`,
+				// pendingSend est repris de la base au moment de l'ecriture (envoi pose entre la
+				// lecture et ici).
+				metaData: sql`jsonb_set(coalesce(${messages.metaData}, '{}'::jsonb), '{draft}', (${JSON.stringify(draftMeta)}::jsonb - 'pendingSend') || case when ${messages.metaData} #> '{draft,pendingSend}' is not null then jsonb_build_object('pendingSend', ${messages.metaData} #> '{draft,pendingSend}') else '{}'::jsonb end, true)`,
 			})
 			.where(eq(messages.id, existing.id))
 			.returning();
@@ -564,6 +616,8 @@ export async function draftSendPayload(opts: {
 		attachments: JSON.stringify(meta?.attachments ?? []),
 		includeSignature: meta?.includeSignature === false ? "false" : "true",
 		quoteScope: meta?.quoteScope,
+		quoteMode: meta?.quoteMode,
+		quoteHtml: meta?.quoteHtml,
 		newMessageId: crypto.randomUUID(),
 		draftMessageId: row.id,
 	};

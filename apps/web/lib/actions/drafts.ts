@@ -34,6 +34,8 @@ export type DraftFormPayload = {
 	attachments?: DraftAttachment[] | string | null;
 	includeSignature?: boolean | string | null;
 	quoteScope?: string | null;
+	quoteMode?: string | null;
+	quoteHtml?: string | null;
 };
 
 export type SaveDraftResult =
@@ -79,6 +81,8 @@ export async function saveDraft(
 			attachments: payload.attachments,
 			includeSignature: payload.includeSignature,
 			quoteScope: payload.quoteScope,
+			quoteMode: payload.quoteMode,
+			quoteHtml: payload.quoteHtml,
 		});
 
 		const { smtpQueue } = await getRedis();

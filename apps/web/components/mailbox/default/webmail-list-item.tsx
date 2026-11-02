@@ -36,6 +36,7 @@ import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 import ThreadLabelHoverButtons from "@/components/dashboard/labels/thread-label-hover-buttons";
 import SnoozeMail from "@/components/mailbox/default/snooze-mail";
 import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
+import { DraftSendBadge } from "@/components/mailbox/default/draft-send-status";
 
 export default function WebmailListItem({
 	mailboxThreadItem,
@@ -308,6 +309,7 @@ export default function WebmailListItem({
 						labelsByThreadId={labelsByThreadId}
 						isRead={isRead}
 					/>
+					{isDrafts && <DraftSendBadge state={mailboxThreadItem.draftSend} />}
 					<span className="truncate">{mailboxThreadItem.subject}</span>
 					{showSnippet && (
 						<>

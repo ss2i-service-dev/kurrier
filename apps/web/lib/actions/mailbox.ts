@@ -44,6 +44,7 @@ import { isSignedIn } from "@/lib/actions/auth";
 import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
+import { draftSendStateOf, setDraftSendState, type DraftSendState } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import dayjs from "dayjs";
 import {fetchWorkspace} from "@/lib/actions/workspace";
@@ -453,6 +454,12 @@ export async function sendMail(
 		jobId: `undo-send-${crypto.randomUUID()}`,
 		delay: UNDO_SEND_MS,
 	});
+	// Le brouillon d'origine porte la marque « envoi en cours » (liste Drafts, ouverture).
+	await markDraftPending(
+		String(decodedForm.draftMessageId ?? ""),
+		String(job.id),
+		UNDO_SEND_MS,
+	);
 	return {
 		success: true,
 		message: "Message sent",
@@ -461,6 +468,40 @@ export async function sendMail(
 }
 
 const UNDO_SEND_MS = 30_000;
+
+// ss2i : le brouillon n'est touche que s'il est visible de l'utilisateur (RLS).
+async function ownedDraftId(draftMessageId: string) {
+	if (!draftMessageId) return null;
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({ id: messages.id })
+			.from(messages)
+			.where(and(eq(messages.id, draftMessageId), eq(messages.draft, true)))
+			.limit(1),
+	);
+	return row?.id ?? null;
+}
+
+async function markDraftPending(
+	draftMessageId: string,
+	jobId: string,
+	delayMs: number,
+) {
+	try {
+		const id = await ownedDraftId(draftMessageId);
+		if (!id) return;
+		await setDraftSendState(id, {
+			pendingSend: {
+				jobId,
+				sendAt: new Date(Date.now() + delayMs).toISOString(),
+			},
+			sendError: null,
+		});
+	} catch (e) {
+		console.error("[send] pendingSend mark failed", e);
+	}
+}
 
 // ss2i : « Undo » d'un envoi encore en attente. Rend le formulaire si le job a bien ete
 // retire ; s'il est deja parti (ou en cours d'envoi), on ne peut plus rien faire.
@@ -471,6 +512,12 @@ export async function cancelPendingSend(pendingSendId: string) {
 	try {
 		if ((await job.getState()) !== "delayed") return { cancelled: false as const };
 		await job.remove();
+		try {
+			const id = await ownedDraftId(String((job.data as any)?.draftMessageId ?? ""));
+			if (id) await setDraftSendState(id, { pendingSend: null });
+		} catch (e) {
+			console.error("[send] pendingSend clear failed", e);
+		}
 		return { cancelled: true as const };
 	} catch {
 		return { cancelled: false as const };
@@ -484,6 +531,11 @@ export async function sendPendingNow(pendingSendId: string) {
 	if (!job) return;
 	try {
 		if ((await job.getState()) === "delayed") await job.promote();
+		const id = await ownedDraftId(String((job.data as any)?.draftMessageId ?? ""));
+		if (id)
+			await setDraftSendState(id, {
+				pendingSend: { jobId: pendingSendId, sendAt: new Date().toISOString() },
+			});
 	} catch {
 		// deja parti
 	}
@@ -1158,7 +1210,39 @@ export const fetchMailboxThreads = async (
 			.limit(PAGE_SIZE)
 	);
 
-	return rows.map((r) => r.thread);
+	// ss2i : etat d'envoi des brouillons de la page (envoi en cours, echec), lu dans
+	// meta.draft des lignes du dossier ; seuls les fils concernes portent `draftSend`.
+	const threadRows = rows.map(
+		(r) => r.thread as typeof r.thread & { draftSend?: DraftSendState },
+	);
+	{
+		const ids = threadRows.map((t) => String(t.threadId));
+		if (ids.length) {
+			const drafts = await rls((tx) =>
+				tx
+					.select({
+						threadId: messages.threadId,
+						meta: sql<any>`${messages.metaData} -> 'draft'`,
+					})
+					.from(messages)
+					.where(
+						and(
+							eq(messages.draft, true),
+							inArray(messages.threadId, ids),
+							sql`jsonb_exists_any(${messages.metaData} -> 'draft', array['pendingSend', 'sendError'])`,
+						),
+					),
+			);
+			for (const d of drafts) {
+				const t = threadRows.find((x) => String(x.threadId) === String(d.threadId));
+				if (!t) continue;
+				const state = draftSendStateOf(d.meta);
+				// Un envoi en cours prime sur une ancienne erreur du meme fil.
+				if (!t.draftSend || state.pendingSend) t.draftSend = state;
+			}
+		}
+	}
+	return threadRows;
 };
 
 export type FetchMailboxThreadsResult = Awaited<

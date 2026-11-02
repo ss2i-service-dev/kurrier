@@ -27,7 +27,13 @@ function getRedirectLocale(request: NextRequest) {
 
 export async function proxy(request: NextRequest) {
 
-	if (request.nextUrl.pathname.startsWith("/api")) {
+	// ss2i : les routes du serveur OAuth de l'MCP courrier (decouverte et jetons) sont
+	// hors locale et hors garde de session, comme /api.
+	if (
+		request.nextUrl.pathname.startsWith("/api") ||
+		request.nextUrl.pathname.startsWith("/oauth/") ||
+		request.nextUrl.pathname.startsWith("/.well-known/")
+	) {
 		return await updateSession(request);
 	}
 

@@ -16,6 +16,7 @@ import { useMediaQuery } from "@mantine/hooks";
 import EmailHeaderContacts from "@/components/mailbox/default/editor/email-header-contacts";
 import {FetchIdentityMailboxListResult} from "@/lib/actions/mailbox";
 import {useParams} from "next/navigation";
+import { RecipientDropZone, RecipientsDnDProvider } from "@/components/mailbox/default/editor/recipients-dnd";
 import { addressObjToList } from "@common/mail-client";
 
 function EditorHeader({
@@ -174,7 +175,16 @@ function EditorHeader({
 		}));
 	}, [state.identityMailboxes]);
 
-	return isMobile ? (
+	// ss2i : glisser-deposer des destinataires entre To, Cc et Bcc ; un depot sur un champ
+	// masque l'affiche.
+	const activateField = (n: "to" | "cc" | "bcc") => {
+		if (n === "cc") setCcActive(true);
+		if (n === "bcc") setBccActive(true);
+	};
+
+	return (
+		<RecipientsDnDProvider onActivate={activateField}>
+		{isMobile ? (
 		<>
 			<div
 				className="border-b px-3 py-2 grid gap-3
@@ -213,7 +223,7 @@ function EditorHeader({
 				) : null}
 				<input type="hidden" name="mode" value={serverMode} />
 
-				<div className="grid items-center gap-2 sm:grid-cols-[40px,1fr]">
+				<RecipientDropZone name="to" className="grid items-center gap-2 sm:grid-cols-[40px,1fr]">
 					<span className="text-[13px] text-muted-foreground sm:text-right leading-6">
 						To
 					</span>
@@ -227,39 +237,32 @@ function EditorHeader({
 							}
 						}}
 					/>
-				</div>
-
-				<div className="flex items-center justify-end gap-4 text-primary text-sm">
+</RecipientDropZone>
+<div className="flex items-center justify-end gap-4 text-primary text-sm">
 					{!ccActive && (
-						<button
-							type="button"
-							onClick={() => setCcActive(true)}
+						<RecipientDropZone name="cc" as="span"><button type="button" onClick={() => setCcActive(true)}
 							className="hover:underline"
 							aria-label="Add Cc"
 							title="Add Cc"
 						>
-							Cc
-						</button>
+							Cc </button></RecipientDropZone>
 					)}
 					{!bccActive && (
-						<button
-							type="button"
-							onClick={() => setBccActive(true)}
+						<RecipientDropZone name="bcc" as="span"><button type="button" onClick={() => setBccActive(true)}
 							className="hover:underline"
 							aria-label="Add Bcc"
 							title="Add Bcc"
 						>
-							Bcc
-						</button>
+							Bcc </button></RecipientDropZone>
 					)}
 				</div>
 			</div>
 
 			{ccActive && (
-				<div className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]">
-					<span className="text-[13px] text-muted-foreground sm:text-right leading-6">
-						Cc
-					</span>
+				<RecipientDropZone name="cc" className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]">
+<span className="text-[13px] text-muted-foreground sm:text-right leading-6">
+Cc
+</span>
 					<EmailHeaderContacts
 						key={`cc-${mode}`}
 						name={"cc"}
@@ -270,14 +273,11 @@ function EditorHeader({
 							}
 						}}
 					/>
-				</div>
-			)}
-
-			{bccActive && (
-				<div className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]">
-					<span className="text-[13px] text-muted-foreground sm:text-right leading-6">
-						Bcc
-					</span>
+</RecipientDropZone> )} {bccActive && (
+				<RecipientDropZone name="bcc" className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]">
+<span className="text-[13px] text-muted-foreground sm:text-right leading-6">
+Bcc
+</span>
 					<EmailHeaderContacts
 						name={"bcc"}
 						defaultValues={bccValues}
@@ -287,12 +287,8 @@ function EditorHeader({
 							}
 						}}
 					/>
-				</div>
-			)}
-
-			<div className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]">
-				<span className="text-[13px] text-muted-foreground sm:text-right leading-6">
-					Subject
+</RecipientDropZone> )}
+<div className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]"> <span className="text-[13px] text-muted-foreground sm:text-right leading-6"> Subject
 				</span>
 				<Input
 					variant="unstyled"
@@ -367,8 +363,7 @@ function EditorHeader({
 
 				<div className="flex-grow flex justify-between">
 					<div className="flex gap- items-stretch flex-col justify-start">
-						<div className="flex items-center gap-2">
-							<span className="text-sm text-muted-foreground">To</span>
+						<RecipientDropZone name="to" className="flex items-center gap-2"> <span className="text-sm text-muted-foreground">To</span>
 							<EmailHeaderContacts
 								key={`to-${mode}`}
 								name={"to"}
@@ -378,12 +373,8 @@ function EditorHeader({
 										setSubjectFocus(true);
 									}
 								}}
-							/>
-						</div>
-
-						{ccActive && (
-							<div className="flex items-center gap-2">
-								<span className="text-sm text-muted-foreground">Cc</span>
+							/> </RecipientDropZone> {ccActive && (
+							<RecipientDropZone name="cc" className="flex items-center gap-2"> <span className="text-sm text-muted-foreground">Cc</span>
 								<EmailHeaderContacts
 									key={`cc-${mode}`}
 									name={"cc"}
@@ -393,13 +384,8 @@ function EditorHeader({
 											setSubjectFocus(true);
 										}
 									}}
-								/>
-							</div>
-						)}
-
-						{bccActive && (
-							<div className="flex items-center gap-2">
-								<span className="text-sm text-muted-foreground">Bcc</span>
+								/> </RecipientDropZone> )} {bccActive && (
+							<RecipientDropZone name="bcc" className="flex items-center gap-2"> <span className="text-sm text-muted-foreground">Bcc</span>
 								<EmailHeaderContacts
 									name={"bcc"}
 									defaultValues={bccValues}
@@ -408,27 +394,12 @@ function EditorHeader({
 											setSubjectFocus(true);
 										}
 									}}
-								/>
-							</div>
-						)}
-					</div>
-
-					<div className="flex gap-2 items-center text-sm text-neutral-500">
+								/> </RecipientDropZone> )} </div> <div className="flex gap-2 items-center text-sm text-neutral-500">
 						{!ccActive && (
-							<ActionIcon
-								onClick={() => setCcActive(true)}
-								variant="transparent"
-							>
-								Cc
-							</ActionIcon>
+							<RecipientDropZone name="cc" as="span"><ActionIcon onClick={() => setCcActive(true)} variant="transparent"> Cc </ActionIcon></RecipientDropZone>
 						)}
 						{!bccActive && (
-							<ActionIcon
-								onClick={() => setBccActive(true)}
-								variant="transparent"
-							>
-								Bcc
-							</ActionIcon>
+							<RecipientDropZone name="bcc" as="span"><ActionIcon onClick={() => setBccActive(true)} variant="transparent"> Bcc </ActionIcon></RecipientDropZone>
 						)}
 					</div>
 				</div>
@@ -476,6 +447,8 @@ function EditorHeader({
 				</div>
 			</div>
 		</>
+		)}
+		</RecipientsDnDProvider>
 	);
 }
 

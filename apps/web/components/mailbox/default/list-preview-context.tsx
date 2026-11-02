@@ -1,5 +1,6 @@
 "use client";
-import React, { createContext, useContext } from "react";
+import type React from "react";
+import { createContext, useContext } from "react";
 import type { ListPreviewMode } from "@/lib/actions/list-preview";
 
 // ss2i : option « objet seul » des lignes de liste, fournie une fois par le

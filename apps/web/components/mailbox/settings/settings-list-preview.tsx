@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { SegmentedControl, Text } from "@mantine/core";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";

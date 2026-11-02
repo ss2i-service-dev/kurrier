@@ -380,6 +380,54 @@ test("formatQuoteDate : fuseau MAIL_TIMEZONE, 24 h, anglais ; defaut Europe/Pari
 	assert.equal(formatQuoteDate(null, "Europe/Paris"), "");
 });
 
+// --- Signature de l'expediteur, carte image (identite samuel@ss2i-digital.fr : une
+// seule <img src="data:..."> de ~100 Ko, texte derive vide) ------------------------------
+
+const IMG_SIG = `<img src="data:image/png;base64,${"iVBORw0KGgo".repeat(9_000)}" alt="">`;
+const TEXT_IMG_SIG = `<p>Bien cordialement,</p>${IMG_SIG}`;
+const SIGNED_ORIG = {
+	...orig,
+	text: "Bonjour,\n\nMerci.\n\n-- \nJean Client\n\nLe 1 nov. 2026, X <x@y> a écrit :\n> ancien",
+	html: "<p>Bonjour,</p><p>Merci.</p><p>-- <br>Jean Client</p><p>Le 1 nov. 2026, X &lt;x@y&gt; a écrit :<br>&gt; ancien</p>",
+};
+
+for (const [label, sig, sigText] of [
+	["image seule", IMG_SIG, ""],
+	["texte « Bien cordialement, » + image", TEXT_IMG_SIG, "Bien cordialement,"],
+] as const) {
+	test(`signature ${label}, RFC + last : « -- » puis la signature, texte et HTML ; celle de l'original retiree`, () => {
+		const r = composeMessage({ mode: "reply", text: "Oui.", html: "<p>Oui.</p>", signatureHtml: sig, orig: SIGNED_ORIG, rfcStyle: true, quoteScope: "last" });
+		assert.equal(r.text, `On 02 Nov 2026, 09:15, Jean Client <jean@client.example> wrote:\n> Bonjour,\n>\n> Merci.\n\nOui.\n\n-- \n${sigText}`);
+		assert.ok(r.html.endsWith(`<div class="signature" style="margin-top:1em"><div style="white-space:pre">-- </div>${sig}</div>`), r.html.slice(-200));
+		assert.equal(r.html.indexOf('class="signature"') > r.html.indexOf("<p>Oui.</p>"), true);
+		assert.ok(!r.html.includes("Jean Client</p>") && !r.html.includes("ancien"));
+		const quoted = r.text.split("wrote:\n")[1];
+		assert.ok(!quoted.includes("Jean Client") && !quoted.includes("ancien"), quoted);
+	});
+	test(`signature ${label}, hors RFC + last : reponse, « -- » + signature, puis la citation (signature de l'original gardee)`, () => {
+		const r = composeMessage({ mode: "reply", text: "Oui.", html: "<p>Oui.</p>", signatureHtml: sig, orig: SIGNED_ORIG, quoteScope: "last" });
+		assert.ok(r.text.startsWith(`Oui.\n\n-- \n${sigText}\n\nOn 02 Nov 2026, 09:15, Jean Client <jean@client.example> wrote:\nBonjour,\n\nMerci.\n\n-- \nJean Client`), r.text);
+		assert.ok(r.html.startsWith(`<p>Oui.</p><div class="signature" style="margin-top:1em">${sig}</div><hr>`));
+		assert.ok(r.html.includes("<p>-- <br>Jean Client</p>") && !r.html.includes("ancien"));
+	});
+}
+
+// En portee « thread », la signature delimitee « -- » de l'original part, mais
+// l'historique qui la suit (lignes « > », attribution) reste cite.
+test("signature image seule, RFC + thread : signature de l'original retiree, son historique garde, puis « -- » + signature", () => {
+	const r = composeMessage({ mode: "reply", text: "Oui.", html: "<p>Oui.</p>", signatureHtml: IMG_SIG, orig: SIGNED_ORIG, rfcStyle: true, quoteScope: "thread" });
+	assert.ok(r.text.endsWith("> Merci.\n>\n> Le 1 nov. 2026, X <x@y> a écrit :\n>> ancien\n\nOui.\n\n-- \n"), r.text);
+	assert.ok(!r.text.includes("> Jean Client"));
+	// HTML simple reconstruit depuis le texte nettoye : meme contenu.
+	assert.ok(r.html.includes("<p>Bonjour,</p><p>Merci.</p><p>Le 1 nov. 2026, X &lt;x@y&gt; a écrit :<br>&gt; ancien</p>"), r.html);
+	assert.equal(stripSignatureText("a\n-- \nsig\n\n> q", { keepQuoteAfter: true }), "a\n\n> q");
+	assert.equal(stripSignatureText("a\n-- \nsig\n\nOn Monday, X wrote:\n> q", { keepQuoteAfter: true }), "a\n\nOn Monday, X wrote:\n> q");
+	assert.equal(stripSignatureText("a\n-- \nsig\n\n> q"), "a");
+	const r2 = composeMessage({ mode: "reply", text: "Oui.", html: "<p>Oui.</p>", signatureHtml: IMG_SIG, orig: { ...orig, text: "Merci.\n\n> ancien" }, rfcStyle: true, quoteScope: "thread" });
+	assert.ok(r2.text.endsWith("> Merci.\n>\n>> ancien\n\nOui.\n\n-- \n"), r2.text);
+	assert.ok(r.html.endsWith(`${IMG_SIG}</div>`));
+});
+
 if (failures) {
 	console.error(`\n${failures} failure(s)`);
 	process.exit(1);

@@ -282,6 +282,13 @@ export default defineNitroPlugin(async (nitroApp) => {
 				decodedForm.includeSignature !== "false"
 					? String((mailbox.identity.metaData as any)?.signatureHtml ?? "").trim()
 					: "";
+			// Signature demandee mais vide pour cette identite (Settings > General > Signature
+			// est par identite) : on le dit dans le journal, pour ne pas chercher un bug.
+			if (decodedForm.includeSignature !== "false" && !signatureHtml) {
+				console.warn(
+					`[send-mail] identity ${mailbox.identity.value} (${mailbox.identity.id}) has no signature: sending without one`,
+				);
+			}
 
 			// ss2i : style RFC (reponse sous la citation, « -- » devant la signature), option
 			// de l'utilisateur qui envoie (workspaces.meta.ss2iRfcStyle[userId], cf.

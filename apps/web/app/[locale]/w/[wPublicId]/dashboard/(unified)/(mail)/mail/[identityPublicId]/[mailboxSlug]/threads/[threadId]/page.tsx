@@ -28,6 +28,7 @@ async function Page({
             activeThread?.messages.map((m: MessageEntity) => ({
                 id: m.id,
                 headersJson: m.headersJson,
+                from: m.from,
             })) ?? [],
     });
 

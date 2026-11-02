@@ -6,6 +6,7 @@ import {
 	MailComposeInput,
 } from "@schema";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
+import { AUTO_MAIL_HEADER } from "@common";
 import {
 	composeMessage,
 	formatQuoteDate,
@@ -393,6 +394,8 @@ export default defineNitroPlugin(async (nitroApp) => {
 				newMessageBody.id = String(decodedForm.apiMessageId);
 			}
 
+			// ss2i : genre de mail automatique demande par la charge utile (« unsubscribe »).
+			const autoMail = decodedForm.autoMail === "unsubscribe" ? "unsubscribe" : null;
 			const mailerResponse = await mailer.sendEmail(data.to, {
 				from: mailbox.identity.value,
 				subject: String(newMessageBody.subject),
@@ -400,6 +403,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 				html: newMessageBody.html ?? "",
 				inReplyTo: inReplyTo ?? "",
 				references: references,
+				extraHeaders: autoMail ? { [AUTO_MAIL_HEADER]: autoMail } : undefined,
 				attachments: attachmentBlobs.map((att) => ({
 					name: att.name,
 					content: att.blob,
@@ -469,14 +473,19 @@ export default defineNitroPlugin(async (nitroApp) => {
 					{ messageId: newMessage.id },
 					{ removeOnComplete: true },
 				);
-				// ss2i clients : le fil rejoint (ou reste dans) le dossier client de ses destinataires.
-				if (newMessage.threadId && mailbox.mailbox.identityId) {
+				// ss2i clients : le fil rejoint (ou reste dans) le dossier client de ses destinataires
+				// (pas pour un mail automatique de desinscription, X-Kurrier-Auto).
+				if (!autoMail && newMessage.threadId && mailbox.mailbox.identityId) {
 					await enqueueCrmLinkByIdentity(newMessage.threadId, mailbox.mailbox.identityId);
 				}
 
+				// ss2i : mail automatique (desinscription) : le destinataire n'entre ni au carnet ni
+				// aux suggestions (la copie du dossier Envoyes est filtree par l'en-tete dans
+				// message-parser-contacts.ts).
+				const skipRecipientStats = !!autoMail;
 				// Les destinataires rejoignent le carnet de l'expediteur. Jamais
 				// bloquant : un echec ici ne doit pas faire echouer un envoi reussi.
-				try {
+				if (!skipRecipientStats) try {
 					await upsertContactsFromOutgoing({
 						ownerIds: [
 							String(decodedForm.senderUserId ?? ""),
@@ -490,7 +499,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 					console.error("[send-mail] outgoing contacts failed:", err?.message ?? err);
 				}
 				// ss2i : suggestions de destinataires (frecency et co-occurrence), To, Cc et Bcc.
-				await ingestRecipientStats({
+				if (!skipRecipientStats) await ingestRecipientStats({
 					ownerIds: [String(decodedForm.senderUserId ?? ""), newMessage.ownerId].filter(Boolean),
 					messageId: String(parsedMessage.messageId),
 					sentAt: newMessage.date ?? newMessage.createdAt ?? null,

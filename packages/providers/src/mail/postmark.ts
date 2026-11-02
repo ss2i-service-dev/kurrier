@@ -380,6 +380,8 @@ export class PostmarkMailer implements Mailer {
 			from: string;
 			inReplyTo: string;
 			references: string[];
+			// ss2i : en-tetes supplementaires (ex. X-Kurrier-Auto) ajoutes tels quels au message.
+			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
 	): Promise<{ success: boolean; MessageId?: string; error?: string }> {
@@ -404,6 +406,7 @@ export class PostmarkMailer implements Mailer {
 				Headers.push({ Name: "In-Reply-To", Value: opts.inReplyTo });
 			if (opts.references?.length)
 				Headers.push({ Name: "References", Value: opts.references.join(" ") });
+			for (const [Name, Value] of Object.entries(opts.extraHeaders ?? {})) Headers.push({ Name, Value });
 
 			const res = await this.serverClient.sendEmail({
 				From: opts.from,

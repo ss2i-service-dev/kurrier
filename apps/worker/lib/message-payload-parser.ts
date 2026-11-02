@@ -8,7 +8,6 @@ import {
 	MessageCreate,
 	MessageAttachmentCreate,
 	MessageAttachmentInsertSchema,
-	mailSubscriptions,
 	workspaces,
 } from "@db";
 import { generateSnippet, upsertMailboxThreadItem } from "@common";
@@ -17,6 +16,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getRedis } from "../lib/get-redis";
 import {s3} from "../lib/create-s3-client";
 import {PutObjectCommand} from "@aws-sdk/client-s3";
+import { upsertMailSubscription } from "./mail-subscriptions";
 import {upsertWorkspaceSharedContactFromMessage} from "../lib/message-parser-contacts";
 import { enqueueCrmLinks, type CrmLinkRequest } from "../lib/crm/enqueue";
 
@@ -517,87 +517,16 @@ async function ingestMailSubscriptionFromMessage(opts: {
 	parsed: ParsedMail;
 	headersJson: Record<string, any>;
 }) {
-	const { ownerId, workspaceId, parsed, headersJson } = opts;
-
-	const headers = parsed.headers as Map<string, any>;
-	const list =
-		(headers.get("list") as any) ??
-		(headersJson as any)?.list ??
-		null;
-
-	const rawListId =
-		String(headers.get("list-id") ?? (headersJson as any)?.["list-id"] ?? "")
-			.trim() || null;
-
-	const unsubscribeUrl =
-		(list?.unsubscribe?.url as string | undefined) ||
-		(list?.unsubscribe?.href as string | undefined) ||
-		null;
-
-	const unsubscribePost =
-		String(list?.["unsubscribe-post"]?.name ?? "").toLowerCase() || null;
-
-	let unsubscribeMailto: string | null = null;
-	const rawListUnsub = headers.get("list-unsubscribe") ?? (headersJson as any)?.["list-unsubscribe"];
-	if (typeof rawListUnsub === "string" && rawListUnsub.toLowerCase().includes("mailto:")) {
-		const m = rawListUnsub.match(/mailto:([^>\s,]+)/i);
-		unsubscribeMailto = (m?.[1] ?? "").trim().toLowerCase() || null;
-	}
-
-	if (!rawListId && !unsubscribeUrl && !unsubscribeMailto) return;
-
-	let subscriptionKey: string | null = null;
-
-	if (rawListId) {
-		const cleaned = rawListId
-			.replace(/^<|>$/g, "")
-			.replace(/\s+/g, "")
-			.toLowerCase();
-		subscriptionKey = cleaned ? `list-id:${cleaned}` : null;
-	} else if (unsubscribeUrl) {
-		try {
-			const u = new URL(unsubscribeUrl);
-			const p = (u.pathname || "/").replace(/\/+$/, "") || "/";
-			subscriptionKey = `${u.protocol}//${u.host}${p}`;
-		} catch {
-			subscriptionKey = null;
-		}
-	} else if (unsubscribeMailto) {
-		subscriptionKey = `mailto:${unsubscribeMailto}`;
-	} else {
-		const from = getFromAddress(parsed);
-		if (from?.email?.includes("@")) {
-			subscriptionKey = `from-domain:${from.email.split("@")[1]}`;
-		}
-	}
-
-	if (!subscriptionKey) return;
-
-	const oneClick = unsubscribePost?.includes("one-click") ?? false;
-	await db
-		.insert(mailSubscriptions)
-		.values({
-			ownerId,
-			workspaceId,
-			subscriptionKey,
-			listId: rawListId,
-			unsubscribeHttpUrl: unsubscribeUrl,
-			unsubscribeMailto,
-			oneClick,
-			lastSeenAt: new Date(),
-		} as any)
-		.onConflictDoUpdate({
-			target: [
-				mailSubscriptions.workspaceId,
-				mailSubscriptions.subscriptionKey,
-			],
-			set: {
-				listId: rawListId,
-				unsubscribeHttpUrl: unsubscribeUrl,
-				unsubscribeMailto,
-				oneClick,
-				lastSeenAt: new Date(),
-			},
+	// ss2i : extraction et cle dans @common (list-unsubscribe), partagees avec le rattrapage.
+	// Une erreur ici ne doit jamais faire perdre le message deja insere.
+	try {
+		await upsertMailSubscription({
+			ownerId: opts.ownerId,
+			workspaceId: opts.workspaceId,
+			headers: opts.headersJson,
+			fromEmail: getFromAddress(opts.parsed)?.email ?? null,
 		});
-
+	} catch (err: any) {
+		console.error("[parseAndStoreEmail] mail subscription upsert failed:", err?.message ?? err);
+	}
 }

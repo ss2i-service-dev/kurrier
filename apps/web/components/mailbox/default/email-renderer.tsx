@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
 import slugify from "@sindresorhus/slugify";
-import { Archive, Code, Download, EllipsisVertical, Forward, Mail, Reply, ReplyAll, Trash2 } from "lucide-react";
+import { Archive, Ban, Code, Download, EllipsisVertical, Forward, Mail, Reply, ReplyAll, Trash2 } from "lucide-react";
 import { Temporal } from "@js-temporal/polyfill";
 import dynamic from "next/dynamic";
 import { ActionIcon, Button, Menu, Modal, Tooltip } from "@mantine/core";
@@ -19,6 +19,8 @@ import {getRawMessageDownloadUrl} from "@/lib/actions/uploads-actions";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { useDisclosure } from "@mantine/hooks";
 import MailUnsubscriber from "@/components/mailbox/default/mail-unsubscriber";
+import BlockSenderModal from "@/components/mailbox/default/block-sender-modal";
+import { emailDomain, isFreeMailDomain, normalizeAddress } from "@common/sender-block";
 const EmailEditor = dynamic(
 	() => import("@/components/mailbox/default/editor/email-editor"),
 	{
@@ -210,6 +212,11 @@ function EmailRenderer({
 		}
 	}, [activeMailboxId]);
 
+	// ss2i : blocage de l'expediteur depuis le menu (le serveur refuse domaines grand public et personnels).
+	const senderAddress = normalizeAddress(getMessageAddress(message, "from") ?? "");
+	const senderDomain = emailDomain(senderAddress);
+	const [blockTarget, setBlockTarget] = useState<{ kind: "address" | "domain"; value: string } | null>(null);
+
 	const downloadEml = async () => {
 		const { url } = await getRawMessageDownloadUrl(message.id);
 		if (url) {
@@ -360,6 +367,14 @@ function EmailRenderer({
 				</div>
 			</Modal>
 
+			{blockTarget && (
+				<BlockSenderModal
+					kind={blockTarget.kind}
+					value={blockTarget.value}
+					opened
+					onClose={() => setBlockTarget(null)}
+				/>
+			)}
 			<div className={"grid grid-cols-12"}>
 				<div className={"col-span-12"}>
 					{threadIndex === 0 && <div className={"flex gap-3 items-center"}>
@@ -468,6 +483,26 @@ function EmailRenderer({
 									>
 										Delete
 									</Menu.Item>
+									{senderAddress.includes("@") && (
+										<>
+											<Menu.Item
+												color="red"
+												leftSection={<Ban size={14} />}
+												onClick={() => setBlockTarget({ kind: "address", value: senderAddress })}
+											>
+												Block {senderAddress}
+											</Menu.Item>
+											{senderDomain && !isFreeMailDomain(senderDomain) && (
+												<Menu.Item
+													color="red"
+													leftSection={<Ban size={14} />}
+													onClick={() => setBlockTarget({ kind: "domain", value: senderDomain })}
+												>
+													Block domain {senderDomain}
+												</Menu.Item>
+											)}
+										</>
+									)}
 									<Menu.Divider />
 
 									<Menu.Item

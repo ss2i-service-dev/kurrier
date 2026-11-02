@@ -6,10 +6,22 @@ export const markAsRead = async (
         threadId: string,
         mailboxId: string,
         markSmtp: boolean,
+        // ss2i : si fourni, seuls ces messages sont marques lus (fil mixte) : ni le compteur du
+        // fil ni les drapeaux IMAP du fil entier ne sont touches ; le deplacement qui suit
+        // recalcule les compteurs des dossiers concernes.
+        onlyMessageIds?: string[],
     ) => {
         const ids = [threadId];
 
         if (!ids.length || !mailboxId) return;
+
+        if (onlyMessageIds?.length) {
+            await db
+                .update(messages)
+                .set({ seen: true, updatedAt: new Date() })
+                .where(and(inArray(messages.id, onlyMessageIds), eq(messages.mailboxId, mailboxId)));
+            return;
+        }
 
         const now = new Date();
         await db

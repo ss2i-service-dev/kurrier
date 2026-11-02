@@ -64,8 +64,11 @@ const BASE_CSS = `
 .email-root a { color: var(--link); text-decoration: none; }
 .email-root a:hover { text-decoration: underline; }
 
+/* max-width sans !important : un style en ligne du mail (logo en
+   width:100%;max-width:250px) doit garder la main, sinon l'image s'étire sur
+   toute la largeur de la zone de lecture. */
 .email-root img, .email-root video, .email-root canvas, .email-root svg {
-  max-width: 100% !important; height: auto !important;
+  max-width: 100%; height: auto !important;
 }
 
 /* Don’t style tables/cells; just prevent overflow */

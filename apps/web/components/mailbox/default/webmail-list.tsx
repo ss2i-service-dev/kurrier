@@ -41,7 +41,7 @@ export default function WebmailList({
 }: WebListProps) {
 	const {labelsByThreadId, mailboxThreads: serverThreads} = use(mailboxThreadPromise)
 	const globalLabels = use(globalLabelsPromise)
-	const {mailboxSync, activeMailbox} = use(fetchMailboxPromise)
+	const {mailboxSync, activeMailbox, count} = use(fetchMailboxPromise)
 	const identityMailboxes = use(identityMailboxesPromise)
 	const isMobile = useMediaQuery("(max-width: 768px)");
 	// Chemin reel de l'URL : useParams garde l'ancien threadId apres un retour
@@ -79,6 +79,10 @@ export default function WebmailList({
 							publicConfig={publicConfig}
 							identityMailboxes={identityMailboxes}
 							activeMailbox={activeMailbox}
+							// ss2i : « Select all » propose aussi les fils des autres pages ; count
+							// compte les messages du dossier, d'ou « il y en a peut-etre d'autres ».
+							selectAllScope={{ kind: "mailbox", mailboxId: String(activeMailbox.id) }}
+							mayHaveMore={count > mailboxThreads.length}
 						/>
 
 						<ul role="list" className={`divide-y rounded-4xl`}>

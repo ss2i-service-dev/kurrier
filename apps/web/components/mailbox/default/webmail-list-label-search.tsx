@@ -17,6 +17,7 @@ import { useMediaQuery } from "@mantine/hooks";
 import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-item-mobile";
 import { usePathname } from "next/navigation";
 import { useHiddenThreads } from "@/lib/pending-moves";
+import type { SelectAllScope } from "@/lib/actions/select-all";
 
 type WebListProps = {
     mailboxThreads: FetchMailboxThreadsResult;
@@ -31,6 +32,9 @@ type WebListProps = {
     // ss2i : dossier virtuel (clients) : chaque fil garde son propre dossier pour l'ouverture
     // et les actions ; activeMailbox ne sert alors qu'a l'en-tete et au contexte.
     mailboxById?: Record<string, MailboxEntity>;
+    // ss2i : « Select all » au-dela de la page (recherche seulement pour l'instant).
+    selectAllScope?: SelectAllScope;
+    totalThreads?: number;
 };
 
 export default function WebmailListLabelSearch({
@@ -44,6 +48,8 @@ export default function WebmailListLabelSearch({
                                         workspacePublicId,
                                         labelsByThreadId,
                                         mailboxById,
+                                        selectAllScope,
+                                        totalThreads,
                                     }: WebListProps) {
     const mailboxOf = (mailboxId: string) => mailboxById?.[mailboxId] ?? activeMailbox;
     // ss2i : comme webmail-list, les fils en cours de depart (corbeille, archive...)
@@ -80,6 +86,8 @@ export default function WebmailListLabelSearch({
                             publicConfig={publicConfig}
                             identityMailboxes={identityMailboxes}
                             activeMailbox={activeMailbox}
+                            selectAllScope={selectAllScope}
+                            totalThreads={totalThreads}
                         />
 
                         <ul role="list" className={`divide-y rounded-4xl`}>

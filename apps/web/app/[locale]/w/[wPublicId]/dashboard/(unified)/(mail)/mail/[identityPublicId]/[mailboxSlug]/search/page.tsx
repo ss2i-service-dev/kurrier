@@ -122,6 +122,19 @@ export default async function SearchPage({
 					identityMailboxes={identityMailboxes}
 					globalLabels={globalLabels}
 					labelsByThreadId={labelsByThreadId}
+					// ss2i : « Select all N conversations in this search », pages suivantes comprises.
+					selectAllScope={{
+						kind: "search",
+						mailboxId: String(activeMailbox.id),
+						q,
+						workspacePublicId,
+						identityPublicId,
+						mailboxSlug,
+						has,
+						unread,
+						starred,
+					}}
+					totalThreads={totalThreads}
 				/>
 			)}
 

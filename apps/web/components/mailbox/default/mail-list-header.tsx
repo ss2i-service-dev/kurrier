@@ -3,6 +3,7 @@ import React, { useRef, useEffect, useState } from "react";
 import { Archive, Inbox, ListChecks, MailOpen, RotateCw, Trash2 } from "lucide-react";
 import { findLikelyNotSpam } from "@/lib/actions/spam-triage";
 import { moveWithUndo } from "@/lib/pending-moves";
+import { fetchAllThreadIds, type SelectAllScope } from "@/lib/actions/select-all";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import {
 	archiveThread,
@@ -42,17 +43,27 @@ function MailListHeader({
 	publicConfig,
 	identityMailboxes,
 	activeMailbox,
+	selectAllScope,
+	totalThreads,
+	mayHaveMore,
 }: {
 	mailboxThreads: FetchMailboxThreadsResult;
 	publicConfig: PublicConfig;
 	identityMailboxes: FetchIdentityMailboxListResult;
 	activeMailbox: MailboxEntity;
 	mailboxSync?: MailboxSyncEntity;
+	// ss2i : « tout selectionner » au-dela de la page. Sans scope, pas de proposition.
+	selectAllScope?: SelectAllScope;
+	// Nombre total de fils s'il est connu (recherche), sinon mayHaveMore dit s'il y en a d'autres.
+	totalThreads?: number;
+	mayHaveMore?: boolean;
 }) {
 	const { state, setState } = useDynamicContext<{
 		selectedThreadIds: Set<string>;
 		activeMailbox?: MailboxEntity | null;
 		identityPublicId: string;
+		// ss2i : la selection couvre tout le dossier ou toute la recherche, pages invisibles comprises.
+		allMatching?: boolean;
 	}>();
 
 	const identityIdRef = useRef<string | undefined>(activeMailbox?.identityId);
@@ -77,16 +88,45 @@ function MailListHeader({
 
 	// ss2i : la selection ne garde que des fils affiches, sinon une action (corbeille,
 	// archive) partirait sur des fils que l'on ne voit plus.
+	// Exception : apres « Select all N conversations », la selection couvre volontairement
+	// les fils des autres pages ; elle redevient une selection de page une fois videe.
+	const allMatching = !!state?.allMatching && selectedSize > 0;
 	const visibleKey = visibleIds.join(",");
 	useEffect(() => {
 		const visible = new Set(visibleKey ? visibleKey.split(",") : []);
 		setState((prev) => {
 			const sel = prev?.selectedThreadIds;
-			if (!sel?.size) return prev;
+			if (!sel?.size) return prev?.allMatching ? { ...prev, allMatching: false } : prev;
+			if (prev?.allMatching) return prev;
 			const kept = new Set([...sel].filter((id) => visible.has(id)));
 			return kept.size === sel.size ? prev : { ...prev, selectedThreadIds: kept };
 		});
 	}, [visibleKey, setState]);
+
+	const [selectingAll, setSelectingAll] = useState(false);
+	const hasMore =
+		!!selectAllScope && (totalThreads != null ? totalThreads > visibleIds.length : !!mayHaveMore);
+	const selectAllMatching = async () => {
+		if (!selectAllScope) return;
+		setSelectingAll(true);
+		try {
+			const { ids, truncated } = await fetchAllThreadIds(selectAllScope);
+			const next = new Set<string>([...visibleIds, ...ids]);
+			setState((prev) => ({ ...prev, selectedThreadIds: next, allMatching: true }));
+			if (truncated)
+				toast.warning(`Selection limited to the ${next.size} most recent conversations`, {
+					position: "bottom-left",
+				});
+		} catch (e: any) {
+			toast.error(e?.message ?? "Selection failed", { position: "bottom-left" });
+		} finally {
+			setSelectingAll(false);
+		}
+	};
+	const clearSelection = () =>
+		setState((prev) => ({ ...prev, selectedThreadIds: new Set(), allMatching: false }));
+	const scopeLabel =
+		selectAllScope?.kind === "search" ? "in this search" : `in ${activeMailbox?.name ?? "this folder"}`;
 
 	const [reloading, setReloading] = useState(false);
 	const reload = async () => {
@@ -125,7 +165,7 @@ function MailListHeader({
 		const ids = Array.from(state?.selectedThreadIds ?? []).map(String);
 		const mailboxId = String(mailboxIdRef.current);
 		if (!ids.length) return;
-		setState((prev) => ({ ...prev, selectedThreadIds: new Set() }));
+		setState((prev) => ({ ...prev, selectedThreadIds: new Set(), allMatching: false }));
 		moveWithUndo({
 			mailboxId,
 			threadIds: ids,
@@ -211,6 +251,12 @@ function MailListHeader({
 					<input
 						type="checkbox"
 						onChange={(e) => {
+							// ss2i : la case coche les fils de la page ; decocher apres « tout le
+							// dossier » vide toute la selection.
+							if (isChecked && allMatching) {
+								clearSelection();
+								return;
+							}
 							const newSet = new Set(state?.selectedThreadIds ?? []);
 							if (!isChecked) {
 								mailboxThreads.forEach((t) => newSet.add(t.threadId));
@@ -316,6 +362,39 @@ function MailListHeader({
 					{isMobile && <ComposeMail publicConfig={publicConfig} identityMailboxes={identityMailboxes} />}
 				</div>
 			</div>
+
+			{/* ss2i : bandeau contextuel, comme Gmail : la page est cochee, proposer tout le reste. */}
+			{!isOnSnoozedPage && isChecked && (hasMore || allMatching) && (
+				<div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 bg-muted/60 px-3 py-1.5 text-xs">
+					{allMatching ? (
+						<>
+							<span>
+								All {selectedSize} conversations {scopeLabel} are selected.
+							</span>
+							<button type="button" onClick={clearSelection} className="font-semibold text-brand hover:underline">
+								Clear selection
+							</button>
+						</>
+					) : (
+						<>
+							<span>All {visibleIds.length} conversations on this page are selected.</span>
+							<button
+								type="button"
+								onClick={selectAllMatching}
+								disabled={selectingAll}
+								className="font-semibold text-brand hover:underline disabled:opacity-60"
+								data-ss2i-shortcut="selection-select-all-matching"
+							>
+								{selectingAll
+									? "Selecting..."
+									: totalThreads != null
+										? `Select all ${totalThreads} conversations ${scopeLabel}`
+										: `Select all conversations ${scopeLabel}`}
+							</button>
+						</>
+					)}
+				</div>
+			)}
 
 			{mailboxKind.current === "trash" && (
 				<div

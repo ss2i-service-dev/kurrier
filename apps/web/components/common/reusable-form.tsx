@@ -14,6 +14,7 @@ import { Button as MantineButton, Alert } from "@mantine/core";
 import { IconLoader2 } from "@tabler/icons-react";
 import { ReusableFormItems } from "@/components/common/reusable-form-items";
 import {toast} from "sonner";
+import { useK } from "@/components/k/ui-context";
 
 export type ReusableFormProps = BaseFormProps & {
 	submitButtonProps?: SubmitButtonProps;
@@ -50,6 +51,8 @@ export function ReusableForm({
 	errorClasses = "text-red-500",
 	formKey,
 }: ReusableFormProps) {
+	// ss2i : libelle francais dans la nouvelle interface
+	const k = useK();
 	const [formState, formAction, isPending] = useActionState<
 		FormState,
 		FormData
@@ -125,7 +128,7 @@ export function ReusableForm({
 
 			{notifyKind === "alert" && error && (
 				<Alert color="red" variant="light" className="mt-3 -mb-4">
-					<span className={`${errorClasses} text-sm`}>Error: {error}</span>
+					<span className={`${errorClasses} text-sm`}>{k("Error: ", "Erreur : ")}{error}</span>
 				</Alert>
 			)}
 

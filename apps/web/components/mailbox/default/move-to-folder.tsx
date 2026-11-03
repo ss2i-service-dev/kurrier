@@ -12,6 +12,7 @@ import {
 } from "@/lib/actions/mailbox";
 import { toast } from "sonner";
 import { moveWithUndo } from "@/lib/pending-moves";
+import { useK, useNouvelle } from "@/components/k/ui-context";
 
 function MoveToFolder({
 	identityMailboxes,
@@ -20,6 +21,8 @@ function MoveToFolder({
 	identityMailboxes: FetchIdentityMailboxListResult;
 	activeMailbox: MailboxEntity;
 }) {
+	const k = useK();
+	const nouvelle = useNouvelle();
 	const [opened, { open, close }] = useDisclosure(false);
 	const params = useParams();
 
@@ -32,7 +35,7 @@ function MoveToFolder({
 	const mailboxes = (entry?.mailboxes ?? []).filter((m) => m.kind !== "drafts");
 	const { options: mailboxOptions } = useMailboxOptions({
 		mailboxes,
-		identityLabel: entry?.identity?.value ?? "Folders",
+		identityLabel: entry?.identity?.value ?? k("Folders", "Dossiers"),
 	});
 
 	const { state, setState } = useDynamicContext<{
@@ -49,7 +52,7 @@ function MoveToFolder({
 		const ids = Array.from(state?.selectedThreadIds ?? []);
 		if (!active?.id || !ids.length || !destId || destId === "none") return;
 		if (destId === active.id) {
-			toast.info("Already in this folder");
+			toast.info(k("Already in this folder", "Déjà dans ce dossier"));
 			return;
 		}
 
@@ -60,35 +63,35 @@ function MoveToFolder({
 		moveWithUndo({
 			mailboxId: active.id,
 			threadIds: ids,
-			message: ids.length > 1 ? `${ids.length} conversations moved` : "Moved to folder",
+			message: ids.length > 1 ? k(`${ids.length} conversations moved`, `${ids.length} conversations déplacées`) : k("Moved to folder", "Déplacée dans le dossier"),
 			run: () => moveToFolder(ids, active.id, destId, !!active.metaData?.imap, true),
-			failure: "Move failed, messages restored",
+			failure: k("Move failed, messages restored", "Échec du déplacement, messages restaurés"),
 		});
 	};
 
 	return (
 		<>
-			<Modal opened={opened} onClose={close} title="Move to">
+			<Modal opened={opened} onClose={close} title={k("Move to", "Déplacer vers")}>
 				<div className="space-y-4">
 					<Select
 						data={mailboxOptions[0]?.items ?? []}
-						label="Choose folder"
-						placeholder="Select…"
+						label={k("Choose folder", "Choisir un dossier")}
+						placeholder={k("Select…", "Sélectionner…")}
 						value={destId}
 						onChange={(v) => setDestId(v)}
 						searchable
-						nothingFoundMessage="No folders"
+						nothingFoundMessage={k("No folders", "Aucun dossier")}
 					/>
 					<div className="flex gap-2 justify-end">
 						<Button variant="default" onClick={close} disabled={submitting}>
-							Cancel
+							{k("Cancel", "Annuler")}
 						</Button>
 						<Button
 							onClick={onConfirm}
 							loading={submitting}
 							disabled={!destId || destId === "none"}
 						>
-							Move
+							{k("Move", "Déplacer")}
 						</Button>
 					</div>
 				</div>
@@ -97,8 +100,13 @@ function MoveToFolder({
 			<button
 				type="button"
 				onClick={open}
-				className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs hover:bg-muted"
-				title="Move to folder"
+				className={
+					nouvelle
+						? "k-focus inline-flex h-8 items-center gap-1.5 rounded-k-sm px-2 text-[13px] text-k-ink-2 transition-colors hover:bg-k-hover hover:text-k-ink"
+						: "inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs hover:bg-muted"
+				}
+				title={k("Move to folder", "Déplacer vers un dossier")}
+				aria-label={k("Move to folder", "Déplacer vers un dossier")}
 			>
 				<IconFolderSymlink className="h-5 w-5" />
 			</button>

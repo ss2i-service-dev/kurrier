@@ -28,7 +28,31 @@
   ];
 
   // Retrouve un bouton par son libellé visible, exactement puis en repli partiel.
+  // ss2i nouvelle interface (<html data-ui="ss2i">) : ses boutons portent
+  // data-k-action et des libelles en francais ; on les cherche d'abord par la.
+  // L'interface classique n'a pas ces attributs : rien ne change pour elle.
+  const nouvelle = () => document.documentElement.dataset.ui === "ss2i";
+  const ACTIONS_K = { Compose: "compose", Reply: "reply", Forward: "forward", Archive: "archive", Delete: "delete", Send: "send" };
+  const visible = (el) => el && el.offsetParent !== null;
+  const cliquerK = (action) => {
+    const cible = Array.from(document.querySelectorAll(`[data-k-action="${action}"]`)).filter(visible).pop();
+    if (cible) cible.click();
+    return Boolean(cible);
+  };
+
+  // Nouvelle interface : fil suivant / precedent de la liste (fleches, j, k).
+  const voisin = (pas) => {
+    const lignes = Array.from(document.querySelectorAll("li[data-thread-id]")).filter(visible);
+    if (!lignes.length) return false;
+    const i = lignes.findIndex((l) => l.getAttribute("aria-current") === "true");
+    const cible = lignes[i < 0 ? 0 : Math.min(lignes.length - 1, Math.max(0, i + pas))];
+    cible.click();
+    cible.scrollIntoView({ block: "nearest" });
+    return true;
+  };
+
   const cliquer = (libelle) => {
+    if (nouvelle() && ACTIONS_K[libelle] && cliquerK(ACTIONS_K[libelle])) return true;
     const boutons = Array.from(document.querySelectorAll("button, a[role=button]"));
     const cible =
       boutons.find((b) => b.textContent.trim() === libelle) ||
@@ -58,12 +82,14 @@
   // revient a la liste (email-renderer.tsx, unreadMessage).
   const marquerNonLu = () => {
     if (!dansUnMail()) return false;
+    if (nouvelle() && cliquerK("unread")) return true;
     const cible = document.querySelector('button[aria-label="Mark as unread"]');
     if (cible) cible.click();
     return Boolean(cible);
   };
 
   const focaliserRecherche = () => {
+    if (nouvelle() && cliquerK("search")) return true;
     const champ = document.querySelector('input[placeholder^="Search this mailbox"]');
     if (champ) champ.focus();
     return Boolean(champ);
@@ -82,18 +108,32 @@
       "position:fixed;inset:0;z-index:99999;display:flex;align-items:center;" +
       "justify-content:center;background:rgba(0,0,0,.55)";
     const vues = new Set();
-    const lignes = RACCOURCIS.filter(([, l]) => !vues.has(l) && vues.add(l))
+    // ss2i nouvelle interface : raccourcis en plus, et aide aux couleurs du theme.
+    const EN_PLUS = nouvelle()
+      ? [
+          ["↑ ↓", "Fil precedent / suivant (aussi k / j)"],
+          ["Echap", "Fermer le fil ouvert"],
+          ["Ctrl ↵", "Envoyer le message en cours"],
+        ]
+      : [];
+    const lignes = [...RACCOURCIS.filter(([t]) => !["ArrowDown", "ArrowUp", "j", "k"].includes(t)), ...EN_PLUS]
+      .filter(([, l]) => !vues.has(l) && vues.add(l))
       .map(
         ([touche, libelle]) =>
           `<tr><td style="padding:.35rem .9rem .35rem 0;text-align:right">` +
-          `<kbd style="background:#333;color:#fff;border-radius:4px;padding:.1rem .45rem;` +
+          (nouvelle()
+            ? `<kbd style="background:var(--k-hover);color:var(--k-ink);border:1px solid var(--k-line-strong);border-radius:5px;padding:.1rem .45rem;` 
+            : `<kbd style="background:#333;color:#fff;border-radius:4px;padding:.1rem .45rem;`) +
           `font-family:monospace">${touche}</kbd></td>` +
           `<td style="padding:.35rem 0">${libelle}</td></tr>`
       )
       .join("");
     boite.innerHTML =
-      `<div style="background:#1b1b1f;color:#eee;border-radius:12px;padding:1.5rem 2rem;` +
-      `font:14px system-ui;box-shadow:0 10px 40px rgba(0,0,0,.5)">` +
+      (nouvelle()
+        ? `<div style="background:var(--k-surface);color:var(--k-ink);border-radius:14px;padding:1.4rem 1.8rem;` +
+          `font:13.5px var(--font-sans),system-ui;box-shadow:var(--k-shadow-pop);min-width:340px">`
+        : `<div style="background:#1b1b1f;color:#eee;border-radius:12px;padding:1.5rem 2rem;` +
+          `font:14px system-ui;box-shadow:0 10px 40px rgba(0,0,0,.5)">`) +
       `<div style="font-weight:600;margin-bottom:.9rem">Raccourcis clavier</div>` +
       `<table>${lignes}</table>` +
       `<div style="margin-top:1rem;opacity:.6;font-size:12px">` +
@@ -134,7 +174,21 @@
           if (aide) {
             aide.remove();
             e.preventDefault();
+            return;
           }
+          // Nouvelle interface : Echap ferme le fil ouvert (sauf fenetre ou menu ouvert).
+          if (nouvelle() && !document.querySelector('[role="dialog"], [role="menu"]') && cliquerK("close")) e.preventDefault();
+          return;
+        }
+
+        // Nouvelle interface : navigation dans la liste (jamais dans un menu ou une fenetre).
+        if (nouvelle() && ["ArrowDown", "ArrowUp", "j", "k"].includes(e.key)) {
+          if (
+            e.target.closest?.('[role="menu"], [role="listbox"], [role="dialog"], [role="tree"]') ||
+            document.querySelector('[role="dialog"][aria-modal="true"]')
+          )
+            return;
+          if (voisin(e.key === "ArrowDown" || e.key === "j" ? 1 : -1)) e.preventDefault();
           return;
         }
 

@@ -7,6 +7,8 @@ import { unreadPanelEnabled } from "@/lib/actions/unread-panel";
 import { listPreviewMode } from "@/lib/actions/list-preview";
 import { threadOrder } from "@/lib/actions/thread-order";
 import { rfcStyleEnabled } from "@/lib/actions/rfc-style";
+import SettingsInterface from "@/components/mailbox/settings/settings-interface";
+import { interfaceMode, isNouvelleInterface } from "@/lib/actions/interface-pref";
 import { FormState, handleAction } from "@schema";
 import { decode } from "decode-formdata";
 import { rlsClient } from "@/lib/actions/clients";
@@ -18,12 +20,16 @@ import { revalidatePath } from "next/cache";
 async function Page({params}: {params: Promise<Record<string, string>>}) {
 
     const paramsResolved = await params;
+    // ss2i : messages renvoyes par les actions, en francais dans la nouvelle interface.
+    const nv = await isNouvelleInterface();
     // ss2i : option du panneau des non-lus (par utilisateur, cote serveur).
     const unreadPanelOn = await unreadPanelEnabled();
     const listPreview = await listPreviewMode();
     const conversationOrder = await threadOrder();
     // ss2i : style RFC a l'envoi (par utilisateur, cote serveur).
     const rfcStyle = await rfcStyleEnabled();
+    // ss2i : interface classique ou nouvelle (par utilisateur).
+    const uiMode = await interfaceMode();
     const rls = await rlsClient();
     const [identity] = await rls((tx) =>
         tx
@@ -46,7 +52,7 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
                     .where(eq(identities.id, decodedForm.id as string)),
             );
             revalidatePath(String(decodedForm.pathname))
-            return {success: true, message: "Display name updated."};
+            return {success: true, message: nv ? "Nom affiché mis à jour." : "Display name updated."};
         })
     }
 
@@ -70,7 +76,7 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
                     .where(eq(identities.id, decodedForm.id as string));
             });
             revalidatePath(String(decodedForm.pathname))
-            return {success: true, message: "Signature updated."};
+            return {success: true, message: nv ? "Signature mise à jour." : "Signature updated."};
         })
     }
 
@@ -79,6 +85,7 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
         <SettingsSignature updateSignature={updateSignature} identity={identity} />
         <SettingsUnreadPanel enabled={unreadPanelOn} listPreview={listPreview} threadOrder={conversationOrder} />
         <SettingsComposeStyle enabled={rfcStyle} />
+        <SettingsInterface mode={uiMode} />
     </>
 }
 

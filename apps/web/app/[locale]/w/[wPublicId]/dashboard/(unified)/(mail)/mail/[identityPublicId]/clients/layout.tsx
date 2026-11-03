@@ -1,3 +1,5 @@
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import KSectionLayout from "@/components/k/section-layout";
 import React, { ReactNode } from "react";
 import MailboxSearchHeader from "@/components/mailbox/mailbox-search-header";
 
@@ -7,11 +9,18 @@ type LayoutProps = {
 	params: Promise<Record<string, string>>;
 };
 
-export default async function ClientsLayout({ children, params }: LayoutProps) {
+async function ClassicClientsLayout({ children, params }: LayoutProps) {
 	return (
 		<>
 			<MailboxSearchHeader params={params} />
 			{children}
 		</>
 	);
+}
+
+// ss2i : nouvelle interface (option par utilisateur) : cadre dedie (panneau + recherche).
+export default async function ClientsLayout(props: any) {
+	const page = <ClassicClientsLayout {...props} />;
+	if (!(await isNouvelleInterface())) return page;
+	return <KSectionLayout params={props.params}>{props.children}</KSectionLayout>;
 }

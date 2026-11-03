@@ -1,3 +1,4 @@
+import React from "react";
 import {
 	fetchIdentityMailboxList,
 	fetchMailbox,
@@ -11,8 +12,11 @@ import SearchPagination from "@/components/mailbox/default/search-pagination";
 import { PAGE_SIZE } from "@common/mail-client";
 import WebmailListLabelSearch from "@/components/mailbox/default/webmail-list-label-search";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import { KEmptyState, KPager } from "@/components/k/section";
+import { Paperclip, Search, Star } from "lucide-react";
 
-export default async function SearchPage({
+async function ClassicSearchPage({
 											 params,
 											 searchParams,
 										 }: {
@@ -155,4 +159,123 @@ export default async function SearchPage({
 			)}
 		</div>
 	);
+}
+
+// ss2i : nouvelle interface (option par utilisateur), memes donnees, autre presentation
+// (le cadre liste + lecture et la barre de recherche viennent du layout du dossier).
+async function NouvelleSearchPage({
+	params,
+	searchParams,
+}: {
+	params: {mailboxSlug: string; identityPublicId: string };
+	searchParams: Record<string, string | string[] | undefined>;
+}) {
+	const { identityPublicId, mailboxSlug } = await params;
+	const resolvedSearchParams = await searchParams;
+
+	const q = (resolvedSearchParams.q as string) ?? "";
+	const has = (resolvedSearchParams.has as string) === "1";
+	const unread = (resolvedSearchParams.unread as string) === "1";
+	const starred = (resolvedSearchParams.starred as string) === "1";
+	const page = Math.max(1, Number((resolvedSearchParams.page as string) ?? 1));
+
+	const workspacePublicId = await getWorkspacePublicId();
+	if (!workspacePublicId) {
+		return <KEmptyState icon={<Search size={22} strokeWidth={1.6} />} title="Espace de travail introuvable" />;
+	}
+
+	const { activeMailbox } = await fetchMailbox(identityPublicId, mailboxSlug);
+	const publicConfig = await getPublicEnv();
+
+	let items: ThreadHit[] = [];
+	let totalThreads = 0;
+	let totalMessages = 0;
+	if (q.trim()) {
+		const res = await initSearch(q, workspacePublicId, identityPublicId, mailboxSlug, has, unread, starred, page);
+		items = res.items ?? [];
+		totalThreads = res.totalThreads ?? items.length;
+		totalMessages = res.totalMessages ?? items.length;
+	}
+	const total = totalThreads || items.length;
+
+	const threadIds = items.map((i) => i.threadId);
+	const { threads } = threadIds.length > 0 ? await fetchMailboxThreadsList(activeMailbox.id, threadIds) : { threads: [] };
+	const identityMailboxes = await fetchIdentityMailboxList();
+	const globalLabels = await fetchLabelsByIdentityPublicId({ identityPublicId, scope: "thread" });
+	const labelsByThreadId = threads.length > 0 ? await fetchMailboxThreadLabels(threads) : {};
+
+	const chips = [
+		has && { icon: <Paperclip size={12} />, label: "Avec pièce jointe" },
+		unread && { icon: null, label: "Non lus" },
+		starred && { icon: <Star size={12} />, label: "Étoilés" },
+	].filter(Boolean) as { icon: React.ReactNode; label: string }[];
+
+	const pagerHref = (n: number) => {
+		const sp = new URLSearchParams();
+		if (q) sp.set("q", q);
+		sp.set("has", has ? "1" : "0");
+		sp.set("unread", unread ? "1" : "0");
+		sp.set("starred", starred ? "1" : "0");
+		sp.set("page", String(n));
+		return `/w/${workspacePublicId}/dashboard/mail/${identityPublicId}/${mailboxSlug}/search?${sp.toString()}`;
+	};
+
+	if (!q.trim()) {
+		return (
+			<KEmptyState
+				icon={<Search size={22} strokeWidth={1.6} />}
+				title="Recherche"
+				text="Saisissez des mots dans la barre de recherche ci-dessus pour retrouver des messages."
+			/>
+		);
+	}
+
+	return (
+		<div className="k-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
+			<div className="flex flex-wrap items-center gap-1.5 px-4 pb-1 pt-1 text-[12.5px] text-k-ink-3">
+				<span>
+					{totalThreads} fil{totalThreads > 1 ? "s" : ""} · {totalMessages} message{totalMessages > 1 ? "s" : ""}
+				</span>
+				{chips.map((c) => (
+					<span key={c.label} className="inline-flex items-center gap-1 rounded-full bg-k-accent-soft px-2 py-0.5 font-medium text-k-accent-soft-ink">
+						{c.icon}
+						{c.label}
+					</span>
+				))}
+			</div>
+			<WebmailListLabelSearch
+				mailboxThreads={threads as FetchMailboxThreadsByIdsResult["threads"]}
+				workspacePublicId={workspacePublicId}
+				publicConfig={publicConfig}
+				activeMailbox={activeMailbox}
+				identityPublicId={identityPublicId}
+				identityMailboxes={identityMailboxes}
+				globalLabels={globalLabels}
+				labelsByThreadId={labelsByThreadId}
+				selectAllScope={{
+					kind: "search",
+					mailboxId: String(activeMailbox.id),
+					q,
+					workspacePublicId,
+					identityPublicId,
+					mailboxSlug,
+					has,
+					unread,
+					starred,
+				}}
+				totalThreads={totalThreads}
+				kTitle={`Résultats pour « ${q} »`}
+				kEmptyTitle="Aucun résultat"
+				kEmptyText={`Aucun message ne correspond à « ${q} ». Essayez d'autres mots ou retirez un filtre.`}
+			/>
+			<KPager page={page} total={total} pageSize={PAGE_SIZE} href={pagerHref} />
+		</div>
+	);
+}
+
+export default async function SearchPage(props: {
+	params: {mailboxSlug: string; identityPublicId: string };
+	searchParams: Record<string, string | string[] | undefined>;
+}) {
+	return (await isNouvelleInterface()) ? <NouvelleSearchPage {...props} /> : <ClassicSearchPage {...props} />;
 }

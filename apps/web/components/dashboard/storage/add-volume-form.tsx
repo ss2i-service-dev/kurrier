@@ -3,6 +3,7 @@ import { ReusableForm } from "@/components/common/reusable-form";
 import React from "react";
 import { FieldConfig } from "@schema";
 import { Select } from "@mantine/core";
+import { useNouvelle } from "@/components/k/ui-context";
 
 function AddVolumeForm({
 	providerSelectOptions,
@@ -12,6 +13,8 @@ function AddVolumeForm({
 	providerSelectOptions: { label: string; value: string }[];
 	onCompleted?: () => void;
 }) {
+	// ss2i : textes francais dans la nouvelle interface
+	const nv = useNouvelle();
 	const fields: FieldConfig[] = [
 		// {
 		// 	name: "provider",
@@ -29,11 +32,13 @@ function AddVolumeForm({
 		// },
 		{
 			name: "bucketName",
-			label: "Bucket Name",
+			label: nv ? "Nom du bucket" : "Bucket Name",
 			wrapperClasses: "col-span-12",
 			bottomStartPrefix: (
 				<span className={"text-xs"}>
-					Kurrier will create this bucket in your storage provider.
+					{nv
+						? "Kurrier créera ce bucket chez votre fournisseur de stockage."
+						: "Kurrier will create this bucket in your storage provider."}
 				</span>
 			),
 			props: {
@@ -54,7 +59,7 @@ function AddVolumeForm({
 				onSuccess={finalizeVolume}
 				fields={fields}
 				submitButtonProps={{
-					submitLabel: "Create Bucket",
+					submitLabel: nv ? "Créer le bucket" : "Create Bucket",
 					wrapperClasses: "justify-center mt-6 flex",
 					buttonProps: {
 						fullWidth: true,

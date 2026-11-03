@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import SectionCard from "@/components/mailbox/settings/settings-section-card";
 import type { IdentityEntity } from "@db";
 import type { FormState } from "@schema";
+import { useK } from "@/components/k/ui-context";
 
 type UpdateSignatureAction = (_prev: FormState, formData: FormData) => Promise<FormState>;
 
@@ -22,6 +23,7 @@ export default function SettingsSignature({
 	identity: IdentityEntity;
 }) {
 	const pathname = usePathname();
+	const k = useK();
 	const initial = String((identity.metaData as any)?.signatureHtml ?? "");
 	const [html, setHtml] = useState(initial);
 	const [formState, formAction, isPending] = useActionState<FormState, FormData>(
@@ -30,8 +32,8 @@ export default function SettingsSignature({
 	);
 
 	useEffect(() => {
-		if (formState.error) toast.error("Error", { description: formState.error });
-		else if (formState.success) toast.success("Signature saved");
+		if (formState.error) toast.error(k("Error", "Erreur"), { description: formState.error });
+		else if (formState.success) toast.success(k("Signature saved", "Signature enregistrée"));
 	}, [formState]);
 
 	const preview = useMemo(
@@ -41,15 +43,18 @@ export default function SettingsSignature({
 
 	return (
 		<SectionCard
-			title="Signature"
-			description="HTML appended to every message sent from this identity. Leave empty for no signature."
+			title={k("Signature", "Signature")}
+			description={k(
+				"HTML appended to every message sent from this identity. Leave empty for no signature.",
+				"HTML ajouté à chaque message envoyé depuis cette identité. Laissez vide pour ne pas avoir de signature.",
+			)}
 		>
 			<Form action={formAction} className="space-y-4">
 				<input type="hidden" name="id" value={identity.id} />
 				<input type="hidden" name="pathname" value={pathname} />
 				<Textarea
 					name="signatureHtml"
-					label="Signature (HTML)"
+					label={k("Signature (HTML)", "Signature (HTML)")}
 					autosize
 					minRows={6}
 					maxRows={20}
@@ -58,7 +63,7 @@ export default function SettingsSignature({
 					styles={{ input: { fontFamily: "var(--font-mono)", fontSize: 12 } }}
 				/>
 				<div>
-					<div className="text-sm font-medium mb-2">Preview</div>
+					<div className="text-sm font-medium mb-2">{k("Preview", "Aperçu")}</div>
 					<div
 						className="rounded-md border border-neutral-200 dark:border-neutral-800 p-3 min-h-16 bg-white text-neutral-900"
 						dangerouslySetInnerHTML={{ __html: preview }}
@@ -66,7 +71,7 @@ export default function SettingsSignature({
 				</div>
 				<div className="flex items-center justify-end">
 					<Button type="submit" loading={isPending}>
-						Save signature
+						{k("Save signature", "Enregistrer la signature")}
 					</Button>
 				</div>
 			</Form>

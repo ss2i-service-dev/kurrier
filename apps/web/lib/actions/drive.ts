@@ -9,7 +9,7 @@ import { rlsClient } from "@/lib/actions/clients";
 import { DriveRouteContext, FormState, handleAction } from "@schema";
 import { decode } from "decode-formdata";
 import { revalidatePath } from "next/cache";
-import {and, eq, sql} from "drizzle-orm";
+import {and, eq, inArray, sql} from "drizzle-orm";
 
 import {
 	DeleteObjectCommand,
@@ -420,6 +420,34 @@ export async function getDriveDownloadUrl(entryId: string) {
 		{ expiresIn: 60 * 5 },
 	);
 
+}
+
+// ss2i : URLs d'apercu (affichage en ligne, sans telechargement force) pour la
+// visionneuse de la nouvelle interface. Lecture seule, meme controle d'acces (RLS)
+// que getDriveDownloadUrl.
+export async function getDriveViewUrls(entryIds: string[]) {
+	const ids = Array.from(new Set(entryIds)).slice(0, 60);
+	if (!ids.length) return {} as Record<string, string>;
+	const rls = await rlsClient();
+	const rows = await rls((tx) =>
+		tx.select().from(driveEntries).where(inArray(driveEntries.id, ids)),
+	);
+	const out: Record<string, string> = {};
+	await Promise.all(
+		rows.map(async (entry) => {
+			if (entry.type === "folder") return;
+			const meta = entry.metaData as any;
+			const bucket = String(meta?.bucket || "");
+			const key = String(meta?.key || entry.path?.replace(/^\/+/, "") || "");
+			if (!bucket || !key) return;
+			out[entry.id] = await getSignedUrl(
+				s3,
+				new GetObjectCommand({ Bucket: bucket, Key: key }),
+				{ expiresIn: 60 * 15 },
+			);
+		}),
+	);
+	return out;
 }
 
 export async function deleteDriveEntry(entryId: string) {

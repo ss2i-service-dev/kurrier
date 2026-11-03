@@ -9,6 +9,8 @@ import { ReusableForm } from "@/components/common/reusable-form";
 import { ulid } from "ulid";
 import { VerifyResult } from "@providers";
 import { parseSecret } from "@/lib/utils";
+import { useNouvelle } from "@/components/k/ui-context";
+import { envLabel } from "@/components/k/platform/ui";
 
 function NewSmtpAccountForm({
 	smtpSecret,
@@ -18,6 +20,17 @@ function NewSmtpAccountForm({
 	onCompleted?: (res: VerifyResult) => void;
 }) {
 	const parsedVaultValues = parseSecret(smtpSecret);
+	// ss2i : textes francais dans la nouvelle interface
+	const nv = useNouvelle();
+	const bool = nv
+		? [
+				{ label: "Oui", value: "true" },
+				{ label: "Non", value: "false" },
+			]
+		: [
+				{ label: "TRUE", value: "true" },
+				{ label: "FALSE", value: "false" },
+			];
 
 	const fields = [
 		{
@@ -38,7 +51,7 @@ function NewSmtpAccountForm({
 
 		{
 			name: "label",
-			label: (
+			label: nv ? "Nom du compte" : (
 				<code className="rounded bg-muted/50 px-2 py-1 text-xs">
 					ACCOUNT LABEL
 				</code>
@@ -47,7 +60,7 @@ function NewSmtpAccountForm({
 			props: {
 				autoComplete: "off",
 				required: true,
-				placeholder: "My SMTP Account",
+				placeholder: nv ? "Mon compte SMTP" : "My SMTP Account",
 				defaultValue: parsedVaultValues
 					? (parsedVaultValues["label"] ?? "")
 					: "",
@@ -58,16 +71,13 @@ function NewSmtpAccountForm({
 			rowKey === "SMTP_SECURE" || rowKey === "SMTP_POOL"
 				? {
 						name: `required.${rowKey}`,
-						label: (
+						label: nv ? envLabel(rowKey) : (
 							<code className="rounded bg-muted/50 px-2 py-1 text-xs">
 								{rowKey}
 							</code>
 						),
 						kind: "select" as const,
-						options: [
-							{ label: "TRUE", value: "true" },
-							{ label: "FALSE", value: "false" },
-						],
+						options: bool,
 						required: false,
 						wrapperClasses: "col-span-12 sm:col-span-6",
 						props: {
@@ -81,7 +91,7 @@ function NewSmtpAccountForm({
 					}
 				: {
 						name: `required.${rowKey}`,
-						label: (
+						label: nv ? envLabel(rowKey) : (
 							<code className="rounded bg-muted/50 px-2 py-1 text-xs">
 								{rowKey}
 							</code>
@@ -103,7 +113,9 @@ function NewSmtpAccountForm({
 			el: (
 				<div className="my-3 md:my-4">
 					<h4 className="text-xs uppercase tracking-wide text-muted-foreground font-medium">
-						Optional IMAP Config (Required for receiving emails)
+						{nv
+							? "Configuration IMAP (facultative, requise pour recevoir des messages)"
+							: "Optional IMAP Config (Required for receiving emails)"}
 					</h4>
 				</div>
 			),
@@ -113,16 +125,13 @@ function NewSmtpAccountForm({
 			rowKey === "IMAP_SECURE"
 				? {
 						name: `optional.${rowKey}`,
-						label: (
+						label: nv ? envLabel(rowKey) : (
 							<code className="rounded bg-muted/50 px-2 py-1 text-xs">
 								{rowKey}
 							</code>
 						),
 						kind: "select" as const,
-						options: [
-							{ label: "TRUE", value: "true" },
-							{ label: "FALSE", value: "false" },
-						],
+						options: bool,
 						required: false,
 						wrapperClasses: "col-span-12 sm:col-span-6",
 						props: {
@@ -136,7 +145,7 @@ function NewSmtpAccountForm({
 					}
 				: {
 						name: `optional.${rowKey}`,
-						label: (
+						label: nv ? envLabel(rowKey) : (
 							<code className="rounded bg-muted/50 px-2 py-1 text-xs">
 								{rowKey}
 							</code>
@@ -163,7 +172,7 @@ function NewSmtpAccountForm({
 			{...(parsedVaultValues
 				? {
 						submitButtonProps: {
-							submitLabel: "Save",
+							submitLabel: nv ? "Enregistrer" : "Save",
 							wrapperClasses: "justify-center mt-6 flex",
 							fullWidth: true,
 						},

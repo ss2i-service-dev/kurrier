@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* ss2i : styles de la nouvelle interface, limites a <html data-ui="ss2i"> */
+@import "./ss2i-ui.css";
 
 @custom-variant dark (&:is(.dark *));
 

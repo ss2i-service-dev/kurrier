@@ -22,12 +22,16 @@ export default function MailboxSearch({
 										  publicId,
 										  mailboxSlug,
 										  workspacePublicId,
+										  nouvelle = false,
 									  }: {
 	publicId: string;
 	mailboxSlug: string;
 	workspacePublicId: string;
+	// ss2i : bouton d'ouverture au style de la nouvelle interface (option par utilisateur).
+	nouvelle?: boolean;
 }) {
 
+	const k = (en: string, fr: string) => (nouvelle ? fr : en);
 	const showSnippet = useShowSnippet();
 	const [open, setOpen] = React.useState(false);
 	const [query, setQuery] = React.useState("");
@@ -116,6 +120,18 @@ export default function MailboxSearch({
 
 	return (
 		<>
+			{nouvelle ? (
+				<button
+					type="button"
+					onClick={() => setOpen(true)}
+					data-k-action="search"
+					className="k-focus flex h-9 w-full items-center gap-2 rounded-k bg-k-hover px-3 text-k-ink-3 transition-colors hover:text-k-ink-2"
+				>
+					<Search className="h-4 w-4" />
+					<span className="flex-1 text-left text-[13.5px]">Rechercher</span>
+					<kbd className="rounded border border-k-line-strong bg-k-surface px-1.5 font-mono text-[11px] leading-5">/</kbd>
+				</button>
+			) : (
 			<button
 				type="button"
 				onClick={() => setOpen(true)}
@@ -124,11 +140,17 @@ export default function MailboxSearch({
 				<Search className="h-4 w-4 opacity-60" />
 				<span className="text-sm">Search this mailbox (⌘K)</span>
 			</button>
+			)}
 
-			<CommandDialog open={open} onOpenChange={setOpen}>
+			<CommandDialog
+				open={open}
+				onOpenChange={setOpen}
+				title={k("Command Palette", "Recherche dans le courrier")}
+				description={k("Search for a command to run...", "Saisissez votre recherche, puis appuyez sur Entrée.")}
+			>
 				<CommandInput
 					autoFocus
-					placeholder="Search mail…"
+					placeholder={k("Search mail…", "Rechercher dans le courrier…")}
 					value={query}
 					onValueChange={setQuery}
 					// ss2i : requete precedente selectionnee a l'ouverture : une nouvelle frappe la remplace
@@ -152,7 +174,7 @@ export default function MailboxSearch({
 						}`}
 						variant={hasAttachment ? "default" : "secondary"}
 					>
-						Has attachment
+						{k("Has attachment", "Avec pièce jointe")}
 					</Badge>
 
 					<Badge
@@ -162,7 +184,7 @@ export default function MailboxSearch({
 						}`}
 						variant={onlyUnread ? "default" : "secondary"}
 					>
-						Unread only
+						{k("Unread only", "Non lus uniquement")}
 					</Badge>
 
 					<Badge
@@ -172,20 +194,20 @@ export default function MailboxSearch({
 						}`}
 						variant={isStarred ? "default" : "secondary"}
 					>
-						Starred only
+						{k("Starred only", "Favoris uniquement")}
 					</Badge>
 				</div>
 
 				<div className="px-4 py-2 text-xs text-muted-foreground">
 					{loading
-						? "Searching…"
-						: `Threads: ${totalThreads} · Messages: ${totalMessages}`}
+						? k("Searching…", "Recherche en cours…")
+						: k(`Threads: ${totalThreads} · Messages: ${totalMessages}`, `Fils : ${totalThreads} · Messages : ${totalMessages}`)}
 				</div>
 
 				<div className="max-h-[60vh] overflow-auto px-2 pb-2">
 					{items.length === 0 && !loading ? (
 						<div className="px-4 py-8 text-center text-sm text-muted-foreground">
-							No results found.
+							{k("No results found.", "Aucun résultat.")}
 						</div>
 					) : (
 						<ul className="space-y-2">
@@ -213,7 +235,7 @@ export default function MailboxSearch({
 											/>
 
 											<div className="truncate text-[15px] font-medium">
-												{t.subject || "(no subject)"}
+												{t.subject || k("(no subject)", "(sans objet)")}
 											</div>
 
 											{t.hasAttachment && (
@@ -271,11 +293,11 @@ export default function MailboxSearch({
 					<div className="flex items-center gap-2 text-sm text-muted-foreground">
 						<Search className="h-4 w-4 opacity-70" />
 						<span>
-							All search results for{" "}
+							{k("All search results for", "Tous les résultats pour")}{" "}
 							<span className="font-medium text-foreground">{`‘${query || ""}’`}</span>
 						</span>
 					</div>
-					<div className="text-xs text-muted-foreground">Press ENTER</div>
+					<div className="text-xs text-muted-foreground">{k("Press ENTER", "Appuyez sur Entrée")}</div>
 				</div>
 			</CommandDialog>
 		</>

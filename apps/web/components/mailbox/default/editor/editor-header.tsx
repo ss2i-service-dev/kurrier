@@ -1,3 +1,4 @@
+import { useK, useNouvelle } from "@/components/k/ui-context";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActionIcon,
@@ -31,6 +32,9 @@ function EditorHeader({
 	quoteScope?: "last" | "thread";
 	onQuoteScopeChange?: (scope: string) => void;
 }) {
+	// ss2i : libelles francais dans la nouvelle interface, anglais d'origine sinon.
+	const t = useK();
+	const nouvelle = useNouvelle();
 	const { state } = useDynamicContext<{
 		isPending: boolean;
 		message: MessageEntity;
@@ -67,8 +71,8 @@ function EditorHeader({
 	// ss2i : portee de la citation d'une reponse, modifiable avant l'envoi.
 	const isReplyMode = mode === "reply" || mode === "replyAll";
 	const quoteOptions = [
-		{ value: "last", label: "Quote last message" },
-		{ value: "thread", label: "Quote whole thread" },
+		{ value: "last", label: t("Quote last message", "Citer le dernier message") },
+		{ value: "thread", label: t("Quote whole thread", "Citer tout le fil") },
 	];
 
 	// Destinataires calcules depuis le message d'origine : Reply-To ou expediteur
@@ -105,11 +109,11 @@ function EditorHeader({
 
 	const options = useMemo(
 		() => [
-			{ value: "reply", label: "Reply", Icon: Reply },
+			{ value: "reply", label: t("Reply", "Répondre"), Icon: Reply },
 			...(recipients.cc.length > 0
-				? [{ value: "replyAll", label: "Reply all", Icon: ReplyAll }]
+				? [{ value: "replyAll", label: t("Reply all", "Répondre à tous"), Icon: ReplyAll }]
 				: []),
-			{ value: "forward", label: "Forward", Icon: Forward },
+			{ value: "forward", label: t("Forward", "Transférer"), Icon: Forward },
 		],
 		[recipients],
 	);
@@ -182,6 +186,116 @@ function EditorHeader({
 		if (n === "bcc") setBccActive(true);
 	};
 
+	// ss2i : nouvelle interface, en-tete reorganise (memes champs, meme logique) :
+	// mode et portee de la citation en haut, puis une ligne par champ alignee.
+	if (nouvelle) {
+		const row = "flex min-h-[42px] items-center gap-2 border-b border-k-line px-4";
+		const label = "w-11 shrink-0 text-[13px] text-k-ink-3";
+		const recipients = (n: "to" | "cc" | "bcc", values: string[]) => (
+			<EmailHeaderContacts
+				key={`${n}-${mode}`}
+				name={n}
+				defaultValues={values}
+				onChange={(value) => {
+					if (value.length > 0) setSubjectFocus(true);
+				}}
+			/>
+		);
+		const ghostSelect = { variant: "unstyled" as const, size: "xs" as const, comboboxProps: { withinPortal: true, position: "bottom-start" as const, offset: 6, zIndex: 3000 } };
+		return (
+			<RecipientsDnDProvider onActivate={activateField}>
+				<input type="hidden" name="mode" value={serverMode} />
+				{state.message ? (
+					<div className="k-editor-modes flex items-center gap-1 border-b border-k-line px-3 py-1">
+						<Select
+							{...ghostSelect}
+							value={mode}
+							onChange={(v) => v && setMode(v as Mode)}
+							data={options}
+							renderOption={renderOption}
+							leftSection={<CurrentIcon size={14} />}
+							leftSectionPointerEvents="none"
+							w={170}
+						/>
+						{isReplyMode && (
+							<Select {...ghostSelect} value={quoteScope} onChange={(v) => v && onQuoteScopeChange?.(v)} data={quoteOptions} w={230} />
+						)}
+					</div>
+				) : null}
+
+				<RecipientDropZone name="to" className={`${row} py-1`}>
+					<span className={label}>À</span>
+					<div className="min-w-0 flex-1">{recipients("to", toValues)}</div>
+					<div className="flex shrink-0 items-center gap-1 text-[12.5px]">
+						{!ccActive && (
+							<RecipientDropZone name="cc" as="span">
+								<button type="button" onClick={() => setCcActive(true)} className="rounded-k-sm px-1.5 py-0.5 text-k-ink-3 hover:bg-k-hover hover:text-k-ink">
+									Cc
+								</button>
+							</RecipientDropZone>
+						)}
+						{!bccActive && (
+							<RecipientDropZone name="bcc" as="span">
+								<button type="button" onClick={() => setBccActive(true)} className="rounded-k-sm px-1.5 py-0.5 text-k-ink-3 hover:bg-k-hover hover:text-k-ink">
+									Cci
+								</button>
+							</RecipientDropZone>
+						)}
+					</div>
+				</RecipientDropZone>
+				{ccActive && (
+					<RecipientDropZone name="cc" className={`${row} py-1`}>
+						<span className={label}>Cc</span>
+						<div className="min-w-0 flex-1">{recipients("cc", ccValues)}</div>
+					</RecipientDropZone>
+				)}
+				{bccActive && (
+					<RecipientDropZone name="bcc" className={`${row} py-1`}>
+						<span className={label}>Cci</span>
+						<div className="min-w-0 flex-1">{recipients("bcc", bccValues)}</div>
+					</RecipientDropZone>
+				)}
+
+				<div className={row}>
+					<span className={label}>Objet</span>
+					<FocusTrap active={subjectFocus}>
+						<input
+							name="subject"
+							value={subject}
+							onChange={(e) => setSubject(e.currentTarget.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter" || e.key === "Tab") {
+									e.preventDefault();
+									setSubjectFocus(false);
+									focusOnSubject && focusOnSubject();
+								}
+							}}
+							placeholder="Objet du message"
+							className="h-10 min-w-0 flex-1 bg-transparent text-[14px] font-medium text-k-ink outline-none placeholder:font-normal placeholder:text-k-ink-3"
+						/>
+					</FocusTrap>
+				</div>
+
+				{fromOptions.length > 1 ? (
+					<div className={row}>
+						<span className={label}>De</span>
+						<Select
+							{...ghostSelect}
+							size="sm"
+							w={300}
+							name="identityPublicId"
+							onChange={(publicId) => publicId && setIdentityPublicId(publicId)}
+							value={identityPublicId || null}
+							data={fromOptions}
+						/>
+					</div>
+				) : (
+					<input type="hidden" name="identityPublicId" value={identityPublicId} />
+				)}
+			</RecipientsDnDProvider>
+		);
+	}
+
 	return (
 		<RecipientsDnDProvider onActivate={activateField}>
 		{isMobile ? (
@@ -242,18 +356,18 @@ function EditorHeader({
 					{!ccActive && (
 						<RecipientDropZone name="cc" as="span"><button type="button" onClick={() => setCcActive(true)}
 							className="hover:underline"
-							aria-label="Add Cc"
-							title="Add Cc"
+							aria-label={t("Add Cc", "Ajouter Cc")}
+							title={t("Add Cc", "Ajouter Cc")}
 						>
 							Cc </button></RecipientDropZone>
 					)}
 					{!bccActive && (
 						<RecipientDropZone name="bcc" as="span"><button type="button" onClick={() => setBccActive(true)}
 							className="hover:underline"
-							aria-label="Add Bcc"
-							title="Add Bcc"
+							aria-label={t("Add Bcc", "Ajouter Cci")}
+							title={t("Add Bcc", "Ajouter Cci")}
 						>
-							Bcc </button></RecipientDropZone>
+							{t("Bcc", "Cci")} </button></RecipientDropZone>
 					)}
 				</div>
 			</div>
@@ -276,7 +390,7 @@ Cc
 </RecipientDropZone> )} {bccActive && (
 				<RecipientDropZone name="bcc" className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]">
 <span className="text-[13px] text-muted-foreground sm:text-right leading-6">
-Bcc
+{t("Bcc", "Cci")}
 </span>
 					<EmailHeaderContacts
 						name={"bcc"}
@@ -288,7 +402,7 @@ Bcc
 						}}
 					/>
 </RecipientDropZone> )}
-<div className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]"> <span className="text-[13px] text-muted-foreground sm:text-right leading-6"> Subject
+<div className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]"> <span className="text-[13px] text-muted-foreground sm:text-right leading-6"> {t("Subject", "Objet")}
 				</span>
 				<Input
 					variant="unstyled"
@@ -300,11 +414,11 @@ Bcc
 			</div>
 			<div className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]">
 				<span className="text-[13px] text-muted-foreground sm:text-right leading-6">
-					From
+					{t("From", "De")}
 				</span>
 				<div className={"my-2"}>
 					<Select
-						placeholder="Pick value"
+						placeholder={t("Pick value", "Choisir")}
 						size="sm"
 						variant="unstyled"
 						w={260}
@@ -363,7 +477,7 @@ Bcc
 
 				<div className="flex-grow flex justify-between gap-2 min-w-0">
 					<div className="flex flex-1 min-w-0 items-stretch flex-col justify-start">
-						<RecipientDropZone name="to" className="grid grid-cols-[2.5rem_1fr] items-start gap-2 py-1"> <span className="text-sm font-medium text-muted-foreground text-right leading-7">To</span>
+						<RecipientDropZone name="to" className="grid grid-cols-[2.5rem_1fr] items-start gap-2 py-1"> <span className="text-sm font-medium text-muted-foreground text-right leading-7">{t("To", "À")}</span>
 							<EmailHeaderContacts
 								key={`to-${mode}`}
 								name={"to"}
@@ -385,7 +499,7 @@ Bcc
 										}
 									}}
 								/> </RecipientDropZone> )} {bccActive && (
-							<RecipientDropZone name="bcc" className="grid grid-cols-[2.5rem_1fr] items-start gap-2 py-1 border-t border-border/60"> <span className="text-sm font-medium text-muted-foreground text-right leading-7">Bcc</span>
+							<RecipientDropZone name="bcc" className="grid grid-cols-[2.5rem_1fr] items-start gap-2 py-1 border-t border-border/60"> <span className="text-sm font-medium text-muted-foreground text-right leading-7">{t("Bcc", "Cci")}</span>
 								<EmailHeaderContacts
 									name={"bcc"}
 									defaultValues={bccValues}
@@ -399,13 +513,13 @@ Bcc
 							<RecipientDropZone name="cc" as="span"><ActionIcon onClick={() => setCcActive(true)} variant="transparent"> Cc </ActionIcon></RecipientDropZone>
 						)}
 						{!bccActive && (
-							<RecipientDropZone name="bcc" as="span"><ActionIcon onClick={() => setBccActive(true)} variant="transparent"> Bcc </ActionIcon></RecipientDropZone>
+							<RecipientDropZone name="bcc" as="span"><ActionIcon onClick={() => setBccActive(true)} variant="transparent"> {t("Bcc", "Cci")} </ActionIcon></RecipientDropZone>
 						)}
 					</div>
 				</div>
 			</div>
 			<div className={"border-b flex justify-start items-center px-2 gap-2"}>
-				<span className="text-sm text-muted-foreground">Subject</span>
+				<span className="text-sm text-muted-foreground">{t("Subject", "Objet")}</span>
 				<FocusTrap active={subjectFocus}>
 					<Input
 						variant={"unstyled"}
@@ -424,10 +538,10 @@ Bcc
 				</FocusTrap>
 			</div>
 			<div className={"border-b flex justify-start items-center px-2 gap-2"}>
-				<span className="text-sm text-muted-foreground">From</span>
+				<span className="text-sm text-muted-foreground">{t("From", "De")}</span>
 				<div className={"my-2"}>
 					<Select
-						placeholder="Pick value"
+						placeholder={t("Pick value", "Choisir")}
 						size="sm"
 						variant="unstyled"
 						w={260}

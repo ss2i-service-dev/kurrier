@@ -1,12 +1,15 @@
 "use client";
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { Checkbox } from "@mantine/core";
 import { ActionIcon, Button, Popover, Progress, Tooltip } from "@mantine/core";
 import { Baseline, Paperclip, Save, Trash2, X as IconX } from "lucide-react";
 import type { DraftContext } from "@/components/mailbox/default/editor/email-editor";
 import { RichTextEditor } from "@mantine/tiptap";
+import { useK, useNouvelle } from "@/components/k/ui-context";
+import { formatBytes as kBytes } from "@/components/k/format";
+import { kCreateAttachmentUploadUrl } from "@/lib/actions/k-uploads";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import { v4 as uuidv4 } from "uuid";
 import { MessageEntity } from "@db";
@@ -32,7 +35,17 @@ const formatBytes = (n: number) => {
 	return `${Math.round(n)}${units[i]}`;
 };
 
-export default function EditorFooter() {
+// ss2i : formatOpen / onToggleFormat servent a la nouvelle interface (barre de
+// mise en forme rangee au-dessus du texte). Classique : popover d'origine.
+export default function EditorFooter({
+	formatOpen = false,
+	onToggleFormat,
+}: {
+	formatOpen?: boolean;
+	onToggleFormat?: () => void;
+} = {}) {
+	const nouvelle = useNouvelle();
+	const t = useK();
 	const { state } = useDynamicContext<{
 		isPending: boolean;
 		message: MessageEntity;
@@ -74,7 +87,8 @@ export default function EditorFooter() {
 	const triggerUpload = () => inputRef.current?.click();
 
 	const uploadFile = async (file: File): Promise<void> => {
-		const { uploadUrl, key } = await createAttachmentUploadUrl({
+		// ss2i : nouvelle interface, URL signee sans somme de controle (cf. k-uploads.ts).
+		const { uploadUrl, key } = await (nouvelle ? kCreateAttachmentUploadUrl : createAttachmentUploadUrl)({
 			fileName: file.name,
 			contentType: file.type,
 			messageId: newMessageId.current,
@@ -101,10 +115,10 @@ export default function EditorFooter() {
 
 			xhr.onload = () => {
 				if (xhr.status >= 200 && xhr.status < 300) resolve();
-				else reject(`Upload failed: ${xhr.status}`);
+				else reject(t(`Upload failed: ${xhr.status}`, `Échec de l'envoi : ${xhr.status}`));
 			};
 
-			xhr.onerror = () => reject("Network error");
+			xhr.onerror = () => reject(t("Network error", "Erreur réseau"));
 
 			xhr.send(file);
 		});
@@ -122,13 +136,10 @@ export default function EditorFooter() {
 		]);
 	};
 
-	const onFileSelect = async (
-		event: React.ChangeEvent<HTMLInputElement>
-	) => {
-		const files = event.target.files;
-		if (!files?.length) return;
-
-		for (const file of Array.from(files)) {
+	// ss2i : envoi d'une liste de fichiers, partage par le bouton trombone et, dans la
+	// nouvelle interface, le glisser-deposer sur l'editeur (meme logique qu'avant).
+	const addFiles = async (files: File[]) => {
+		for (const file of files) {
 			setUploads((prev) => [
 				...prev,
 				{
@@ -164,9 +175,62 @@ export default function EditorFooter() {
 				);
 			}
 		}
-
-		event.target.value = "";
 	};
+
+	const onFileSelect = async (
+		event: React.ChangeEvent<HTMLInputElement>
+	) => {
+		const files = event.target.files;
+		if (!files?.length) return;
+		const list = Array.from(files);
+		event.target.value = "";
+		await addFiles(list);
+	};
+
+	// ss2i : nouvelle interface, deposer des fichiers n'importe ou sur l'editeur les joint.
+	const footerRef = useRef<HTMLDivElement | null>(null);
+	const addFilesRef = useRef(addFiles);
+	addFilesRef.current = addFiles;
+	useEffect(() => {
+		if (!nouvelle) return;
+		const root = footerRef.current?.closest(".k-editor") as HTMLElement | null;
+		if (!root) return;
+		let depth = 0;
+		const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+		const enter = (e: DragEvent) => {
+			if (!hasFiles(e)) return;
+			e.preventDefault();
+			depth++;
+			root.setAttribute("data-k-drop", "");
+		};
+		const over = (e: DragEvent) => {
+			if (hasFiles(e)) e.preventDefault();
+		};
+		const leave = (e: DragEvent) => {
+			if (!hasFiles(e)) return;
+			depth = Math.max(0, depth - 1);
+			if (depth === 0) root.removeAttribute("data-k-drop");
+		};
+		const drop = (e: DragEvent) => {
+			if (!hasFiles(e)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			depth = 0;
+			root.removeAttribute("data-k-drop");
+			const files = Array.from(e.dataTransfer?.files ?? []);
+			if (files.length) void addFilesRef.current(files);
+		};
+		root.addEventListener("dragenter", enter);
+		root.addEventListener("dragover", over);
+		root.addEventListener("dragleave", leave);
+		root.addEventListener("drop", drop, true);
+		return () => {
+			root.removeEventListener("dragenter", enter);
+			root.removeEventListener("dragover", over);
+			root.removeEventListener("dragleave", leave);
+			root.removeEventListener("drop", drop, true);
+		};
+	}, [nouvelle]);
 
 	const removeUpload = (name: string) => {
 		setUploads((prev) => prev.filter((u) => u.name !== name));
@@ -177,15 +241,16 @@ export default function EditorFooter() {
 	const draft = state.draft;
 	const draftLabel =
 		draft?.status.state === "saving"
-			? "Saving…"
+			? t("Saving…", "Enregistrement…")
 			: draft?.status.state === "error"
-				? "Not saved"
+				? t("Not saved", "Non enregistré")
 				: draft?.status.state === "saved" && draft.status.savedAt
-					? `Saved ${new Date(draft.status.savedAt).toLocaleTimeString(undefined, {
+					? `${t("Saved", "Enregistré à")} ${new Date(draft.status.savedAt).toLocaleTimeString(undefined, {
 							hour: "2-digit",
 							minute: "2-digit",
 						})}`
 					: "";
+
 	console.log("isPending", state)
 
 	return (
@@ -194,11 +259,11 @@ export default function EditorFooter() {
 				<div className="px-3 pb-2">
 					<div className="flex items-center justify-between gap-2 mb-1">
 						<span className="text-xs text-neutral-500">
-							Signature (added when sending)
+							{t("Signature (added when sending)", "Signature (ajoutée à l'envoi)")}
 						</span>
 						<Checkbox
 							size="xs"
-							label="Include"
+							label={t("Include", "Inclure")}
 							checked={includeSignature}
 							onChange={(e) => setIncludeSignature(e.currentTarget.checked)}
 						/>
@@ -217,7 +282,54 @@ export default function EditorFooter() {
 				name="includeSignature"
 				value={includeSignature ? "true" : "false"}
 			/>
-			{uploads.length > 0 && (
+			{nouvelle && uploads.length > 0 && (
+				<div className="k-uploads flex flex-wrap gap-2 px-4 pb-2 pt-1">
+					{uploads.map((u) => {
+						const uploading = u.status === "uploading" && u.progress < 100;
+						const failed = u.status === "error";
+						const open = async () => {
+							const attachment = attachments.find((a) => a.filenameOriginal === u.name);
+							if (!attachment) return;
+							const { url } = await createAttachmentDownloadUrl(attachment.path);
+							window.open(url, "_blank");
+						};
+						return (
+							<div
+								key={u.name}
+								title={failed ? u.error : u.name}
+								className={`relative flex max-w-[260px] items-center gap-2 overflow-hidden rounded-k border py-1.5 pl-2.5 pr-1 text-[12.5px] ${
+									failed ? "border-k-danger/40 bg-k-danger-soft" : "border-k-line bg-k-surface-2"
+								}`}
+							>
+								<Paperclip size={14} className="shrink-0 text-k-ink-3" />
+								<button
+									type="button"
+									disabled={u.status !== "done"}
+									onClick={open}
+									className="min-w-0 truncate text-left font-medium text-k-ink enabled:hover:underline"
+								>
+									{u.name}
+								</button>
+								<span className="shrink-0 text-[11.5px] text-k-ink-3">
+									{failed ? "échec" : uploading ? `${u.progress} %` : kBytes(u.size)}
+								</span>
+								<button
+									type="button"
+									onClick={() => removeUpload(u.name)}
+									aria-label={`Retirer ${u.name}`}
+									className="flex h-6 w-6 shrink-0 items-center justify-center rounded-k-sm text-k-ink-3 hover:bg-k-hover hover:text-k-ink"
+								>
+									<IconX size={13} />
+								</button>
+								{uploading && (
+									<span className="absolute bottom-0 left-0 h-[2px] bg-k-accent transition-[width]" style={{ width: `${u.progress}%` }} />
+								)}
+							</div>
+						);
+					})}
+				</div>
+			)}
+			{!nouvelle && uploads.length > 0 && (
 				<div className="w-full rounded-md p-2 flex flex-col gap-2">
 					{uploads.map((u) => {
 						const showProgress =
@@ -289,19 +401,37 @@ export default function EditorFooter() {
 				</div>
 			)}
 
-			<div className="border-t items-center flex py-2 px-2">
+			<div ref={footerRef} className="border-t items-center flex py-2 px-2">
 				<div className="mx-2 flex items-center gap-[1px]">
 					<Button
 						loading={!!state.isPending}
 						size="sm"
 						type="submit"
-						className="!rounded-l-4xl !rounded-r-xs"
+						data-k-action={nouvelle ? "send" : undefined}
+						title={nouvelle ? "Envoyer (Ctrl+Entrée)" : undefined}
+						className={nouvelle ? "!rounded-l-[10px] !rounded-r-[3px] !px-4" : "!rounded-l-4xl !rounded-r-xs"}
 					>
-						Send
+						{t("Send", "Envoyer")}
 					</Button>
 					<ScheduleSend />
 				</div>
 
+				{nouvelle ? (
+					<Tooltip label={formatOpen ? "Masquer la mise en forme" : "Mise en forme"} withArrow fz="xs">
+						<ActionIcon
+							variant={formatOpen ? "light" : "subtle"}
+							color={formatOpen ? "brand" : "gray"}
+							size="lg"
+							radius="md"
+							className="ml-1"
+							aria-label="Mise en forme"
+							aria-pressed={formatOpen}
+							onClick={onToggleFormat}
+						>
+							<Baseline size={18} />
+						</ActionIcon>
+					</Tooltip>
+				) : (
 				<Popover position="top-start" withArrow shadow="md">
 					<Popover.Target>
 						<ActionIcon variant="transparent">
@@ -334,7 +464,23 @@ export default function EditorFooter() {
 						</RichTextEditor.Toolbar>
 					</Popover.Dropdown>
 				</Popover>
+				)}
 
+				{nouvelle ? (
+				<Tooltip label="Joindre des fichiers" withArrow fz="xs">
+				<ActionIcon
+					onClick={triggerUpload}
+					variant={nouvelle ? "subtle" : "transparent"}
+					color={nouvelle ? "gray" : undefined}
+					size={nouvelle ? "lg" : undefined}
+					radius={nouvelle ? "md" : undefined}
+					className="mx-2"
+					aria-label={t("Attach files", "Joindre des fichiers")}
+				>
+					<Paperclip size={18} />
+				</ActionIcon>
+				</Tooltip>
+				) : (
 				<ActionIcon
 					onClick={triggerUpload}
 					variant="transparent"
@@ -342,6 +488,7 @@ export default function EditorFooter() {
 				>
 					<Paperclip size={18} />
 				</ActionIcon>
+				)}
 
 				{draft && (
 					<div className="ml-auto flex items-center gap-1 text-xs text-neutral-500">
@@ -351,21 +498,21 @@ export default function EditorFooter() {
 						>
 							{draftLabel}
 						</span>
-						<Tooltip label="Save draft (Ctrl+S)" withArrow>
+						<Tooltip label={t("Save draft (Ctrl+S)", "Enregistrer le brouillon (Ctrl+S)")} withArrow>
 							<ActionIcon
 								variant="transparent"
-								aria-label="Save draft"
+								aria-label={t("Save draft", "Enregistrer le brouillon")}
 								onClick={() => void draft.save()}
 							>
 								<Save size={18} />
 							</ActionIcon>
 						</Tooltip>
 						{draft.id && (
-							<Tooltip label="Discard draft" withArrow>
+							<Tooltip label={t("Discard draft", "Supprimer le brouillon")} withArrow>
 								<ActionIcon
 									variant="transparent"
 									color="red"
-									aria-label="Discard draft"
+									aria-label={t("Discard draft", "Supprimer le brouillon")}
 									onClick={() => void draft.discard()}
 								>
 									<Trash2 size={18} />

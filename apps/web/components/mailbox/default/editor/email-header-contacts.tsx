@@ -1,4 +1,5 @@
 "use client";
+import { useK } from "@/components/k/ui-context";
 import React, { useEffect, useRef, useState } from "react";
 import { IconGripVertical, IconX } from "@tabler/icons-react";
 import {
@@ -37,6 +38,7 @@ export default function EmailHeaderContacts({
 	onChange?: (value: string[]) => void;
 	name: RecipientField;
 }) {
+	const t = useK(); // ss2i : francais dans la nouvelle interface
 	const dnd = useRecipientsDnD();
 	const [value, setValue] = useState<string[]>(defaultValues ?? []);
 	const valueRef = useRef(value);
@@ -170,7 +172,7 @@ export default function EmailHeaderContacts({
 						e.preventDefault();
 						setMenu({ x: e.clientX, y: e.clientY, email });
 					}}
-					title={dnd ? "Drag to To, Cc or Bcc (right-click: Move to)" : email}
+					title={dnd ? t("Drag to To, Cc or Bcc (right-click: Move to)", "Glisser vers À, Cc ou Cci (clic droit : Déplacer vers)") : email}
 					className="group inline-flex items-center gap-0.5 rounded-full border border-border bg-muted pl-0.5 pr-1 py-0.5 text-[13px] leading-5 select-none"
 				>
 					{dnd && (
@@ -183,8 +185,8 @@ export default function EmailHeaderContacts({
 					<span className="cursor-grab active:cursor-grabbing">{email}</span>
 					<button
 						type="button"
-						aria-label={`Remove ${email}`}
-						title="Remove"
+						aria-label={t(`Remove ${email}`, `Retirer ${email}`)}
+						title={t("Remove", "Retirer")}
 						onClick={() => remove(email)}
 						className="ml-0.5 rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
 					>
@@ -248,7 +250,7 @@ export default function EmailHeaderContacts({
 									setMenu(null);
 								}}
 							>
-								Move to {f === "to" ? "To" : f === "cc" ? "Cc" : "Bcc"}
+								{t("Move to", "Déplacer vers")} {f === "to" ? t("To", "À") : f === "cc" ? "Cc" : t("Bcc", "Cci")}
 							</Menu.Item>
 						))}
 					</Menu.Dropdown>

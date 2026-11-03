@@ -7,6 +7,7 @@ import type { BaseFormProps } from "@schema";
 import { ReusableFormItems } from "@/components/common/reusable-form-items";
 import { LabelEntity } from "@db";
 import {FetchAppLabelsResult} from "@/lib/actions/mail-rules";
+import { useK } from "@/components/k/ui-context";
 
 type BoolSwitchProps = {
     name: string;
@@ -98,67 +99,71 @@ function BoolCheckboxControlled({
     );
 }
 
-const SIZE_OP_OPTIONS = [
-    { value: "gt", label: "greater than" },
-    { value: "lt", label: "less than" },
-] as const;
+// ss2i : libelles traduits via useK dans le composant (voir sizeOpOptions).
+const SIZE_OP_VALUES = ["gt", "lt"] as const;
 
 const SIZE_UNIT_OPTIONS = [
     { value: "KB", label: "KB" },
     { value: "MB", label: "MB" },
 ] as const;
 
-export default function CreateRuleFormGmailV1({ action, identityId, appLabels, initialName = "New rule"}: { action: any; identityId: string; appLabels: FetchAppLabelsResult, initialName?: string; }) {
+export default function CreateRuleFormGmailV1({ action, identityId, appLabels, initialName}: { action: any; identityId: string; appLabels: FetchAppLabelsResult, initialName?: string; }) {
+    const k = useK();
+    initialName = initialName ?? k("New rule", "Nouvelle règle");
     const [applyLabel, setApplyLabel] = useState(false);
+    const SIZE_OP_OPTIONS = [
+        { value: SIZE_OP_VALUES[0], label: k("greater than", "supérieure à") },
+        { value: SIZE_OP_VALUES[1], label: k("less than", "inférieure à") },
+    ];
 
     const criteriaFields: BaseFormProps["fields"] = [
         {
             name: "from",
-            label: "From",
+            label: k("From", "De"),
             wrapperClasses: "col-span-12 md:col-span-6",
             props: {
                 defaultValue: "",
-                placeholder: "e.g. newsletter@company.com",
+                placeholder: k("e.g. newsletter@company.com", "ex. newsletter@societe.fr"),
                 autoComplete: "off",
             },
         },
         {
             name: "to",
-            label: "To",
+            label: k("To", "À"),
             wrapperClasses: "col-span-12 md:col-span-6",
             props: {
                 defaultValue: "",
-                placeholder: "e.g. me@domain.com",
+                placeholder: k("e.g. me@domain.com", "ex. moi@domaine.fr"),
                 autoComplete: "off",
             },
         },
         {
             name: "subject",
-            label: "Subject",
+            label: k("Subject", "Objet"),
             wrapperClasses: "col-span-12 md:col-span-6",
             props: {
                 defaultValue: "",
-                placeholder: "e.g. invoice",
+                placeholder: k("e.g. invoice", "ex. facture"),
                 autoComplete: "off",
             },
         },
         {
             name: "hasWords",
-            label: "Has the words",
+            label: k("Has the words", "Contient les mots"),
             wrapperClasses: "col-span-12 md:col-span-6",
             props: {
                 defaultValue: "",
-                placeholder: "e.g. unsubscribe",
+                placeholder: k("e.g. unsubscribe", "ex. désinscription"),
                 autoComplete: "off",
             },
         },
         {
             name: "doesntHave",
-            label: "Doesn't have",
+            label: k("Doesn't have", "Ne contient pas"),
             wrapperClasses: "col-span-12 md:col-span-6",
             props: {
                 defaultValue: "",
-                placeholder: "e.g. urgent",
+                placeholder: k("e.g. urgent", "ex. urgent"),
                 autoComplete: "off",
             },
         },
@@ -170,7 +175,7 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
                 "col-span-12 md:col-span-6 flex items-center gap-2 justify-end-safe flex-row flex-row-reverse mt-3",
             props: {
                 defaultChecked: false,
-                label: <div className="text-sm -mt-1">Has attachment</div>,
+                label: <div className="text-sm -mt-1">{k("Has attachment", "Avec pièce jointe")}</div>,
             },
         },
     ];
@@ -178,7 +183,7 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
     const sizeFields: BaseFormProps["fields"] = [
         {
             name: "sizeOp",
-            label: "Operator",
+            label: k("Operator", "Opérateur"),
             kind: "select",
             wrapperClasses: "col-span-12 md:col-span-4",
             options: SIZE_OP_OPTIONS as any,
@@ -188,7 +193,7 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
         },
         {
             name: "sizeValue",
-            label: "Value",
+            label: k("Value", "Valeur"),
             kind: "custom",
             component: NumberInput,
             wrapperClasses: "col-span-12 md:col-span-4",
@@ -200,7 +205,7 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
         },
         {
             name: "sizeUnit",
-            label: "Unit",
+            label: k("Unit", "Unité"),
             kind: "select",
             wrapperClasses: "col-span-12 md:col-span-4",
             options: SIZE_UNIT_OPTIONS as any,
@@ -213,43 +218,43 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
     const actionFields: BaseFormProps["fields"] = [
         {
             name: "markRead",
-            label: "Mark as read",
+            label: k("Mark as read", "Marquer comme lu"),
             kind: "custom",
             component: BoolCheckbox,
             wrapperClasses:
                 "col-span-12 md:col-span-6 rounded-lg border border-neutral-200 dark:border-neutral-800 px-3 py-2",
             props: {
                 defaultChecked: false,
-                label: <div className="text-sm">Mark as read</div>,
+                label: <div className="text-sm">{k("Mark as read", "Marquer comme lu")}</div>,
             },
         },
         {
             name: "flag",
-            label: "Star it (Flag)",
+            label: k("Star it (Flag)", "Ajouter une étoile"),
             kind: "custom",
             component: BoolCheckbox,
             wrapperClasses:
                 "col-span-12 md:col-span-6 rounded-lg border border-neutral-200 dark:border-neutral-800 px-3 py-2",
             props: {
                 defaultChecked: false,
-                label: <div className="text-sm">Star it (Flag)</div>,
+                label: <div className="text-sm">{k("Star it (Flag)", "Ajouter une étoile")}</div>,
             },
         },
         {
             name: "trash",
-            label: "Delete it (Trash)",
+            label: k("Delete it (Trash)", "Mettre à la corbeille"),
             kind: "custom",
             component: BoolCheckbox,
             wrapperClasses:
                 "col-span-12 md:col-span-6 rounded-lg border border-neutral-200 dark:border-neutral-800 px-3 py-2",
             props: {
                 defaultChecked: false,
-                label: <div className="text-sm">Delete it (Trash)</div>,
+                label: <div className="text-sm">{k("Delete it (Trash)", "Mettre à la corbeille")}</div>,
             },
         },
         {
             name: "applyLabel",
-            label: "Apply label",
+            label: k("Apply label", "Appliquer un libellé"),
             kind: "custom",
             component: BoolCheckboxControlled,
             wrapperClasses:
@@ -257,14 +262,14 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
             props: {
                 checked: applyLabel,
                 onChange: (e: any) => setApplyLabel(e.currentTarget.checked),
-                label: <div className="text-sm">Apply label</div>,
+                label: <div className="text-sm">{k("Apply label", "Appliquer un libellé")}</div>,
             },
         },
         ...(applyLabel
             ? ([
                 {
                     name: "labelId",
-                    label: "Label Name",
+                    label: k("Label Name", "Libellé"),
                     kind: "custom",
                     component: Select,
                     wrapperClasses: "col-span-12",
@@ -296,18 +301,18 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
         },
         {
             name: "name",
-            label: "Rule name",
+            label: k("Rule name", "Nom de la règle"),
             wrapperClasses: "col-span-12 md:col-span-7",
             props: {
                 required: true,
-                placeholder: "e.g. Newsletters",
+                placeholder: k("e.g. Newsletters", "ex. Newsletters"),
                 defaultValue: initialName,
                 autoComplete: "off",
             },
         },
         {
             name: "priority",
-            label: "Priority",
+            label: k("Priority", "Priorité"),
             kind: "custom",
             component: NumberInput,
             wrapperClasses: "col-span-12 md:col-span-3",
@@ -319,7 +324,7 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
         },
         {
             name: "enabled",
-            label: "Enabled",
+            label: k("Enabled", "Activée"),
             kind: "custom",
             component: BoolSwitch,
             wrapperClasses: "col-span-12 md:col-span-2 flex items-end justify-end gap-2 flex-col",
@@ -331,9 +336,9 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
         {
             el: (
                 <div className="col-span-12 mt-2 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4">
-                    <div className="text-sm font-semibold">Criteria</div>
+                    <div className="text-sm font-semibold">{k("Criteria", "Critères")}</div>
                     <div className="text-xs text-neutral-600 dark:text-neutral-400 mt-1">
-                        Messages must match all filled fields.
+                        {k("Messages must match all filled fields.", "Les messages doivent correspondre à tous les champs renseignés.")}
                     </div>
 
                     <ReusableFormItems
@@ -342,7 +347,7 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
                     />
 
                     <div className="mt-3 rounded-lg border border-neutral-200 dark:border-neutral-800 p-3">
-                        <div className="text-sm font-medium">Size</div>
+                        <div className="text-sm font-medium">{k("Size", "Taille")}</div>
                         <ReusableFormItems
                             formWrapperClasses="mt-3 grid grid-cols-12 gap-3"
                             fields={sizeFields}
@@ -354,9 +359,9 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
         {
             el: (
                 <div className="col-span-12 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4">
-                    <div className="text-sm font-semibold">Actions</div>
+                    <div className="text-sm font-semibold">{k("Actions", "Actions")}</div>
                     <div className="text-xs text-neutral-600 dark:text-neutral-400 mt-1">
-                        What to do when a message matches.
+                        {k("What to do when a message matches.", "Ce qu'il faut faire quand un message correspond.")}
                     </div>
 
                     <ReusableFormItems
@@ -373,7 +378,7 @@ export default function CreateRuleFormGmailV1({ action, identityId, appLabels, i
             action={action}
             fields={fields}
             submitButtonProps={{
-                submitLabel: "Create rule",
+                submitLabel: k("Create rule", "Créer la règle"),
                 wrapperClasses: "mt-4 flex justify-start py-4",
                 fullWidth: false,
             }}

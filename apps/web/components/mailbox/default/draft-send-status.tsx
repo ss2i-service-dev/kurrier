@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import React, { useEffect, useState } from "react";
 import { IconSend } from "@tabler/icons-react";
 import { cancelPendingSend, sendPendingNow } from "@/lib/actions/mailbox";
+import { useK, useNouvelle } from "@/components/k/ui-context";
 
 // ss2i : etat d'envoi d'un brouillon (marque pendingSend / sendError de meta.draft).
 // Un envoi dont l'heure est depassee de plus de 3 minutes sans que le brouillon ait
@@ -48,11 +49,12 @@ export function anySendTracked(states: (DraftSendState | null | undefined)[], no
 	);
 }
 
-export function sendLabel(sendAt: string, now: number) {
+export function sendLabel(sendAt: string, now: number, k: (en: string, fr: string) => string = (en) => en) {
 	const phase = sendPhaseOf(sendAt, now);
-	if (phase === "unknown") return "Sending status unknown";
-	if (phase === "sending") return "Sending…";
-	return `Sending in ${Math.max(1, Math.ceil((new Date(sendAt).getTime() - now) / 1000))}s`;
+	if (phase === "unknown") return k("Sending status unknown", "État d'envoi inconnu");
+	if (phase === "sending") return k("Sending…", "Envoi en cours…");
+	const s = Math.max(1, Math.ceil((new Date(sendAt).getTime() - now) / 1000));
+	return k(`Sending in ${s}s`, `Envoi dans ${s} s`);
 }
 
 // Boutons « Undo » / « Send now » ; onDone apres l'action (rafraichissement de la page).
@@ -65,10 +67,13 @@ export function SendActions({
 	onUndone?: () => void;
 	size?: "xs" | "sm";
 }) {
+	const k = useK();
+	const nouvelle = useNouvelle();
 	const router = useRouter();
 	const [busy, setBusy] = useState(false);
-	const cls =
-		size === "xs"
+	const cls = nouvelle
+		? `k-focus rounded-k-sm border border-k-line-strong bg-k-surface text-k-ink-2 transition-colors hover:bg-k-hover hover:text-k-ink disabled:opacity-50 ${size === "xs" ? "px-1.5 py-0.5 text-xs" : "px-3 py-1 text-[13px]"}`
+		: size === "xs"
 			? "rounded border px-1.5 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
 			: "rounded border px-3 py-1 text-sm hover:bg-muted disabled:opacity-50";
 	return (
@@ -85,7 +90,7 @@ export function SendActions({
 					router.refresh();
 				}}
 			>
-				Undo
+				{k("Undo", "Annuler l'envoi")}
 			</button>
 			<button
 				type="button"
@@ -98,7 +103,7 @@ export function SendActions({
 					router.refresh();
 				}}
 			>
-				Send now
+				{k("Send now", "Envoyer maintenant")}
 			</button>
 		</span>
 	);
@@ -111,15 +116,17 @@ export const isSendingDraft = (state: DraftSendState | null | undefined) =>
 
 // Badge d'une ligne de la liste Drafts.
 export function DraftSendBadge({ state }: { state: DraftSendState | null | undefined }) {
+	const k = useK();
+	const nouvelle = useNouvelle();
 	const pending = state?.pendingSend ?? null;
 	const now = useNow(!!pending);
 	if (pending) {
 		const phase = sendPhaseOf(pending.sendAt, now);
 		return (
 			<span className="inline-flex shrink-0 items-center gap-1.5">
-				<span className="inline-flex items-center gap-1 whitespace-nowrap rounded bg-sky-600 px-1.5 py-0.5 text-xs font-semibold text-white">
+				<span className={`inline-flex items-center gap-1 whitespace-nowrap px-1.5 py-0.5 text-xs font-semibold ${nouvelle ? "rounded-k-sm bg-k-accent-soft text-k-accent-soft-ink" : "rounded bg-sky-600 text-white"}`}>
 					<IconSend size={12} aria-hidden />
-					{sendLabel(pending.sendAt, now)}
+					{sendLabel(pending.sendAt, now, k)}
 				</span>
 				{phase !== "unknown" && <SendActions jobId={pending.jobId} size="xs" />}
 			</span>
@@ -128,10 +135,10 @@ export function DraftSendBadge({ state }: { state: DraftSendState | null | undef
 	if (state?.sendError) {
 		return (
 			<span
-				className="whitespace-nowrap rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700"
+				className={`whitespace-nowrap px-1.5 py-0.5 text-xs font-medium ${nouvelle ? "rounded-k-sm bg-k-danger-soft text-k-danger" : "rounded bg-red-100 text-red-700"}`}
 				title={state.sendError.message}
 			>
-				Not sent
+				{k("Not sent", "Non envoyé")}
 			</span>
 		);
 	}
@@ -149,20 +156,25 @@ export function DraftSendingBanner({
 	// Etat inconnu : l'utilisateur peut quand meme rouvrir l'editeur.
 	onOpenEditor: () => void;
 }) {
+	const k = useK();
+	const nouvelle = useNouvelle();
 	const now = useNow(true);
 	const phase = sendPhaseOf(pendingSend.sendAt, now);
 	useSendRefresh(phase !== "unknown");
 	return (
-		<div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+		<div className={`mt-3 border p-4 text-sm ${nouvelle ? "rounded-k border-k-line-strong bg-k-warn-soft text-k-ink" : "rounded-lg border-amber-300 bg-amber-50 text-amber-900"}`}>
 			<div className="font-medium">
 				{phase === "unknown"
-					? "Sending status unknown"
-					: "This message is being sent"}
+					? k("Sending status unknown", "État d'envoi inconnu")
+					: k("This message is being sent", "Ce message est en cours d'envoi")}
 			</div>
 			<div className="mt-1 text-xs">
 				{phase === "unknown"
-					? "No result was received for this send. Check the Sent folder before sending again."
-					: sendLabel(pendingSend.sendAt, now)}
+					? k(
+							"No result was received for this send. Check the Sent folder before sending again.",
+							"Aucun résultat n'a été reçu pour cet envoi. Vérifiez le dossier Envoyés avant de renvoyer.",
+						)
+					: sendLabel(pendingSend.sendAt, now, k)}
 			</div>
 			<div className="mt-3">
 				{phase !== "unknown" ? (
@@ -170,10 +182,10 @@ export function DraftSendingBanner({
 				) : (
 					<button
 						type="button"
-						className="rounded border px-3 py-1 text-sm hover:bg-amber-100"
+						className={nouvelle ? "k-focus rounded-k-sm border border-k-line-strong bg-k-surface px-3 py-1 text-[13px] text-k-ink-2 transition-colors hover:bg-k-hover hover:text-k-ink" : "rounded border px-3 py-1 text-sm hover:bg-amber-100"}
 						onClick={onOpenEditor}
 					>
-						Open editor
+						{k("Open editor", "Ouvrir l'éditeur")}
 					</button>
 				)}
 			</div>

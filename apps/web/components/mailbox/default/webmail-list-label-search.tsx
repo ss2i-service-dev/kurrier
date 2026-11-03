@@ -18,6 +18,8 @@ import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-ite
 import { usePathname } from "next/navigation";
 import { useHiddenThreads } from "@/lib/pending-moves";
 import type { SelectAllScope } from "@/lib/actions/select-all";
+import { useNouvelle } from "@/components/k/ui-context";
+import KThreadListStatic, { type KStaticListProps } from "@/components/k/thread-list-static";
 
 type WebListProps = {
     mailboxThreads: FetchMailboxThreadsResult;
@@ -39,7 +41,14 @@ type WebListProps = {
     keepArchived?: boolean;
 };
 
-export default function WebmailListLabelSearch({
+// ss2i : nouvelle interface (option par utilisateur) : memes donnees, liste de la nouvelle
+// interface. La classique (ci-dessous) est inchangee.
+export default function WebmailListLabelSearch(props: WebListProps & Pick<KStaticListProps, "kTitle" | "kEmptyTitle" | "kEmptyText">) {
+    const nouvelle = useNouvelle();
+    return nouvelle ? <KThreadListStatic {...(props as KStaticListProps)} /> : <ClassicWebmailListLabelSearch {...props} />;
+}
+
+function ClassicWebmailListLabelSearch({
                                         mailboxThreads: serverThreads,
                                         identityPublicId,
                                         mailboxSync,

@@ -1,3 +1,5 @@
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import KThreadPage from "@/components/k/thread-page";
 import { fetchThreadMailbox } from "@/lib/thread-mailbox";
 import React, {Suspense} from "react";
 import {fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
@@ -9,7 +11,7 @@ import {getWorkspacePublicId} from "@/lib/actions/clients";
 import { threadOrder } from "@/lib/actions/thread-order";
 import Loading from "@/app/loading";
 
-async function Page({
+async function ClassicPage({
 	params,
 }: {
 	params: Promise<{
@@ -75,6 +77,11 @@ async function Page({
 			})}
 		</>
 	);
+}
+
+// ss2i : nouvelle interface (option par utilisateur) : panneau de lecture components/k.
+async function Page(props: { params: Promise<{ identityPublicId: string; mailboxSlug: string; threadId: string }> }) {
+	return (await isNouvelleInterface()) ? <KThreadPage {...props} /> : <ClassicPage {...props} />;
 }
 
 export default Page;

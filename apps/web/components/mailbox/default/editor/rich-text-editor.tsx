@@ -4,6 +4,11 @@ import { RichTextEditor, Link } from "@mantine/tiptap";
 import { useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
+import TextAlign from "@tiptap/extension-text-align";
+import Highlight from "@tiptap/extension-highlight";
+import { Color, FontSize, TextStyle } from "@tiptap/extension-text-style";
+import { useNouvelle } from "@/components/k/ui-context";
+import { K_EDITOR_LABELS, KBubbleBar, KFormatBar } from "@/components/k/format-toolbar";
 
 import React, {
 	forwardRef,
@@ -66,10 +71,28 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 		const [value, setValue] = useState(toStoredHtml(defaultValue));
 		const [textValue, setTextValue] = useState("");
 
+		// ss2i : nouvelle interface, mise en forme etendue (alignement, couleurs,
+		// surlignage, taille) ; l'interface classique garde ses extensions d'origine.
+		const nouvelle = useNouvelle();
 		const editor = useEditor({
 			immediatelyRender: false,
+			// ss2i : nouvelle interface, l'etat des boutons de mise en forme (gras,
+			// italique...) suit le curseur en direct (Tiptap 3 ne redessine plus par defaut).
+			shouldRerenderOnTransaction: nouvelle,
 			parseOptions: { preserveWhitespace: "full" },
-			extensions: [StarterKit, Link, Image],
+			extensions: nouvelle
+				? [
+						// le lien de StarterKit ferait doublon avec celui de Mantine (Link)
+						StarterKit.configure({ link: false }),
+						Link,
+						Image,
+						TextStyle,
+						Color,
+						FontSize,
+						Highlight.configure({ multicolor: true }),
+						TextAlign.configure({ types: ["heading", "paragraph"] }),
+					]
+				: [StarterKit, Link, Image],
 			// ss2i : reprise d'un brouillon, le corps enregistre est le contenu initial.
 			content: fromStoredHtml(defaultValue),
 			onCreate: ({ editor }) => {
@@ -105,6 +128,22 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 		}>();
 
 		const [focusOnSubject, setFocusOnSubject] = useState<boolean>(false);
+		// ss2i : nouvelle interface, barre de mise en forme ouverte ou fermee (memorisee).
+		const [formatOpen, setFormatOpen] = useState<boolean>(() => {
+			if (typeof window === "undefined") return true;
+			try {
+				return localStorage.getItem("k-format-bar") !== "0";
+			} catch {
+				return true;
+			}
+		});
+		const toggleFormat = () =>
+			setFormatOpen((v) => {
+				try {
+					localStorage.setItem("k-format-bar", v ? "0" : "1");
+				} catch {}
+				return !v;
+			});
 
 		// ss2i : mode courant (choisi dans l'en-tete) et portee de la citation d'une reponse
 		// (dernier message seulement par defaut ; brouillon repris : son choix enregistre).
@@ -133,9 +172,9 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 			const next = quoteScopeOf(v);
 			if (quoteMode !== "custom") return setQuoteScope(next);
 			modals.openConfirmModal({
-				title: "Reload the quoted message?",
-				children: "Changing the quote scope discards your edits to the quoted message.",
-				labels: { confirm: "Discard edits", cancel: "Keep editing" },
+				title: nouvelle ? "Recharger le message cité ?" : "Reload the quoted message?",
+				children: nouvelle ? "Changer la portée de la citation annule vos modifications du message cité." : "Changing the quote scope discards your edits to the quoted message.",
+				labels: nouvelle ? { confirm: "Annuler mes modifications", cancel: "Continuer" } : { confirm: "Discard edits", cancel: "Keep editing" },
 				onConfirm: () => {
 					setQuoteMode("auto");
 					setQuoteHtml("");
@@ -164,10 +203,13 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 			<div ref={containerRef} className="scroll-mt-[72px]">
 				<RichTextEditor
 					editor={editor}
+					labels={nouvelle ? (K_EDITOR_LABELS as any) : undefined}
 					className={
-						!state.message
-							? "!border-0 -mt-4"
-							: "!border !rounded-t-md !border-neutral-200"
+						nouvelle
+							? "k-editor !border-0 !rounded-none !bg-transparent"
+							: !state.message
+								? "!border-0 -mt-4"
+								: "!border !rounded-t-md !border-neutral-200"
 					}
 				>
 					<EditorHeader
@@ -178,11 +220,13 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 					/>
 					{/* Style RFC : citation d'une reponse au-dessus ; un transfert garde le texte en tete et le message transfere dessous, comme a l'envoi. */}
 					{state.rfcStyle && !isForward ? quoteEditor : null}
+					{nouvelle && formatOpen && <KFormatBar />}
+					{nouvelle && <KBubbleBar />}
 					<FocusTrap active={focusOnSubject}>
-						<RichTextEditor.Content className="prose min-h-96 text-sm p-2 leading-5" />
+						<RichTextEditor.Content className={nouvelle ? "k-editor-content" : "prose min-h-96 text-sm p-2 leading-5"} />
 					</FocusTrap>
 					{!state.rfcStyle || isForward ? quoteEditor : null}
-					<EditorFooter />
+					<EditorFooter formatOpen={formatOpen} onToggleFormat={toggleFormat} />
 				</RichTextEditor>
 
 				{/*<span className="text-xs text-neutral-500">*/}

@@ -1,4 +1,5 @@
 "use client";
+import { useK } from "@/components/k/ui-context";
 import React, {
 	useCallback,
 	useEffect,
@@ -132,6 +133,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 		},
 		ref,
 	) => {
+		const t = useK(); // ss2i : francais dans la nouvelle interface
 		const textEditorRef = useRef<TextEditorHandle>(null);
 		const formRef = useRef<HTMLFormElement>(null);
 		const router = useRouter();
@@ -296,7 +298,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				setDraftStatus({ state: "saving" });
 				const res = await saveDraft({ ...payload, draftMessageId: draftIdRef.current });
 				if (!res?.draftMessageId) {
-					const error = res?.error ?? "Draft could not be saved.";
+					const error = res?.error ?? t("Draft could not be saved.", "Le brouillon n'a pas pu être enregistré.");
 					setDraftStatus({ state: "error", error });
 					notifySaveError(error);
 					return;
@@ -387,7 +389,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			dropBackup();
 			toast.dismiss("ss2i-draft-save-error");
 			saveFailed.current = false;
-			toast.success("Draft discarded", { position: "bottom-left" });
+			toast.success(t("Draft discarded", "Brouillon supprimé"), { position: "bottom-left" });
 			// discardDraft revalide les pages (compteur Drafts, liste) ; un router.refresh()
 			// ici annulerait la navigation de handleClose quand le brouillon est ouvert en page.
 			handleClose();
@@ -433,7 +435,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				if (result?.error) {
 					// La copie locale redevient recuperable.
 					markSent(null);
-					toast.error("Sending failed", {
+					toast.error(t("Sending failed", "L'envoi a échoué"), {
 						description: result.error,
 						position: "bottom-left",
 					});
@@ -447,25 +449,25 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			};
 			const timer = setTimeout(finish, undoMs);
 
-			const toastId = toast("Sending…", {
+			const toastId = toast(t("Sending…", "Envoi…"), {
 				position: "bottom-left",
 				duration: undoMs,
-				description: "You can still undo",
+				description: t("You can still undo", "Vous pouvez encore annuler"),
 				action: {
-					label: "Send now",
+					label: t("Send now", "Envoyer maintenant"),
 					onClick: () => {
 						sendPendingNow(pendingSendId).then(finish);
 					},
 				},
 				cancel: {
-					label: "Undo",
+					label: t("Undo", "Annuler"),
 					onClick: async () => {
 						if (settled) return;
 						settled = true;
 						clearTimeout(timer);
 						const { cancelled } = await cancelPendingSend(pendingSendId);
 						if (!cancelled) {
-							toast.info("Already sent", { position: "bottom-left" });
+							toast.info(t("Already sent", "Déjà envoyé"), { position: "bottom-left" });
 							if (mounted.current) handleClose();
 							return;
 						}
@@ -475,13 +477,13 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 							suspended.current = false;
 							markSent(null);
 							requestAnimationFrame(() => textEditorRef.current?.focus("end"));
-							toast.success("Sending cancelled", { position: "bottom-left" });
+							toast.success(t("Sending cancelled", "Envoi annulé"), { position: "bottom-left" });
 						} else {
 							// Editeur ferme : la copie locale part dans Drafts (DraftBackupRecovery).
 							markSent(null);
 							await navigator.clipboard?.writeText(bodyText).catch(() => {});
-							toast.warning("Sending cancelled", {
-								description: "The editor was closed: its text has been copied to the clipboard.",
+							toast.warning(t("Sending cancelled", "Envoi annulé"), {
+								description: t("The editor was closed: its text has been copied to the clipboard.", "L'éditeur était fermé : son texte a été copié dans le presse-papiers."),
 								position: "bottom-left",
 							});
 						}
@@ -494,7 +496,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			if (formState.error) {
 				suspended.current = false;
 				markSent(null);
-				toast.error("Error", {
+				toast.error(t("Error", "Erreur"), {
 					description: formState.error,
 				});
 			} else if (formState.success) {
@@ -517,7 +519,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				}
 				dropBackup();
 				handleClose();
-				toast.success("Success", {
+				toast.success(t("Success", "Envoyé"), {
 					description: formState.message,
 				});
 			}

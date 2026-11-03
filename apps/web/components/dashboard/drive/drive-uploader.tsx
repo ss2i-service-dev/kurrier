@@ -9,6 +9,7 @@ import React, {
 import { ActionIcon, Progress } from "@mantine/core";
 import { X } from "lucide-react";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
+import { useK } from "@/components/k/ui-context";
 import { DriveState } from "@schema";
 import {
 	getCloudUploadUrl,
@@ -17,6 +18,8 @@ import {
 
 export type DriveUploaderHandle = {
 	openPicker: () => void;
+	// ss2i : import de fichiers deja choisis (glisser-deposer de la nouvelle interface)
+	enqueue: (files: File[]) => void;
 };
 
 type UploadState = "queued" | "uploading" | "done" | "error" | "canceled";
@@ -37,6 +40,7 @@ type DriveUploaderProps = {
 
 const DriveUploader = forwardRef<DriveUploaderHandle, DriveUploaderProps>(
 	function DriveUploader({ uploadStrategy = "proxy" }, ref) {
+		const k = useK(); // ss2i : francais dans la nouvelle interface
 		const { state } = useDynamicContext<DriveState>();
 		const ctx = state?.driveRouteContext;
 
@@ -68,8 +72,11 @@ const DriveUploader = forwardRef<DriveUploaderHandle, DriveUploaderProps>(
 					if (!canUpload) return;
 					inputRef.current?.click();
 				},
+				enqueue(files: File[]) {
+					if (files.length) void enqueueFiles(files);
+				},
 			}),
-			[canUpload],
+			[canUpload, ctx],
 		);
 
 		async function startUpload(itemId: string, file: File) {
@@ -132,7 +139,7 @@ const DriveUploader = forwardRef<DriveUploaderHandle, DriveUploaderProps>(
 						setItems((prev) =>
 							prev.map((it) =>
 								it.id === itemId
-									? { ...it, state: "error", error: `HTTP ${xhr.status}` }
+									? { ...it, state: "error", error: k(`HTTP ${xhr.status}`, `Erreur HTTP ${xhr.status}`) }
 									: it,
 							),
 						);
@@ -145,7 +152,7 @@ const DriveUploader = forwardRef<DriveUploaderHandle, DriveUploaderProps>(
 					setItems((prev) =>
 						prev.map((it) =>
 							it.id === itemId
-								? { ...it, state: "error", error: "Network error" }
+								? { ...it, state: "error", error: k("Network error", "Erreur réseau") }
 								: it,
 						),
 					);
@@ -220,7 +227,7 @@ const DriveUploader = forwardRef<DriveUploaderHandle, DriveUploaderProps>(
 									error:
 										error instanceof Error
 											? error.message
-											: "Upload failed",
+											: k("Upload failed", "Échec de l'envoi"),
 								}
 								: it,
 						),
@@ -281,7 +288,7 @@ const DriveUploader = forwardRef<DriveUploaderHandle, DriveUploaderProps>(
 
 										{item.state === "error" ? (
 											<div className="mt-1 text-[11px] text-red-600">
-												{item.error ?? "Upload failed"}
+												{item.error ?? k("Upload failed", "Échec de l'envoi")}
 											</div>
 										) : null}
 									</div>

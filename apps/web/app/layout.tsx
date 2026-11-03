@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
-import { JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import { Inter, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import { interfaceMode } from "@/lib/actions/interface-pref";
+import { KUiProvider } from "@/components/k/ui-context";
+import { DatesProvider } from "@mantine/dates";
+import "dayjs/locale/fr";
 import "./globals.css";
 import { ConfigProvider } from "@/components/providers/config-provider";
 import { AppearanceProvider } from "@/components/providers/appearance-provider";
@@ -28,6 +32,13 @@ import Script from "next/script";
 const jakartaSans = Plus_Jakarta_Sans({
 	variable: "--font-sans",
 	subsets: ["latin"],
+});
+// ss2i : police de la nouvelle interface (option par utilisateur).
+const inter = Inter({
+	variable: "--font-sans",
+	subsets: ["latin"],
+	// pas de prechargement : la police ne sert qu'a Outlook (Gmail garde Plus Jakarta Sans)
+	preload: false,
 });
 const jetbrains = JetBrains_Mono({
 	variable: "--font-mono",
@@ -59,15 +70,19 @@ export default async function RootLayout({
 		mode === "dark" ? true : mode === "light" ? false : resolved === "dark";
 
 	const publicConfig = getPublicEnv();
+	// ss2i : interface choisie par l'utilisateur (classique par defaut).
+	const nouvelle = (await interfaceMode()) === "nouvelle";
 	const { theme: mantineTheme, colorScheme } = createMantineTheme({
 		theme,
 		mode,
+		ss2i: nouvelle,
 	});
 
 	return (
 		<html
-			lang="en"
+			lang={nouvelle ? "fr" : "en"}
 			data-theme={theme}
+			data-ui={nouvelle ? "ss2i" : undefined}
 			className={`${initialDark ? "dark" : ""}`}
 			{...mantineHtmlProps}
 		>
@@ -78,7 +93,7 @@ export default async function RootLayout({
 				/>
 			</head>
 			<body
-				className={`${jakartaSans.variable} ${jetbrains.variable} font-sans bg-background text-foreground antialiased`}
+				className={`${nouvelle ? inter.variable : jakartaSans.variable} ${jetbrains.variable} font-sans bg-background text-foreground antialiased`}
 			>
 				<AppearanceProvider initialTheme={theme} initialMode={mode}>
 					<ConfigProvider value={publicConfig}>
@@ -86,7 +101,16 @@ export default async function RootLayout({
 							theme={mantineTheme}
 							defaultColorScheme={colorScheme}
 						>
-							<ModalsProvider>{children}</ModalsProvider>
+							<KUiProvider nouvelle={nouvelle}>
+								{nouvelle ? (
+									// ss2i : Outlook en francais, y compris les selecteurs de date Mantine.
+									<DatesProvider settings={{ locale: "fr", firstDayOfWeek: 1 }}>
+										<ModalsProvider>{children}</ModalsProvider>
+									</DatesProvider>
+								) : (
+									<ModalsProvider>{children}</ModalsProvider>
+								)}
+							</KUiProvider>
 						</MantineProvider>
 					</ConfigProvider>
 				</AppearanceProvider>

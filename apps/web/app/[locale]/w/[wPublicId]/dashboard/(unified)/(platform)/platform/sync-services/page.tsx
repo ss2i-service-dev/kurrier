@@ -1,3 +1,5 @@
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import { KSyncServicesPage } from "@/components/k/platform/simple-pages";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import React from "react";
@@ -5,7 +7,7 @@ import { fetchUserDavAccountForWorkspace } from "@/lib/actions/dashboard";
 import SyncServicesHome from "@/components/dashboard/sync-services/sync-services-home";
 import { getPublicEnv } from "@schema";
 
-export default async function Page() {
+async function ClassicPage() {
 	const { DAV_URL } = getPublicEnv();
 	const account = await fetchUserDavAccountForWorkspace();
 	return (
@@ -28,4 +30,10 @@ export default async function Page() {
 			</div>
 		</>
 	);
+}
+
+// ss2i : nouvelle interface (option par utilisateur) : page refaite dans components/k/platform.
+export default async function Page() {
+	if (!(await isNouvelleInterface())) return <ClassicPage />;
+	return <KSyncServicesPage />;
 }

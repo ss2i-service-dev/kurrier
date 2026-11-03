@@ -56,12 +56,17 @@ export async function optimisticMove<T>(
 // remet a l'affichage sans qu'aucun aller-retour IMAP n'ait eu lieu.
 const UNDO_MS = 6000;
 
+// ss2i : nouvelle interface (<html data-ui="ss2i">) : libelle francais, toast centre.
+// Classique : inchange.
+const nouvelle = () => typeof document !== "undefined" && document.documentElement.dataset.ui === "ss2i";
+
 export function moveWithUndo<T>({
 	mailboxId,
 	threadIds,
 	message,
 	run,
 	onDone,
+	onUndo,
 	failure = "Action failed, messages restored",
 	archive = false,
 }: {
@@ -70,6 +75,8 @@ export function moveWithUndo<T>({
 	message: string;
 	run: () => Promise<T>;
 	onDone?: (result: T) => void;
+	// ss2i : appele si l'utilisateur annule (nouvelle interface : compteurs). Optionnel.
+	onUndo?: () => void;
 	failure?: string;
 	archive?: boolean;
 }) {
@@ -87,14 +94,15 @@ export function moveWithUndo<T>({
 	const timer = setTimeout(fire, UNDO_MS);
 	waiting.add(fire);
 	toast.success(message, {
-		position: "bottom-left",
+		position: nouvelle() ? "bottom-center" : "bottom-left",
 		duration: UNDO_MS,
 		action: {
-			label: "Undo",
+			label: nouvelle() ? "Annuler" : "Undo",
 			onClick: () => {
 				if (!waiting.delete(fire)) return; // deja envoye
 				clearTimeout(timer);
 				showThreads(mailboxId, threadIds);
+				onUndo?.();
 			},
 		},
 	});

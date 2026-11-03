@@ -5,17 +5,19 @@ import {IdentityEntity} from "@db";
 import {ReusableForm} from "@/components/common/reusable-form";
 import {FormState} from "@schema";
 import {usePathname} from "next/navigation";
+import { useK } from "@/components/k/ui-context";
 
 type UpdateNameAction = (_prev: FormState, formData: FormData) => Promise<FormState>;
 
 function SettingsGeneral({ updateName, identity }: {updateName: UpdateNameAction, identity: IdentityEntity}) {
 
     const pathname = usePathname()
+    const k = useK()
 
     const fields = [
         {
             name: "displayName",
-            label: "Display Name",
+            label: k("Display Name", "Nom affiché"),
             wrapperClasses: "col-span-6",
             props: {
                 defaultValue: identity.displayName,
@@ -24,7 +26,7 @@ function SettingsGeneral({ updateName, identity }: {updateName: UpdateNameAction
         },
         {
             name: "value",
-            label: "Email",
+            label: k("Email", "Adresse e-mail"),
             wrapperClasses: "col-span-6",
             props: {
                 defaultValue: identity.value,
@@ -46,8 +48,8 @@ function SettingsGeneral({ updateName, identity }: {updateName: UpdateNameAction
 
     return <>
         <SectionCard
-            title="Identity details"
-            description="Basic info used across the webmail UI."
+            title={k("Identity details", "Informations de l'identité")}
+            description={k("Basic info used across the webmail UI.", "Informations utilisées dans toute la messagerie.")}
         >
 
             <ReusableForm
@@ -55,7 +57,7 @@ function SettingsGeneral({ updateName, identity }: {updateName: UpdateNameAction
                 action={updateName}
                 submitButtonProps={{
                     wrapperClasses: "flex items-center justify-end my-4 py-3",
-                    submitLabel: "Save changes",
+                    submitLabel: k("Save changes", "Enregistrer"),
                 }}
             />
 

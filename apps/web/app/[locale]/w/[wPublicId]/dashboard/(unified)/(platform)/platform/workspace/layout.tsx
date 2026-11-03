@@ -1,3 +1,4 @@
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
 import React, { ReactNode } from "react";
 import {Blocks} from "lucide-react";
 import { Container } from "@/components/common/containers";
@@ -12,7 +13,7 @@ type LayoutProps = {
 
 
 
-export default async function Layout({
+async function ClassicLayout({
 	children,
 }: LayoutProps) {
 
@@ -73,4 +74,10 @@ export default async function Layout({
         </Container>
 
     </>
+}
+
+// ss2i : nouvelle interface : la page porte son propre en-tete, pas de navigation interne.
+export default async function Layout(props: LayoutProps) {
+	if (!(await isNouvelleInterface())) return <ClassicLayout {...props} />;
+	return <>{props.children}</>;
 }

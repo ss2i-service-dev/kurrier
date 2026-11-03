@@ -1,3 +1,4 @@
+import { useK } from "@/components/k/ui-context";
 import React, { useEffect, useMemo, useState } from "react";
 import {
 	CalendarClock,
@@ -23,13 +24,14 @@ function formatWhen(d: Date) {
 }
 
 function ScheduleSend() {
+	const t = useK(); // ss2i : francais dans la nouvelle interface
 	const [scheduledAt, setScheduledAt] = useState<Date | null>(null);
 
 	const scheduled = !!scheduledAt;
 
 	const label = useMemo(() => {
-		if (!scheduledAt) return "Schedule Send";
-		return `Scheduled • ${formatWhen(scheduledAt)}`;
+		if (!scheduledAt) return t("Schedule Send", "Programmer l'envoi");
+		return `${t("Scheduled", "Programmé")} • ${formatWhen(scheduledAt)}`;
 	}, [scheduledAt]);
 
 	const [opened, { open, close }] = useDisclosure(false);
@@ -42,15 +44,15 @@ function ScheduleSend() {
 	const dayjsTz = getDayjsTz(localTz);
 	const presets = [
 		{
-			label: "Tomorrow Morning",
+			label: t("Tomorrow Morning", "Demain matin"),
 			date: dayjsTz().endOf("d").add(8, "h").add(1, "m"),
 		},
 		{
-			label: "Tomorrow Afternoon",
+			label: t("Tomorrow Afternoon", "Demain après-midi"),
 			date: dayjsTz().endOf("d").add(13, "h").add(1, "m"),
 		},
 		{
-			label: "Monday Morning",
+			label: t("Monday Morning", "Lundi matin"),
 			date: dayjsTz().endOf("w").add(8, "h").add(1, "m"),
 		},
 	];
@@ -76,13 +78,13 @@ function ScheduleSend() {
 				centered
 				opened={pickerOpened}
 				onClose={closePicker}
-				title={<span className={"text-xl"}>Schedule Send</span>}
+				title={<span className={"text-xl"}>{t("Schedule Send", "Programmer l'envoi")}</span>}
 				size="sm"
 				zIndex={1003}
 			>
 				<DateTimePicker
-					label="Pick date and time"
-					placeholder="Pick date and time"
+					label={t("Pick date and time", "Date et heure")}
+					placeholder={t("Pick date and time", "Date et heure")}
 					value={pickerDateValue}
 					onChange={(val) => {
 						if (!val) return;
@@ -105,7 +107,7 @@ function ScheduleSend() {
 						setScheduledAt(pickerValue.toDate());
 					}}
 				>
-					Schedule
+					{t("Schedule", "Programmer")}
 				</Button>
 			</Modal>
 
@@ -114,7 +116,7 @@ function ScheduleSend() {
 				opened={opened}
 				closeOnClickOutside={false}
 				onClose={close}
-				title={<span className={"text-xl"}>Schedule Send</span>}
+				title={<span className={"text-xl"}>{t("Schedule Send", "Programmer l'envoi")}</span>}
 				size="sm"
 				zIndex={1001}
 			>
@@ -150,7 +152,7 @@ function ScheduleSend() {
 						openPicker();
 					}}
 				>
-					Pick date and time
+					{t("Pick date and time", "Choisir la date et l'heure")}
 				</Button>
 			</Modal>
 
@@ -214,7 +216,7 @@ function ScheduleSend() {
 								leftSection={<SendHorizonal size={14} />}
 								onClick={open}
 							>
-								Schedule Send
+								{t("Schedule Send", "Programmer l'envoi")}
 							</Menu.Item>
 						</>
 					) : (
@@ -228,7 +230,7 @@ function ScheduleSend() {
 								}
 								onClick={() => {}}
 							>
-								Scheduled
+								{t("Scheduled", "Programmé")}
 							</Menu.Item>
 
 							<Menu.Divider />
@@ -237,7 +239,7 @@ function ScheduleSend() {
 								leftSection={<X size={14} />}
 								onClick={() => setScheduledAt(null)}
 							>
-								Remove schedule
+								{t("Remove schedule", "Annuler la programmation")}
 							</Menu.Item>
 						</>
 					)}

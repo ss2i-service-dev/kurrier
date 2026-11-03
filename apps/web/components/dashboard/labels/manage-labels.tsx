@@ -19,6 +19,7 @@ import {
 import { DEFAULT_COLORS_SWATCH } from "@common/mail-client";
 import { toast } from "sonner";
 import colors from "tailwindcss/colors";
+import { useK, useNouvelle } from "@/components/k/ui-context";
 
 function useLabelOptions({ labels }: { labels: FetchLabelsResult }) {
 	const options = labels
@@ -36,6 +37,8 @@ export default function ManageLabels({
 }: {
 	globalLabels: FetchLabelsResult;
 }) {
+	const k = useK();
+	const nouvelle = useNouvelle();
 	const [opened, { open, close }] = useDisclosure(false);
 
 	const { options: labelOptions } = useLabelOptions({ labels: globalLabels });
@@ -74,14 +77,17 @@ export default function ManageLabels({
 			close();
 		} finally {
 			setIsSubmitting(false);
-			toast.success("Label updated");
+			toast.success(k("Label updated", "Libellé mis à jour"));
 		}
 	};
 
 	const handleDelete = async () => {
 		if (!editLabelId) return;
 		const ok = window.confirm(
-			"Delete this label? This action cannot be undone.",
+			k(
+				"Delete this label? This action cannot be undone.",
+				"Supprimer ce libellé ? Cette action est irréversible.",
+			),
 		);
 		if (!ok) return;
 
@@ -89,7 +95,7 @@ export default function ManageLabels({
 		try {
 			await deleteLabel({ id: editLabelId });
 			setEditLabelId(null);
-			toast.success("Label deleted");
+			toast.success(k("Label deleted", "Libellé supprimé"));
 		} finally {
 			setIsSubmitting(false);
 		}
@@ -97,13 +103,13 @@ export default function ManageLabels({
 
 	return (
 		<>
-			<Modal opened={opened} onClose={close} title="Manage labels" size="sm">
+			<Modal opened={opened} onClose={close} title={k("Manage labels", "Gérer les libellés")} size="sm">
 				<div className="flex flex-col gap-6">
 					<section className="space-y-3">
 						<Select
 							size="xs"
-							label="Choose label"
-							placeholder="Select a label to edit…"
+							label={k("Choose label", "Choisir un libellé")}
+							placeholder={k("Select a label to edit…", "Sélectionner un libellé à modifier…")}
 							data={labelOptions}
 							value={editLabelId}
 							onChange={(value) => setEditLabelId(value)}
@@ -114,15 +120,15 @@ export default function ManageLabels({
 								<div className="col-span-12 md:col-span-6 space-y-2">
 									<TextInput
 										size="xs"
-										label="Label name"
+										label={k("Label name", "Nom du libellé")}
 										value={editName}
 										onChange={(e) => setEditName(e.currentTarget.value)}
 									/>
 
 									<Select
 										size="xs"
-										label="Nest under (optional)"
-										placeholder="No parent"
+										label={k("Nest under (optional)", "Placer dans (facultatif)")}
+										placeholder={k("No parent", "Aucun parent")}
 										data={labelOptions.filter((o) => o.value !== editLabelId)}
 										value={editParentId}
 										onChange={(v) => setEditParentId(v)}
@@ -132,7 +138,7 @@ export default function ManageLabels({
 
 								<div className="col-span-12 md:col-span-6 space-y-2">
 									<div className="text-xs font-medium text-muted-foreground">
-										Label color
+										{k("Label color", "Couleur du libellé")}
 									</div>
 									<ColorPicker
 										size="sm"
@@ -151,7 +157,7 @@ export default function ManageLabels({
 										onClick={handleUpdate}
 										disabled={isSubmitting || !editLabelId}
 									>
-										Save changes
+										{k("Save changes", "Enregistrer")}
 									</Button>
 
 									<Button
@@ -161,7 +167,7 @@ export default function ManageLabels({
 										onClick={handleDelete}
 										disabled={isSubmitting || !editLabelId}
 									>
-										Delete label
+										{k("Delete label", "Supprimer le libellé")}
 									</Button>
 								</div>
 							</div>
@@ -170,9 +176,21 @@ export default function ManageLabels({
 				</div>
 			</Modal>
 
-			<ActionIcon variant="light" size="xs" onClick={open}>
-				<IconSettings size={12} />
-			</ActionIcon>
+			{nouvelle ? (
+				<button
+					type="button"
+					onClick={open}
+					title="Gérer les libellés"
+					aria-label="Gérer les libellés"
+					className="k-focus inline-flex h-5 w-5 items-center justify-center rounded-k-sm text-k-ink-3 transition-colors hover:bg-k-hover hover:text-k-ink"
+				>
+					<IconSettings size={13} />
+				</button>
+			) : (
+				<ActionIcon variant="light" size="xs" onClick={open}>
+					<IconSettings size={12} />
+				</ActionIcon>
+			)}
 		</>
 	);
 }

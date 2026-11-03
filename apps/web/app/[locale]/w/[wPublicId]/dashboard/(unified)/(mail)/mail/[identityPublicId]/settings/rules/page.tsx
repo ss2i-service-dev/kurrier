@@ -7,10 +7,14 @@ import {createRule, fetchMailRules, getAppLabels} from "@/lib/actions/mail-rules
 import { rlsClient } from "@/lib/actions/clients";
 import MailRulesList from "@/components/mailbox/settings/rules/mail-rules-list";
 import { Divider } from "@mantine/core";
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
 
 async function Page({ params }: { params: { identityPublicId: string } }) {
 
     const resolvedParams = await params;
+    // ss2i : textes de la nouvelle interface en francais.
+    const nv = await isNouvelleInterface();
+    const k = (en: string, fr: string) => (nv ? fr : en);
     const rls = await rlsClient();
 
     const [identity] = await rls((tx) =>
@@ -25,9 +29,12 @@ async function Page({ params }: { params: { identityPublicId: string } }) {
 
     if (!identity) {
         return (
-            <SectionCard title="Rules" description="Create filters to automatically process incoming mail.">
+            <SectionCard
+                title={k("Rules", "Règles")}
+                description={k("Create filters to automatically process incoming mail.", "Créez des filtres pour traiter automatiquement le courrier entrant.")}
+            >
                 <div className="text-sm text-neutral-600 dark:text-neutral-400">
-                    Identity not found.
+                    {k("Identity not found.", "Identité introuvable.")}
                 </div>
             </SectionCard>
         );
@@ -38,11 +45,11 @@ async function Page({ params }: { params: { identityPublicId: string } }) {
 
     return (
         <SectionCard
-            title={"Rules"}
-            description={"Create filters to automatically process incoming mail."}
+            title={k("Rules", "Règles")}
+            description={k("Create filters to automatically process incoming mail.", "Créez des filtres pour traiter automatiquement le courrier entrant.")}
         >
             <MailRulesList rules={rules} />
-            {rules.length > 0 && <Divider my={"xl"} variant={"dashed"} label={<span className={"text-sm"}>Add New Label</span>} labelPosition={"left"} />}
+            {rules.length > 0 && <Divider my={"xl"} variant={"dashed"} label={<span className={"text-sm"}>{k("Add New Label", "Nouvelle règle")}</span>} labelPosition={"left"} />}
             <CreateMailRuleForm identityId={identity.id} action={createRule} appLabels={appLabels} />
 
         </SectionCard>

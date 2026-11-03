@@ -4,7 +4,7 @@
 // certains messages gardent pourtant des cid: (le lecteur les resout alors par l'URL
 // signee de la piece jointe). Une image marquee inline mais que le HTML n'affiche pas
 // (capture jointe depuis un telephone, corps sans <img>) doit rester dans la liste des
-// pieces jointes, sinon elle disparait.
+// pieces jointes, sinon elle disparait : en cas de doute, on la montre.
 
 type InlineCandidate = {
 	id: string;
@@ -12,6 +12,7 @@ type InlineCandidate = {
 	isInline?: boolean | null;
 	contentType?: string | null;
 	filenameOriginal?: string | null;
+	sizeBytes?: number | null;
 };
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|tiff?)$/i;
@@ -56,12 +57,17 @@ export function inlineImageIdsShownInBody(
 		else rest.push(a);
 	}
 
-	// 2. Les autres ont pu etre integrees en data: URI par mailparser. On ne sait pas
-	//    lesquelles : on ne les masque que si le corps contient au moins autant d'images
-	//    data: que d'images restantes, sinon on les laisse toutes en pieces jointes.
+	// 2. Les autres ont ete integrees en data: URI par mailparser : on les reconnait a
+	//    la taille decodee de chaque data: URI du corps, egale a celle de la piece jointe.
 	if (rest.length > 0) {
-		const dataImages = (body.match(/<img[^>]+src\s*=\s*["']?data:image\//g) || []).length;
-		if (dataImages >= rest.length) for (const a of rest) shown.add(a.id);
+		const sizes = new Set<number>();
+		const re = /data:image\/[a-z0-9.+-]+;base64,([a-z0-9+/=\s]+)/g;
+		for (const m of body.matchAll(re)) {
+			const b64 = m[1].replace(/\s+/g, "");
+			const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+			sizes.add(Math.floor((b64.length * 3) / 4) - pad);
+		}
+		for (const a of rest) if (a.sizeBytes && sizes.has(Number(a.sizeBytes))) shown.add(a.id);
 	}
 
 	return shown;

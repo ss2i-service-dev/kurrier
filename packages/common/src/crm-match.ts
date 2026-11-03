@@ -113,6 +113,48 @@ export function addressesOf(field: unknown): string[] {
 	return out;
 }
 
+/** Texte lisible d'un corps HTML : une ligne par bloc, balises retirees, entites courantes decodees. */
+export function htmlToPlainLines(html: string): string {
+	return html
+		.replace(/<(style|script|head)[^>]*>[\s\S]*?<\/\1>/gi, "")
+		.replace(/<br\s*\/?>/gi, "\n")
+		.replace(/<\/(p|div|tr|li|h[1-6]|blockquote|table)>/gi, "\n")
+		.replace(/<[^>]+>/g, "")
+		.replace(/&nbsp;|&#160;/gi, " ")
+		.replace(/&lt;/gi, "<")
+		.replace(/&gt;/gi, ">")
+		.replace(/&quot;/gi, '"')
+		.replace(/&#39;|&apos;/gi, "'")
+		.replace(/&amp;/gi, "&");
+}
+
+// Ligne d'en-tete d'un message transfere ou cite (Outlook, Gmail, Thunderbird, Apple
+// Mail), en francais ou en anglais, eventuellement precedee de ">" ou mise en gras "*".
+const QUOTED_HEADER_LINE =
+	/^[\s>*_]*(de|from|\u00e0|a|to|cc|envoy\u00e9 par|sent by)[\s*_]*:[\s*_]*(.*)$/i;
+const EMAIL_IN_TEXT = /[a-z0-9._%+'-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+
+/**
+ * Adresses des en-tetes d'un message transfere ou cite dans le corps (« De : Sylvain
+ * Darroy <s.darroy@groupe-libaud.fr> »). Un mail d'un client transfere par un collegue
+ * n'a que des adresses internes dans ses en-tetes : c'est le corps qui nomme le client.
+ * Seules les lignes d'en-tete sont lues, jamais les adresses citees ailleurs (signatures,
+ * texte libre).
+ */
+export function quotedHeaderAddresses(body: string | null | undefined): string[] {
+	if (!body) return [];
+	const out = new Set<string>();
+	for (const line of body.split(/\r?\n/)) {
+		const m = line.match(QUOTED_HEADER_LINE);
+		if (!m) continue;
+		for (const raw of m[2].match(EMAIL_IN_TEXT) ?? []) {
+			const e = normalizeEmail(raw);
+			if (e) out.add(e);
+		}
+	}
+	return Array.from(out);
+}
+
 /**
  * Adresses exterieures d'un lot de messages : normalisees, dedoublonnees, sans les
  * domaines internes ni les automates. Vide = pas un echange client.

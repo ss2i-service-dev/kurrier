@@ -6,7 +6,9 @@ import {
 	DEFAULT_INTERNAL_DOMAINS,
 	DEFAULT_PRO_DOMAINS,
 	externalAddresses,
+	htmlToPlainLines,
 	isProIdentity,
+	quotedHeaderAddresses,
 	parseDomainList,
 	type EmailMatch,
 } from "@common";
@@ -136,7 +138,7 @@ export async function linkThread(threadId: string, identityId: string, identity?
 	if (!ident || !isProIdentityValue(ident.value)) return { skipped: true, companies: [], externalAddresses: 0 };
 
 	const rows = await db
-		.select({ from: messages.from, to: messages.to, cc: messages.cc, bcc: messages.bcc })
+		.select({ from: messages.from, to: messages.to, cc: messages.cc, bcc: messages.bcc, text: messages.text, html: messages.html })
 		.from(messages)
 		.innerJoin(mailboxes, eq(mailboxes.id, messages.mailboxId))
 		.where(
@@ -147,7 +149,12 @@ export async function linkThread(threadId: string, identityId: string, identity?
 				notInArray(mailboxes.kind, [...IGNORED_KINDS]),
 			),
 		);
-	const emails = externalAddresses(rows.flatMap((r) => [r.from, r.to, r.cc, r.bcc]), INTERNAL_DOMAINS);
+	// En-tetes du message, puis en-tetes des messages transferes ou cites dans le corps :
+	// un mail client transfere par un collegue n'a que des adresses internes en en-tete.
+	const emails = externalAddresses(
+		rows.flatMap((r) => [r.from, r.to, r.cc, r.bcc, quotedHeaderAddresses(r.text || (r.html ? htmlToPlainLines(r.html) : null))]),
+		INTERNAL_DOMAINS,
+	);
 	const companies = emails.length ? companiesOf(await matchAddresses(emails)) : [];
 	const ids = companies.map((c) => c.companyId);
 
@@ -202,7 +209,14 @@ export async function linkThread(threadId: string, identityId: string, identity?
 // Rattrapage d'une identite
 // ---------------------------------------------------------------------------
 
+/**
+ * Version des regles de rattachement : une passe de rattrapage faite avec d'autres
+ * regles est refaite. 2 = adresses des en-tetes transferes ou cites dans le corps.
+ */
+export const LINK_RULES_VERSION = 2;
+
 export type BackfillState = {
+	rules?: number;
 	cursorAt?: string | null;
 	cursorThreadId?: string | null;
 	startedAt?: string | null;
@@ -239,9 +253,9 @@ export async function backfillIdentity(identityId: string, shouldStop: () => boo
 	const [ident] = await db.select().from(identities).where(eq(identities.id, identityId));
 	if (!ident || !isProIdentityValue(ident.value)) return { skipped: true, processed: 0, linked: 0 };
 	let state = await readBackfillState(identityId);
-	if (state.doneAt || !state.startedAt) {
+	if (state.doneAt || !state.startedAt || state.rules !== LINK_RULES_VERSION) {
 		// Nouvelle passe : repart du haut (les adresses deja en cache ne coutent rien).
-		state = { startedAt: new Date().toISOString(), cursorAt: null, cursorThreadId: null, doneAt: null, processed: 0, linked: 0 };
+		state = { rules: LINK_RULES_VERSION, startedAt: new Date().toISOString(), cursorAt: null, cursorThreadId: null, doneAt: null, processed: 0, linked: 0 };
 		await writeBackfillState(identityId, state);
 	}
 	let processed = state.processed ?? 0;
@@ -306,7 +320,7 @@ export async function identitiesDueForBackfill() {
 	const retryMs = MATCH_RETRY_DAYS * 86_400_000;
 	for (const ident of await proIdentities()) {
 		const state = await readBackfillState(ident.id);
-		if (!state.doneAt) {
+		if (!state.doneAt || state.rules !== LINK_RULES_VERSION) {
 			due.push(ident.id);
 			continue;
 		}

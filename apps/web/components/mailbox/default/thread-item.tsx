@@ -1,4 +1,5 @@
 import React from "react";
+import { cidUrlMap, inlineImageIdsShownInBody } from "@/lib/inline-images";
 import { MessageEntity } from "@db";
 import EmailViewer from "@/components/mailbox/default/email-viewer";
 import EmailRenderer from "@/components/mailbox/default/email-renderer";
@@ -57,6 +58,9 @@ export default async function ThreadItem({
 
 	const attachments = await getSignedUrlsForMessage(message.id)
     const preview = await fetchEventPreviewItems(attachments, identityPublicId)
+	// ss2i : images inline deja dans le corps -> pas repetees sous le mail ; cid: resolus.
+	const inlineShownIds = Array.from(inlineImageIdsShownInBody(message.html, attachments));
+	const cidUrls = cidUrlMap(attachments);
 	const remoteImagesAllowed = await remoteImagesAllowedForContact(
 		getMessageAddress(message, "from"),
 	);
@@ -86,6 +90,7 @@ export default async function ThreadItem({
 							numberOfMessages={numberOfMessages}
 							message={message}
 							attachments={attachments}
+							inlineShownIds={inlineShownIds}
 							publicConfig={publicConfig}
 							threadId={threadId}
 							markSmtp={markSmtp}
@@ -93,7 +98,7 @@ export default async function ThreadItem({
                             mailSubscription={mailSubscription}
 							identityMailboxes={identityMailboxes}
 						>
-							<EmailViewer message={message} remoteImagesAllowed={remoteImagesAllowed} />
+							<EmailViewer message={message} remoteImagesAllowed={remoteImagesAllowed} cidUrls={cidUrls} />
 						</EmailRenderer>
 					</div>
 				</div>

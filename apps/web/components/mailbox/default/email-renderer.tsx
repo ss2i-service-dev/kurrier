@@ -9,7 +9,7 @@ import { Temporal } from "@js-temporal/polyfill";
 import dynamic from "next/dynamic";
 import { ActionIcon, Button, Menu, Modal, Tooltip } from "@mantine/core";
 import { EmailEditorHandle } from "@/components/mailbox/default/editor/email-editor";
-import EditorAttachmentItem from "@/components/mailbox/default/editor/editor-attachment-item";
+import MessageAttachments from "@/components/mailbox/default/message-attachments";
 import { PublicConfig } from "@schema";
 import {archiveThread, fetchMailbox, FetchIdentityMailboxListResult, FetchThreadMailSubsResult, markAsRead, markAsUnread, moveToTrash} from "@/lib/actions/mailbox";
 import { replyRecipients } from "@/lib/reply-recipients";
@@ -91,6 +91,7 @@ function EmailRenderer({
 	numberOfMessages,
 	message,
 	attachments,
+	inlineShownIds = [],
 	publicConfig,
 	threadId,
 	markSmtp,
@@ -104,6 +105,7 @@ function EmailRenderer({
 	message: MessageEntity;
 	// attachments: MessageAttachmentEntity[];
 	attachments: MessageAttachmentWithUrl[];
+	inlineShownIds?: string[];
 	publicConfig: PublicConfig;
 	threadId: string;
 	markSmtp: boolean;
@@ -523,21 +525,11 @@ function EmailRenderer({
 
 			{children}
 
-            {attachments?.length > 0 && (
-                <div className="border-t border-dotted py-4">
-                    <div className="font-semibold mb-4">{attachments.length} attachments</div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                        {attachments.map((attachment) => (
-                            <EditorAttachmentItem
-                                key={attachment.id}
-                                attachment={attachment}
-                                publicConfig={publicConfig}
-                            />
-                        ))}
-                    </div>
-                </div>
-            )}
+			<MessageAttachments
+				attachments={attachments}
+				publicConfig={publicConfig}
+				hiddenIds={inlineShownIds}
+			/>
 
 			{threadIndex === numberOfMessages - 1 && !showEditor && (
 				<div className={"flex gap-4 flex-wrap"}>

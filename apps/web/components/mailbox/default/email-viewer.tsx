@@ -121,9 +121,13 @@ div[style*="border-left"][style*="solid"] blockquote {
 export default function EmailViewer({
 	message,
 	remoteImagesAllowed = false,
+	cidUrls,
 }: {
 	message: MessageEntity;
 	remoteImagesAllowed?: boolean;
+	// ss2i : Content-ID (sans chevrons, en minuscules) -> URL signee de la piece jointe.
+	// Resout les images inline restees en cid: dans le HTML stocke.
+	cidUrls?: Record<string, string>;
 }) {
 	const hostRef = useRef<HTMLDivElement>(null);
 	const [hideQuotes, setHideQuotes] = useState(true);
@@ -143,6 +147,13 @@ export default function EmailViewer({
 
 		images.forEach((img) => {
 			const src = img.getAttribute("src") || "";
+
+			if (/^cid:/i.test(src)) {
+				const key = src.slice(4).replace(/^<|>$/g, "").trim().toLowerCase();
+				const url = cidUrls?.[key];
+				if (url) img.setAttribute("src", url);
+				return;
+			}
 
 			if (/^https?:\/\//i.test(src)) {
 				blocked = true;
@@ -272,7 +283,7 @@ export default function EmailViewer({
 				a.rel = "nofollow noopener noreferrer";
 			});
 		}
-	}, [message.html, message.text, hideQuotes, showRemoteImages]);
+	}, [message.html, message.text, hideQuotes, showRemoteImages, cidUrls]);
 
 	return (
 		<div className="mb-10 mt-5 overflow-x-hidden rounded-xl border border-neutral-200 bg-white text-neutral-900 px-6 py-5 dark:border-neutral-700">

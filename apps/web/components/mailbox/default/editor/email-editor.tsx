@@ -27,6 +27,13 @@ import { DynamicContextProvider } from "@/hooks/use-dynamic-context";
 import { toast } from "sonner";
 import { useParams, useRouter } from "next/navigation";
 import { useRfcStyle } from "@/components/mailbox/default/compose-style-context";
+import {
+	newBackupId,
+	patchBackup,
+	removeBackup,
+	touchAlive,
+	writeBackup,
+} from "@/lib/draft-backup";
 
 export type EmailEditorHandle = {
 	focus: () => void;
@@ -191,6 +198,79 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			return latest.current;
 		};
 
+		// ss2i : copie locale du brouillon (lib/draft-backup.ts), ecrite a chaque frappe et
+		// independante du serveur. Elle n'est retiree qu'a l'envoi abouti ou a l'abandon.
+		const backupId = useRef<string>(newBackupId());
+		const backupOff = useRef(false);
+		const sentAt = useRef<number | null>(null);
+		const lastBackup = useRef<string | null>(null);
+		const backupNow = () => {
+			if (backupOff.current) return;
+			const snap = snapshot();
+			if (!snap) return;
+			const { payload, key, empty } = snap;
+			if (!payload.identityPublicId) return;
+			if (empty && !draftIdRef.current) return;
+			const sig = JSON.stringify([key, lastSavedKey.current, draftIdRef.current, sentAt.current]);
+			if (sig === lastBackup.current) return;
+			const ok = writeBackup({
+				v: 1,
+				id: backupId.current,
+				identityPublicId: payload.identityPublicId,
+				draftMessageId: draftIdRef.current,
+				payload: payload as Record<string, string | null>,
+				key,
+				savedKey: lastSavedKey.current,
+				sentAt: sentAt.current,
+				updatedAt: Date.now(),
+			});
+			if (ok) lastBackup.current = sig;
+			touchAlive(backupId.current);
+		};
+		const dropBackup = () => {
+			backupOff.current = true;
+			removeBackup(backupId.current);
+		};
+		const markSent = (at: number | null) => {
+			sentAt.current = at;
+			backupNow();
+			patchBackup(backupId.current, { sentAt: at });
+		};
+
+		// Echec d'enregistrement serveur : alerte qui reste, et le navigateur demande
+		// confirmation avant de quitter la page tant que le serveur n'a pas la derniere version.
+		const saveFailed = useRef(false);
+		const notifySaveError = (message: string) => {
+			saveFailed.current = true;
+			backupNow();
+			const skew = /server action|older or newer deployment|failed to fetch|unexpected/i.test(
+				message,
+			);
+			toast.error("Draft NOT saved on the server", {
+				id: "ss2i-draft-save-error",
+				duration: Infinity,
+				position: "bottom-left",
+				description: skew
+					? "The app was updated or restarted. Your text is kept in this browser: reload the page, it will be put back in Drafts automatically."
+					: `${message} Your text is kept in this browser and will be put back in Drafts after a reload.`,
+				action: skew
+					? {
+							label: "Reload",
+							onClick: () => {
+								backupNow();
+								saveFailed.current = false;
+								window.location.reload();
+							},
+						}
+					: undefined,
+			});
+		};
+		const notifySaveOk = () => {
+			if (!saveFailed.current) return;
+			saveFailed.current = false;
+			toast.dismiss("ss2i-draft-save-error");
+		};
+
 		const persist = useCallback((flush = false) => {
 			const snap = snapshot();
 			if (!snap) return chain.current;
@@ -215,14 +295,18 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				if (empty && !draftIdRef.current) return;
 				setDraftStatus({ state: "saving" });
 				const res = await saveDraft({ ...payload, draftMessageId: draftIdRef.current });
-				if (!res.draftMessageId) {
-					setDraftStatus({ state: "error", error: res.error ?? "Draft could not be saved." });
+				if (!res?.draftMessageId) {
+					const error = res?.error ?? "Draft could not be saved.";
+					setDraftStatus({ state: "error", error });
+					notifySaveError(error);
 					return;
 				}
 				const savedId = res.draftMessageId;
 				draftIdRef.current = savedId;
 				setDraftId(savedId);
 				lastSavedKey.current = key;
+				notifySaveOk();
+				backupNow();
 				setDraftStatus({
 					state: "saved",
 					savedAt: res.savedAt ? new Date(res.savedAt) : new Date(),
@@ -231,14 +315,18 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			};
 			// Les enregistrements d'un meme brouillon se suivent, jamais deux a la fois.
 			chain.current = chain.current.then(run).catch((e: any) => {
-				setDraftStatus({ state: "error", error: String(e?.message ?? e) });
+				const error = String(e?.message ?? e);
+				setDraftStatus({ state: "error", error });
+				notifySaveError(error);
 			});
 			return chain.current;
 		}, []);
 
 		useEffect(() => {
 			const tick = () => {
+				if (!backupOff.current) touchAlive(backupId.current);
 				if (suspended.current) return;
+				backupNow();
 				const snap = snapshot();
 				if (!snap) return;
 				const { key } = snap;
@@ -258,11 +346,24 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			};
 			const interval = setInterval(tick, DRAFT_POLL_MS);
 			// Fermeture de l'onglet ou de l'editeur : ce qui reste part tout de suite.
-			const onHide = () => void persist(true);
+			const onHide = () => {
+				backupNow();
+				void persist(true);
+			};
+			// Serveur en echec : confirmation du navigateur avant de quitter la page.
+			const onBeforeUnload = (e: BeforeUnloadEvent) => {
+				backupNow();
+				if (!saveFailed.current || backupOff.current) return;
+				e.preventDefault();
+				e.returnValue = "";
+			};
 			window.addEventListener("pagehide", onHide);
+			window.addEventListener("beforeunload", onBeforeUnload);
 			return () => {
 				clearInterval(interval);
 				window.removeEventListener("pagehide", onHide);
+				window.removeEventListener("beforeunload", onBeforeUnload);
+				backupNow();
 				if (timer.current) clearTimeout(timer.current);
 				void persist(true);
 			};
@@ -270,6 +371,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 
 		const discard = useCallback(async () => {
 			suspended.current = true;
+			backupOff.current = true;
 			if (timer.current) clearTimeout(timer.current);
 			await chain.current.catch(() => {});
 			const id = draftIdRef.current;
@@ -278,9 +380,13 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				if (res && "error" in res && res.error) {
 					toast.error(res.error);
 					suspended.current = false;
+					backupOff.current = false;
 					return;
 				}
 			}
+			dropBackup();
+			toast.dismiss("ss2i-draft-save-error");
+			saveFailed.current = false;
 			toast.success("Draft discarded", { position: "bottom-left" });
 			// discardDraft revalide les pages (compteur Drafts, liste) ; un router.refresh()
 			// ici annulerait la navigation de handleClose quand le brouillon est ouvert en page.
@@ -299,6 +405,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			suspended.current = true;
 			if (timer.current) clearTimeout(timer.current);
 			submittedDraftId.current = draftIdRef.current;
+			markSent(Date.now());
 		};
 
 		const onKeyDown = (e: React.KeyboardEvent) => {
@@ -324,6 +431,8 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				if (mounted.current) handleClose();
 				const result = await waitPendingSend(pendingSendId);
 				if (result?.error) {
+					// La copie locale redevient recuperable.
+					markSent(null);
 					toast.error("Sending failed", {
 						description: result.error,
 						position: "bottom-left",
@@ -332,6 +441,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 					router.refresh();
 					return;
 				}
+				dropBackup();
 				// Le brouillon envoye disparait du dossier Drafts : on rafraichit.
 				router.refresh();
 			};
@@ -363,9 +473,12 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 							onParkedChange?.(false);
 							// Envoi annule : le brouillon reprend son cours.
 							suspended.current = false;
+							markSent(null);
 							requestAnimationFrame(() => textEditorRef.current?.focus("end"));
 							toast.success("Sending cancelled", { position: "bottom-left" });
 						} else {
+							// Editeur ferme : la copie locale part dans Drafts (DraftBackupRecovery).
+							markSent(null);
 							await navigator.clipboard?.writeText(bodyText).catch(() => {});
 							toast.warning("Sending cancelled", {
 								description: "The editor was closed: its text has been copied to the clipboard.",
@@ -380,6 +493,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 		useEffect(() => {
 			if (formState.error) {
 				suspended.current = false;
+				markSent(null);
 				toast.error("Error", {
 					description: formState.error,
 				});
@@ -401,6 +515,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 					startUndoWindow(pending.pendingSendId, pending.undoMs ?? 30_000);
 					return;
 				}
+				dropBackup();
 				handleClose();
 				toast.success("Success", {
 					description: formState.message,
@@ -411,7 +526,13 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 
 		return (
 			<>
-				<div className={"mt-4"} tabIndex={-1} onKeyDown={onKeyDown}>
+				<div
+					className={"mt-4"}
+					tabIndex={-1}
+					onKeyDown={onKeyDown}
+					onInput={() => backupNow()}
+					onKeyUp={() => backupNow()}
+				>
 					<DynamicContextProvider
 						initialState={{
 							isPending,

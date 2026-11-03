@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
 	closeOpenTags,
 	composeMessage,
+	keepEmptyLines,
 	formatQuoteDate,
 	isPlainHtml,
 	quoteOverrideOf,
@@ -477,6 +478,14 @@ test("quoteOverrideOf : champs du formulaire / brouillon", () => {
 	assert.equal(quoteOverrideOf("custom", "  "), null);
 	assert.equal(quoteOverrideOf("auto", "<p>x</p>"), null);
 	assert.equal(quoteOverrideOf(undefined, undefined), null);
+});
+
+test("lignes vides : <p></p> part en <p><br></p> (corps et citation modifiee)", () => {
+	assert.equal(keepEmptyLines("<p>a</p><p></p><p>b</p>"), "<p>a</p><p><br></p><p>b</p>");
+	assert.equal(keepEmptyLines('<p style="x"></p>'), '<p style="x"><br></p>');
+	assert.equal(keepEmptyLines("<p>a</p>"), "<p>a</p>");
+	const out = composeMessage({ html: "<p>Bonjour,</p><p></p><p>Merci</p>", text: "x", subject: "s" } as any);
+	assert.ok(out.html.startsWith("<p>Bonjour,</p><p><br></p><p>Merci</p>"));
 });
 
 if (failures) {

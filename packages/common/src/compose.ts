@@ -480,7 +480,21 @@ export function signatureBlocks(signatureHtml?: string | null, rfcStyle = false)
 
 // --- Assemblage -----------------------------------------------------------------------
 
-export function composeMessage(input: ComposeInput) {
+// ss2i : un paragraphe vide (<p></p>, ligne laissee vide dans l'editeur) a une hauteur
+// nulle dans les clients mail : il part en <p><br></p> pour que la ligne vide reste.
+export function keepEmptyLines(html: string): string {
+	return html.replace(/<p(\s[^>]*)?><\/p>/g, (_m, attrs = "") => `<p${attrs}><br></p>`);
+}
+
+export function composeMessage(rawInput: ComposeInput) {
+	const input: ComposeInput = {
+		...rawInput,
+		html: rawInput.html == null ? rawInput.html : keepEmptyLines(rawInput.html),
+		quoteOverride:
+			rawInput.quoteOverride?.mode === "custom" && rawInput.quoteOverride.html
+				? { ...rawInput.quoteOverride, html: keepEmptyLines(rawInput.quoteOverride.html) }
+				: rawInput.quoteOverride,
+	};
 	const rfc = Boolean(input.rfcStyle);
 	const signature = signatureBlocks(input.signatureHtml, rfc);
 	const orig = input.orig ?? null;

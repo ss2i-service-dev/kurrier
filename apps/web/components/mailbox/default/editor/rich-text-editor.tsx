@@ -47,10 +47,23 @@ function formatWhen(d: Date) {
 		});
 }
 
+// ss2i : une ligne laissee vide pour aerer le mail est un paragraphe vide, que TipTap
+// serialise en <p></p>. Ce paragraphe a une hauteur nulle partout ailleurs (lecteur,
+// Gmail, Outlook) : les lignes vides disparaissaient a l'envoi et a la reouverture.
+// Stocke et envoye en <p><br></p> (forme de Gmail), relu en <p></p> par l'editeur.
+const EMPTY_P = /<p(\s[^>]*)?><\/p>/g;
+const EMPTY_P_BR = /<p(\s[^>]*)?>\s*<br\s*\/?>\s*<\/p>/g;
+export function toStoredHtml(html: string): string {
+	return html.replace(EMPTY_P, (_m, attrs = "") => `<p${attrs}><br></p>`);
+}
+export function fromStoredHtml(html: string): string {
+	return html.replace(EMPTY_P_BR, (_m, attrs = "") => `<p${attrs}></p>`);
+}
+
 export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 	({ name, defaultValue = "", onChange }, ref) => {
 		const containerRef = useRef<HTMLDivElement>(null);
-		const [value, setValue] = useState(defaultValue);
+		const [value, setValue] = useState(toStoredHtml(defaultValue));
 		const [textValue, setTextValue] = useState("");
 
 		const editor = useEditor({
@@ -58,14 +71,14 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 			parseOptions: { preserveWhitespace: "full" },
 			extensions: [StarterKit, Link, Image],
 			// ss2i : reprise d'un brouillon, le corps enregistre est le contenu initial.
-			content: defaultValue,
+			content: fromStoredHtml(defaultValue),
 			onCreate: ({ editor }) => {
 				setTextValue(editor.getText().trim());
-				setValue(editor.getHTML().trim());
+				setValue(toStoredHtml(editor.getHTML().trim()));
 			},
 			onUpdate: ({ editor }) => {
 				setTextValue(editor.getText().trim());
-				setValue(editor.getHTML().trim());
+				setValue(toStoredHtml(editor.getHTML().trim()));
 			},
 		});
 

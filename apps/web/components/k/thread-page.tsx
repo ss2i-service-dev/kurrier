@@ -7,6 +7,7 @@ import {
 } from "@/lib/actions/mailbox";
 import { fetchThreadMailbox } from "@/lib/thread-mailbox";
 import { threadOrder } from "@/lib/actions/thread-order";
+import { kPinnedMap } from "@/lib/actions/k-pins";
 import { getWorkspacePublicId } from "@/lib/actions/clients";
 import ThreadClientsBar from "@/components/mailbox/default/thread-clients-bar";
 import KThreadItem from "@/components/k/thread-item";
@@ -30,12 +31,13 @@ export default async function KThreadPage({
 	}>;
 }) {
 	const { threadId, identityPublicId, mailboxSlug } = await params;
-	const [activeThread, identityMailboxes, sent, workspacePublicId, order0] = await Promise.all([
+	const [activeThread, identityMailboxes, sent, workspacePublicId, order0, pins] = await Promise.all([
 		fetchWebMailThreadDetail(threadId),
 		fetchIdentityMailboxList(),
 		fetchMailbox(identityPublicId, "sent").catch(() => null),
 		getWorkspacePublicId(),
 		threadOrder(),
+		kPinnedMap(),
 	]);
 	const messages: MessageEntity[] = activeThread?.messages ?? [];
 	// Dossier reel du fil (un fil ouvert depuis la vue Clients n'est pas dans le dossier de l'URL).
@@ -81,6 +83,7 @@ export default async function KThreadPage({
 					activeMailboxKind={String(activeMailbox.kind)}
 					markSmtp={!!mailboxSync}
 					hasUnread={messages.some((m) => !m.seen)}
+					pinned={!!pins[threadId]}
 				/>
 				<div className="k-scroll min-h-0 flex-1 overflow-y-auto" data-k-thread-scroll>
 					<div className="w-full px-5 pb-10 pt-6 md:px-8">

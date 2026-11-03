@@ -4,15 +4,22 @@
 // composants partages (editeur, fenetres...) d'adapter leur rendu a la nouvelle
 // interface sans rien changer a la classique (valeur par defaut : false).
 import React, { createContext, useContext } from "react";
+import { usePathname } from "next/navigation";
 import KToastFr from "@/components/k/toast-fr";
+import KNewMailNotifier from "@/components/k/new-mail-notifier";
 
 const KUiContext = createContext(false);
 
 export function KUiProvider({ nouvelle, children }: { nouvelle: boolean; children: React.ReactNode }) {
+	// ss2i : pages connectees (espace de travail) seulement.
+	const inApp = (usePathname() ?? "").includes("/dashboard");
 	return (
 		<KUiContext.Provider value={nouvelle}>
 			{/* Outlook : notifications traduites a l'affichage (components/k/toast-fr.tsx) */}
 			{nouvelle && <KToastFr />}
+			{/* Nouveaux messages : verification toutes les 20 s et liste actualisee
+			    (les deux interfaces) ; son et pastille sur l'onglet en Outlook. */}
+			{inApp && <KNewMailNotifier nouvelle={nouvelle} />}
 			{children}
 		</KUiContext.Provider>
 	);

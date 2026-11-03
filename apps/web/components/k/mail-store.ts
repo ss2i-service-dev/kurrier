@@ -24,10 +24,14 @@ import {
 	toggleStar,
 } from "@/lib/actions/mailbox";
 import { hideThreads, moveWithUndo } from "@/lib/pending-moves";
+import { setThreadPinned } from "@/lib/actions/k-pins";
+import { refreshUnreadBadge } from "@/components/k/new-mail-notifier";
 
 type State = {
 	read: Map<string, boolean>;
 	starred: Map<string, boolean>;
+	/** Epinglage (fil -> epingle ou non), applique avant la reponse du serveur. */
+	pinned: Map<string, boolean>;
 	/** Fil ouvert (ou en cours d'ouverture) : seule sa ligne et l'ancienne se redessinent. */
 	active: string | null;
 	/** Nouveau message en cours : il occupe le panneau de lecture. */
@@ -47,7 +51,7 @@ type State = {
 // Etat initial, identique cote serveur : c'est lui que React compare au HTML
 // pendant l'hydratation (sinon une ligne deja marquee active cote navigateur
 // ne correspond plus au rendu serveur : erreur d'hydratation).
-const INITIAL: State = { read: new Map(), starred: new Map(), active: null, composing: false, composeSlot: null, composeParked: false, countAdj: new Map() };
+const INITIAL: State = { read: new Map(), starred: new Map(), pinned: new Map(), active: null, composing: false, composeSlot: null, composeParked: false, countAdj: new Map() };
 let state: State = INITIAL;
 const listeners = new Set<() => void>();
 
@@ -94,6 +98,8 @@ export function scheduleRefresh(delay = 2500) {
 	refreshTimer = setTimeout(() => {
 		refreshTimer = null;
 		refresher?.();
+		// Pastille de l'onglet a jour apres lecture, archivage, suppression...
+		refreshUnreadBadge();
 	}, delay);
 }
 
@@ -114,6 +120,13 @@ export function settle(rows: { threadId: string; unreadCount: number; starred: b
 	if (read.size !== state.read.size || starred.size !== state.starred.size) {
 		set({ read, starred });
 	}
+}
+
+/** Epinglages confirmes par le serveur : les surcharges correspondantes tombent. */
+export function settlePins(serverPinned: Set<string>) {
+	if (!state.pinned.size) return;
+	const pinned = new Map([...state.pinned].filter(([id, v]) => serverPinned.has(id) !== v));
+	if (pinned.size !== state.pinned.size) set({ pinned });
 }
 
 async function run(
@@ -232,6 +245,30 @@ export const mailActions = {
 				adjustCount(mailboxId, -read);
 			},
 			() => markAsUnread(list, mailboxId, smtp, false),
+			"Action impossible",
+		);
+	},
+	/** Epingler / desepingler un fil : en tete de son dossier, pour soi seulement. */
+	pin(threadId: string, value: boolean) {
+		const id = String(threadId);
+		const before = state.pinned.get(id);
+		return run(
+			() => {
+				const pinned = new Map(state.pinned);
+				pinned.set(id, value);
+				set({ pinned });
+			},
+			() => {
+				const pinned = new Map(state.pinned);
+				if (before === undefined) pinned.delete(id);
+				else pinned.set(id, before);
+				set({ pinned });
+			},
+			async () => {
+				const res = await setThreadPinned(id, value);
+				if (!res?.success) throw new Error(res?.error || "Action impossible");
+				toast.success(value ? "Fil épinglé" : "Fil désépinglé", { position: "bottom-center", duration: 2000 });
+			},
 			"Action impossible",
 		);
 	},

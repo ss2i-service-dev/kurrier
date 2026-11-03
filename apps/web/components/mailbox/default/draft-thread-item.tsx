@@ -52,9 +52,12 @@ export default function DraftThreadItem({
 				? "forward"
 				: "compose";
 
+	// Pas de router.refresh() ici : lance dans la foulee, il annulait la navigation vers la
+	// liste (la requete RSC de router.push etait abandonnee) et l'editeur restait affiche
+	// apres « Discard ». La liste, page dynamique, est rechargee par la navigation ; les
+	// actions qui changent les compteurs (discardDraft) revalident cote serveur.
 	const leave = () => {
 		router.push(pathname.replace(/\/threads\/[^/]+\/?$/, ""));
-		router.refresh();
 	};
 
 	return (

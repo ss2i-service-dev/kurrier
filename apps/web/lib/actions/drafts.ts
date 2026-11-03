@@ -12,6 +12,7 @@ import {
 } from "@common";
 import { identities, type MessageEntity, mailboxes, messages } from "@db";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 import { cache } from "react";
 import { rlsClient } from "@/lib/actions/clients";
 import { getRedis } from "@/lib/actions/get-redis";
@@ -144,6 +145,8 @@ export async function discardDraft(
 	if (!ref) return { deleted: false as const };
 	const { smtpQueue } = await getRedis();
 	await smtpQueue.add(DRAFT_DELETE_JOB, ref, draftDeleteJobOptions());
+	// Compteur Drafts de la barre laterale et listes : le client recoit l'arbre a jour.
+	revalidatePath("/", "layout");
 	return { deleted: true as const };
 }
 

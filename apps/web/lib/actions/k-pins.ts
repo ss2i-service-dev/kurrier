@@ -10,6 +10,7 @@ import { db, mailboxThreads } from "@db";
 import { getWorkspaceId, rlsClient } from "@/lib/actions/clients";
 import { verifyAndDecode } from "@/lib/actions/auth";
 import { fetchMailboxThreadLabels } from "@/lib/actions/labels";
+import { kRealAttachmentsOf } from "@/lib/actions/k-threads";
 
 const MAX_PINS = 200;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -93,7 +94,7 @@ export async function setThreadPinned(threadId: string, pinned: boolean) {
 export async function fetchKPinnedThreads(identityPublicId: string, mailboxSlug: string) {
 	const pins = await kPinnedMap();
 	const ids = Object.keys(pins).filter((id) => UUID.test(id));
-	if (!ids.length) return { pinnedIds: [] as string[], mailboxThreads: [] as any[], labelsByThreadId: {} as Record<string, any[]> };
+	if (!ids.length) return { pinnedIds: [] as string[], mailboxThreads: [] as any[], labelsByThreadId: {} as Record<string, any[]>, realAttachments: [] as string[] };
 	const rls = await rlsClient();
 	const now = new Date();
 	const rows = await rls((tx) =>
@@ -112,6 +113,8 @@ export async function fetchKPinnedThreads(identityPublicId: string, mailboxSlug:
 			.limit(MAX_PINS),
 	);
 	const threads = rows.map((r) => r.thread);
-	const labelsByThreadId = threads.length ? await fetchMailboxThreadLabels(threads as any) : {};
-	return { pinnedIds: ids, mailboxThreads: threads, labelsByThreadId };
+	const [labelsByThreadId, realAttachments] = threads.length
+		? await Promise.all([fetchMailboxThreadLabels(threads as any), kRealAttachmentsOf(threads as any)])
+		: [{}, [] as string[]];
+	return { pinnedIds: ids, mailboxThreads: threads, labelsByThreadId, realAttachments };
 }

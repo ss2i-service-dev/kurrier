@@ -23,6 +23,7 @@ import { DraftSendBadge, isSendingDraft } from "@/components/mailbox/default/dra
 import KAvatar from "@/components/k/avatar";
 import KIconButton from "@/components/k/icon-button";
 import { correspondents, listDate } from "@/components/k/format";
+import { kHref } from "@/components/k/href";
 import { closeCompose, mailActions, setActiveThread, useMailStore } from "@/components/k/mail-store";
 
 type Props = {
@@ -93,7 +94,7 @@ export default function KThreadRow({
 		.trim();
 	const snoozed = item.snoozedUntil && new Date(item.snoozedUntil).getTime() > Date.now();
 
-	const threadUrl = `/w/${workspacePublicId}/dashboard/mail/${identityPublicId}/${activeMailbox.slug}/threads/${item.threadId}`;
+	const threadUrl = kHref(`/w/${workspacePublicId}/dashboard/mail/${identityPublicId}/${activeMailbox.slug}/threads/${item.threadId}`);
 
 	const toggleSelection = (shiftKey: boolean) => {
 		const id = item.threadId;

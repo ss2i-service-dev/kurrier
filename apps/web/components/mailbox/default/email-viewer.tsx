@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import type { MessageEntity } from "@db";
 import { Button } from "@mantine/core";
-import { Ellipsis } from "lucide-react";
+import { Ellipsis, Image as ImageIcon, ImageOff } from "lucide-react";
+import { adaptEmailToDark } from "@/components/k/dark-email";
 import { setRemoteImagesForContact } from "@/lib/actions/contact-images";
 import { toast } from "sonner";
 import { useK } from "@/components/k/ui-context";
@@ -121,10 +122,9 @@ div[style*="border-left"][style*="solid"] blockquote {
 
 // ss2i : nouvelle interface (prop adaptTheme). Le corps prend les couleurs du
 // theme (variables --k-* heritees a travers le shadow DOM) au lieu du fond
-// blanc impose. En sombre, un mail HTML (couleurs souvent fixees en dur) est
-// inverse a 90 % (le blanc devient le gris du panneau) et ses images sont
-// re-inversees exactement (invert(1) puis contrast(1.25)) pour garder leurs
-// couleurs. Sans adaptTheme, rien ne change.
+// blanc impose. En sombre, un mail HTML garde ses couleurs mais adaptees une a
+// une (components/k/dark-email.ts) ; plus de filtre invert sur tout le mail (il
+// teintait les images, logos et signatures). Sans adaptTheme, rien ne change.
 const THEME_CSS = `
 :host { color-scheme: light dark; }
 .email-root.k-theme {
@@ -138,21 +138,9 @@ const THEME_CSS = `
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 14.5px;
 }
-.email-root.k-theme.k-dark-html {
-  filter: invert(0.9) hue-rotate(180deg);
-  --text: #1b1a19;
-  --muted: #57534e;
-  --border: #e8e6e1;
-  --quote-bg: #f3f2ef;
-  --quote-bar: #d7d3cc;
-  --link: #2945bd;
-}
-.email-root.k-dark-html img,
-.email-root.k-dark-html video,
-.email-root.k-dark-html picture,
-.email-root.k-dark-html [style*="background-image"] {
-  filter: hue-rotate(180deg) invert(1) contrast(1.25);
-}
+/* Mode sombre d'un mail HTML : pas de filtre, les couleurs du mail sont
+   recalculees une a une (components/k/dark-email.ts), images intactes. */
+.email-root.k-theme.k-dark-html { color-scheme: dark; }
 `;
 
 export default function EmailViewer({
@@ -327,6 +315,7 @@ export default function EmailViewer({
 			setHideQuotes(false);
 			return;
 		}
+		if (root && adaptTheme && isDark && message.html?.trim()) adaptEmailToDark(root);
 		if (root) {
 			const links = root.querySelectorAll<HTMLAnchorElement>("a[href]");
 			links.forEach((a) => {
@@ -344,7 +333,18 @@ export default function EmailViewer({
 					: "mb-10 mt-5 overflow-x-hidden rounded-xl border border-neutral-200 bg-white text-neutral-900 px-6 py-5 dark:border-neutral-700"
 			}
 		>
-			{hasBlockedImages && (
+			{hasBlockedImages && adaptTheme && (
+				<KImagesNotice
+					blocked={!showRemoteImages}
+					always={alwaysForSender}
+					sender={senderEmail}
+					saving={savingPref}
+					onLoad={allowRemoteImagesForSender}
+					onStopAuto={blockRemoteImagesAgain}
+					onHide={() => setShowRemoteImages(false)}
+				/>
+			)}
+			{hasBlockedImages && !adaptTheme && (
 				<div className="mb-4 flex flex-wrap items-center gap-2 rounded-md bg-neutral-100 px-3 py-2 text-xs text-neutral-600">
 					{!showRemoteImages ? (
 						<>
@@ -385,6 +385,69 @@ export default function EmailViewer({
 				>
 					{hideQuotes ? k("Show previous messages", "Afficher les messages précédents") : k("Hide previous messages", "Masquer les messages précédents")}
 				</Button>
+			)}
+		</div>
+	);
+}
+
+// ss2i (Outlook) : images distantes, presentation discrete. Bloquees : un encart
+// avec le bouton pour les afficher. Deja chargees (automatiquement pour cet
+// expediteur, ou pour ce message) : une seule ligne grise avec un lien.
+function KImagesNotice({
+	blocked,
+	always,
+	sender,
+	saving,
+	onLoad,
+	onStopAuto,
+	onHide,
+}: {
+	blocked: boolean;
+	always: boolean;
+	sender: string;
+	saving: boolean;
+	onLoad: () => void;
+	onStopAuto: () => void;
+	onHide: () => void;
+}) {
+	const link =
+		"rounded-[4px] font-medium text-k-ink-2 underline decoration-k-line-strong underline-offset-2 transition-colors hover:text-k-accent hover:decoration-k-accent disabled:opacity-50";
+	if (blocked) {
+		return (
+			<div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-k border border-k-line bg-k-surface-2 px-3 py-2 text-[12.5px] text-k-ink-2">
+				<ImageOff size={15} className="shrink-0 text-k-ink-3" aria-hidden />
+				<span className="min-w-0 flex-1">Images masquées pour protéger votre confidentialité.</span>
+				<button
+					type="button"
+					onClick={onLoad}
+					disabled={saving}
+					title={`Les affiche aussi automatiquement dans les prochains messages de ${sender}`}
+					className="rounded-k-sm bg-k-accent px-2.5 py-1 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+				>
+					Afficher les images
+				</button>
+			</div>
+		);
+	}
+	return (
+		<div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11.5px] text-k-ink-3">
+			<ImageIcon size={13} className="shrink-0" aria-hidden />
+			{always ? (
+				<>
+					<span>Images toujours affichées pour {sender}</span>
+					<span aria-hidden>·</span>
+					<button type="button" onClick={onStopAuto} disabled={saving} className={link}>
+						Ne plus les afficher
+					</button>
+				</>
+			) : (
+				<>
+					<span>Images affichées pour ce message</span>
+					<span aria-hidden>·</span>
+					<button type="button" onClick={onHide} className={link}>
+						Masquer
+					</button>
+				</>
 			)}
 		</div>
 	);

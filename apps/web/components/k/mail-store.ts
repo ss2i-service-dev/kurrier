@@ -32,6 +32,8 @@ type State = {
 	starred: Map<string, boolean>;
 	/** Epinglage (fil -> epingle ou non), applique avant la reponse du serveur. */
 	pinned: Map<string, boolean>;
+	/** Fil en cours de fermeture : le panneau de lecture se masque sans attendre le routeur. */
+	closing: string | null;
 	/** Fil ouvert (ou en cours d'ouverture) : seule sa ligne et l'ancienne se redessinent. */
 	active: string | null;
 	/** Nouveau message en cours : il occupe le panneau de lecture. */
@@ -51,7 +53,7 @@ type State = {
 // Etat initial, identique cote serveur : c'est lui que React compare au HTML
 // pendant l'hydratation (sinon une ligne deja marquee active cote navigateur
 // ne correspond plus au rendu serveur : erreur d'hydratation).
-const INITIAL: State = { read: new Map(), starred: new Map(), pinned: new Map(), active: null, composing: false, composeSlot: null, composeParked: false, countAdj: new Map() };
+const INITIAL: State = { read: new Map(), starred: new Map(), pinned: new Map(), closing: null, active: null, composing: false, composeSlot: null, composeParked: false, countAdj: new Map() };
 let state: State = INITIAL;
 const listeners = new Set<() => void>();
 
@@ -80,6 +82,10 @@ export function setComposeParked(v: boolean) {
 }
 export function setComposeSlot(el: HTMLElement | null) {
 	if (state.composeSlot !== el) set({ composeSlot: el });
+}
+
+export function setClosingThread(threadId: string | null) {
+	if (state.closing !== threadId) set({ closing: threadId });
 }
 
 /** Fil actif : appele au clic (avant la reponse du serveur) et a chaque changement d'URL. */

@@ -11,6 +11,7 @@ import {getWorkspacePublicId} from "@/lib/actions/clients";
 import { isNouvelleInterface } from "@/lib/actions/interface-pref";
 import KThreadList from "@/components/k/thread-list";
 import { fetchKPinnedThreads } from "@/lib/actions/k-pins";
+import { kRealAttachmentsOf } from "@/lib/actions/k-threads";
 
 async function ClassicPage({
 	params,
@@ -80,7 +81,13 @@ async function NouvellePage({
 	const { identityPublicId, mailboxSlug } = await params;
 	const publicConfig = getPublicEnv();
 	const mailboxThreadPromise = fetchMailboxThreads(identityPublicId, String(mailboxSlug), Number(page)).then(
-		async (mailboxThreads) => ({ mailboxThreads, labelsByThreadId: await fetchMailboxThreadLabels(mailboxThreads) }),
+		async (mailboxThreads) => {
+			const [labelsByThreadId, realAttachments] = await Promise.all([
+				fetchMailboxThreadLabels(mailboxThreads),
+				kRealAttachmentsOf(mailboxThreads),
+			]);
+			return { mailboxThreads, labelsByThreadId, realAttachments };
+		},
 	);
 	const fetchMailboxPromise = fetchMailbox(identityPublicId, mailboxSlug);
 	const workspacePublicId = await getWorkspacePublicId();

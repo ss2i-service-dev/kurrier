@@ -3,14 +3,25 @@
 // defilement quand un fil s'ouvre a droite ; sur mobile une seule est visible.
 import React, { startTransition, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { registerRefresher, setActiveThread, setComposeSlot, useMailStore } from "@/components/k/mail-store";
+import { registerRefresher, setActiveThread, setClosingThread, setComposeSlot, useMailStore } from "@/components/k/mail-store";
 import { Inbox } from "lucide-react";
 
 export const isThreadPath = (p?: string | null) => /\/threads\/[^/]+/.test(p ?? "");
 
+// Chargement direct de l'adresse d'un fil (lien, F5, rechargement) : Next monte
+// alors la page « fil » non interceptee en fond. Des qu'on ouvre un autre fil
+// (route interceptee), le fond reste celui du premier fil et la moindre
+// actualisation (apres lu / non lu, archivage...) ne correspond plus : Next
+// recharge toute la page. On remet donc tout de suite l'etat habituel : la
+// liste en fond, puis le fil par-dessus, comme apres un clic dans la liste.
+let directLoadHandled = false;
+const DIRECT_THREAD = /^(\/(?:en|ko)\/w\/[^/]+\/dashboard\/mail\/[^/]+\/[^/]+)\/threads\/[^/]+\/?$/;
+
 export default function MailPanes({ list, reader }: { list: React.ReactNode; reader: React.ReactNode }) {
 	const pathname = usePathname();
-	const onThread = isThreadPath(pathname);
+	// Fermeture d'un fil : masque immediat, la navigation vers la liste suit.
+	const closing = useMailStore((s) => s.closing);
+	const onThread = isThreadPath(pathname) && !(closing && pathname?.includes(`/threads/${closing}`));
 	const composingRaw = useMailStore((s) => s.composing);
 	const parked = useMailStore((s) => s.composeParked);
 	// Envoi annulable en cours : le panneau revient au fil ou a l'ecran vide,
@@ -20,7 +31,26 @@ export default function MailPanes({ list, reader }: { list: React.ReactNode; rea
 	// Rafraichissement differe apres une salve d'actions optimistes, en transition
 	// (non bloquant). Et fin de « l'ouverture en cours » quand l'URL a change.
 	useEffect(() => registerRefresher(() => startTransition(() => router.refresh())), [router]);
-	useEffect(() => setActiveThread(pathname?.match(/\/threads\/([^/]+)/)?.[1] ?? null), [pathname]);
+	useEffect(() => {
+		setActiveThread(pathname?.match(/\/threads\/([^/]+)/)?.[1] ?? null);
+		setClosingThread(null);
+	}, [pathname]);
+
+	const reopen = React.useRef<{ list: string; target: string } | null>(null);
+	useEffect(() => {
+		if (directLoadHandled) return;
+		directLoadHandled = true;
+		const m = DIRECT_THREAD.exec(window.location.pathname);
+		if (!m || m[1].endsWith("/clients")) return;
+		reopen.current = { list: m[1], target: window.location.pathname + window.location.search };
+		router.replace(m[1], { scroll: false });
+	}, [router]);
+	useEffect(() => {
+		const r = reopen.current;
+		if (!r || pathname !== r.list) return;
+		reopen.current = null;
+		router.replace(r.target, { scroll: false });
+	}, [pathname, router]);
 	return (
 		<div className="flex min-w-0 flex-1 gap-2">
 			<section

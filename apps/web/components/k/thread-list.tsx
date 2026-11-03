@@ -32,7 +32,12 @@ type Thread = FetchMailboxThreadsResult[number];
 type PinnedData = Awaited<ReturnType<typeof fetchKPinnedThreads>>;
 
 type Props = {
-	mailboxThreadPromise: Promise<{ mailboxThreads: FetchMailboxThreadsResult; labelsByThreadId: FetchMailboxThreadLabelsResult }>;
+	mailboxThreadPromise: Promise<{
+		mailboxThreads: FetchMailboxThreadsResult;
+		labelsByThreadId: FetchMailboxThreadLabelsResult;
+		/** Fils avec une vraie piece jointe (hors images de signature). */
+		realAttachments?: string[];
+	}>;
 	pinnedPromise?: Promise<PinnedData>;
 	publicConfig: PublicConfig;
 	identityPublicId: string;
@@ -44,7 +49,7 @@ type Props = {
 	startPage?: number;
 };
 
-const NO_PINS: Promise<PinnedData> = Promise.resolve({ pinnedIds: [], mailboxThreads: [], labelsByThreadId: {} });
+const NO_PINS: Promise<PinnedData> = Promise.resolve({ pinnedIds: [], mailboxThreads: [], labelsByThreadId: {}, realAttachments: [] });
 const keyOf = (t: Thread) => `${t.threadId}:${t.mailboxId}`;
 // Ordre de la liste serveur : activite effective (sortie de report comprise).
 const activityOf = (t: Thread) => new Date((t as any).unsnoozedAt ?? t.lastActivityAt).getTime();
@@ -71,7 +76,7 @@ function ListBody({
 	fetchMailboxPromise,
 	startPage = 1,
 }: Props) {
-	const { labelsByThreadId: serverLabels, mailboxThreads: serverFirst } = use(mailboxThreadPromise);
+	const { labelsByThreadId: serverLabels, mailboxThreads: serverFirst, realAttachments: serverFiles } = use(mailboxThreadPromise);
 	const pinnedData = use(pinnedPromise);
 	const globalLabels = use(globalLabelsPromise);
 	const { mailboxSync, activeMailbox, count } = use(fetchMailboxPromise);
@@ -102,7 +107,23 @@ function ListBody({
 		return out;
 	}, [serverFirst, more.threads]);
 
-	const baseThreads = unreadMode ? unread.threads : allThreads;
+	// Trombone : seulement pour une vraie piece jointe (pas une image de signature).
+	const realFiles = React.useMemo(
+		() =>
+			new Set<string>([
+				...(serverFiles ?? []),
+				...more.files,
+				...unread.files,
+				...((pinnedData as any).realAttachments ?? []),
+			]),
+		[serverFiles, more.files, unread.files, pinnedData],
+	);
+	const withFiles = React.useCallback(
+		(list: FetchMailboxThreadsResult) =>
+			list.map((t) => (t.hasAttachments && !realFiles.has(String(t.threadId)) ? { ...t, hasAttachments: false } : t)),
+		[realFiles],
+	);
+	const baseThreads = withFiles(unreadMode ? unread.threads : allThreads);
 	const labelsByThreadId = React.useMemo(
 		() => ({ ...pinnedData.labelsByThreadId, ...more.labels, ...unread.labels, ...serverLabels }),
 		[pinnedData.labelsByThreadId, more.labels, unread.labels, serverLabels],
@@ -119,7 +140,7 @@ function ListBody({
 
 	const visible = baseThreads.filter((t) => !isHidden(String(t.mailboxId), String(t.threadId)));
 	const visibleKeys = new Set(visible.map(keyOf));
-	const fromPins = (pinnedData.mailboxThreads as Thread[]).filter(
+	const fromPins = withFiles(pinnedData.mailboxThreads as Thread[]).filter(
 		(t) => !visibleKeys.has(keyOf(t)) && !isHidden(String(t.mailboxId), String(t.threadId)),
 	);
 	const pinnedRows = [...fromPins, ...visible]
@@ -384,7 +405,13 @@ function useUnreadPages({
 				const kept = keep ? old.find((t) => String(t.threadId) === keep) : undefined;
 				if (kept && !fresh.some((p) => p.mailboxThreads.some((t) => String(t.threadId) === keep))) {
 					const all = [...fresh.flatMap((p) => p.mailboxThreads), kept].sort((a, b) => activityOf(b) - activityOf(a));
-					fresh = [{ mailboxThreads: all, labelsByThreadId: Object.assign({}, ...fresh.map((p) => p.labelsByThreadId)) }];
+					fresh = [
+						{
+							mailboxThreads: all,
+							labelsByThreadId: Object.assign({}, ...fresh.map((p) => p.labelsByThreadId)),
+							realAttachments: [...fresh.flatMap((p) => p.realAttachments), ...(kept.hasAttachments ? [String(kept.threadId)] : [])],
+						},
+					];
 				}
 				setPages(fresh);
 			})
@@ -413,7 +440,8 @@ function useUnreadPages({
 		() => Object.assign({}, ...pages.map((p) => p.labelsByThreadId)) as FetchMailboxThreadLabelsResult,
 		[pages],
 	);
-	return { threads, labels, loadNext, loading, error, hasMore: enabled && !ended };
+	const files = React.useMemo(() => pages.flatMap((p) => (p as any).realAttachments ?? []) as string[], [pages]);
+	return { threads, labels, files, loadNext, loading, error, hasMore: enabled && !ended };
 }
 
 type ThreadPage = Awaited<ReturnType<typeof fetchKThreadPage>>;
@@ -497,7 +525,8 @@ function useMoreThreads({
 		() => Object.assign({}, ...pages.map((p) => p.labelsByThreadId)) as FetchMailboxThreadLabelsResult,
 		[pages],
 	);
-	return { threads, labels, loadNext, loading, error, hasMore: !ended && firstPageLength >= PAGE_SIZE };
+	const files = React.useMemo(() => pages.flatMap((p) => (p as any).realAttachments ?? []) as string[], [pages]);
+	return { threads, labels, files, loadNext, loading, error, hasMore: !ended && firstPageLength >= PAGE_SIZE };
 }
 
 function LoadMoreSentinel({ onVisible, loading, error }: { onVisible: () => void; loading: boolean; error: boolean }) {

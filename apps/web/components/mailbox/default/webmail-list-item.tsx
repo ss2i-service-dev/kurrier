@@ -36,7 +36,7 @@ import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 import ThreadLabelHoverButtons from "@/components/dashboard/labels/thread-label-hover-buttons";
 import SnoozeMail from "@/components/mailbox/default/snooze-mail";
 import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
-import { DraftSendBadge } from "@/components/mailbox/default/draft-send-status";
+import { DraftSendBadge, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
 
 export default function WebmailListItem({
 	mailboxThreadItem,
@@ -256,6 +256,10 @@ export default function WebmailListItem({
 					// "grid-cols-[auto_auto_minmax(8rem,12rem)_minmax(10rem,2fr)_auto]",
 					"items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/50",
 					isRead ? "bg-muted/50" : "font-semibold",
+					// ss2i : envoi en attente, ligne de l'Outbox (teinte et filet), pas un brouillon.
+					isDrafts && isSendingDraft(mailboxThreadItem.draftSend)
+						? "!bg-sky-50 dark:!bg-sky-950/40 shadow-[inset_3px_0_0_0_rgb(2,132,199)]"
+						: "",
 					`pr-[${ACTIONS_W}]`,
 				].join(" ")}
 			>

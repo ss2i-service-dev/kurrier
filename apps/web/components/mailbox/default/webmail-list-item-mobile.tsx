@@ -27,7 +27,7 @@ type Props = {
 	labelsByThreadId: FetchMailboxThreadLabelsResult;
 };
 
-import { DraftSendBadge } from "@/components/mailbox/default/draft-send-status";
+import { DraftSendBadge, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
 export default function WebmailListItemMobile({
 	mailboxThreadItem,
 	activeMailbox,
@@ -135,6 +135,9 @@ export default function WebmailListItemMobile({
 				"grid-cols-[auto_1fr_auto] md:grid-cols-[auto_auto_minmax(16rem,1fr)_minmax(10rem,2fr)_auto]",
 				"items-start gap-3 px-3 py-3 transition-colors hover:bg-muted/50",
 				isRead ? "bg-muted/50" : "font-semibold",
+				activeMailbox.kind === "drafts" && isSendingDraft(mailboxThreadItem.draftSend)
+					? "!bg-sky-50 dark:!bg-sky-950/40 shadow-[inset_3px_0_0_0_rgb(2,132,199)]"
+					: "",
 				`md:pr-[${ACTIONS_W}px]`,
 			].join(" ")}
 			onClick={openThread}

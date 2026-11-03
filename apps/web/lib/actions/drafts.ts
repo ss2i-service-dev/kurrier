@@ -184,7 +184,14 @@ export const fetchDraftCounts = cache(async () => {
 		tx
 			.select({ mailboxId: messages.mailboxId, n: sql<number>`count(*)` })
 			.from(messages)
-			.where(and(inArray(messages.mailboxId, ids), eq(messages.draft, true)))
+			.where(
+				and(
+					inArray(messages.mailboxId, ids),
+					eq(messages.draft, true),
+					// ss2i : un envoi en attente (meta.draft.pendingSend) n'est plus un brouillon.
+					sql`coalesce(jsonb_typeof(${messages.metaData}->'draft'->'pendingSend'), 'null') = 'null'`,
+				),
+			)
 			.groupBy(messages.mailboxId),
 	);
 	for (const r of rows) counts.set(r.mailboxId, Number(r.n ?? 0));

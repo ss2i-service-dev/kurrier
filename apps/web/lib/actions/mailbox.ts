@@ -91,7 +91,8 @@ export const fetchMailbox = cache(
 				.limit(1)
 		);
 
-		if (!identity) throw new Error("Identity not found");
+		// ss2i : identite et dossier dans le message (journal serveur) pour retrouver la requete fautive.
+		if (!identity) throw new Error(`Identity not found: identity=${identityPublicId} slug=${mailboxSlug}`);
 
 		const [mailboxList, activeMailbox] = await Promise.all([
 			rls((tx) =>
@@ -115,7 +116,7 @@ export const fetchMailbox = cache(
 			).then((rows) => rows[0]),
 		]);
 
-		if (!activeMailbox) throw new Error("Mailbox not found");
+		if (!activeMailbox) throw new Error(`Mailbox not found: identity=${identityPublicId} slug=${mailboxSlug}`);
 
 		const [messagesCountRow, sync] = await Promise.all([
 			rls((tx) =>

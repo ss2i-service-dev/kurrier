@@ -12,7 +12,8 @@ import {
 } from "@db";
 import { generateSnippet, upsertMailboxThreadItem } from "@common";
 import { randomUUID } from "crypto";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql, TransactionRollbackError } from "drizzle-orm";
+import { lockOwnerThreads, mergeLinkedThreads } from "./thread-links";
 import { getRedis } from "../lib/get-redis";
 import {s3} from "../lib/create-s3-client";
 import {PutObjectCommand} from "@aws-sdk/client-s3";
@@ -153,10 +154,7 @@ function generateFileName(att: Attachment) {
 	return `${randomUUID()}.${ext}`;
 }
 
-export async function createOrInitializeThread(
-	parsed: ParsedMail & { ownerId: string, workspaceId: string },
-) {
-	const { ownerId, workspaceId } = parsed;
+export function parentCandidates(parsed: ParsedMail) {
 	const inReplyTo = parsed.inReplyTo?.trim() || null;
 	const refs = Array.isArray(parsed.references)
 		? parsed.references
@@ -166,8 +164,19 @@ export async function createOrInitializeThread(
 	const candidates = Array.from(
 		new Set([inReplyTo, ...refs].filter(Boolean).map((s) => String(s))),
 	);
+	return { inReplyTo, candidates };
+}
 
-	return db.transaction(async (tx) => {
+// ss2i fils : `outerTx` permet a parseAndStoreEmail de choisir le fil, d'inserer le message et
+// de regrouper les fils lies dans une meme transaction, sous le verrou du proprietaire.
+export async function createOrInitializeThread(
+	parsed: ParsedMail & { ownerId: string, workspaceId: string },
+	outerTx?: any,
+) {
+	const { ownerId, workspaceId } = parsed;
+	const { inReplyTo, candidates } = parentCandidates(parsed);
+
+	const run = async (tx: any) => {
 		let existingThread = null;
 
 		if (candidates.length > 0) {
@@ -189,7 +198,7 @@ export async function createOrInitializeThread(
 
 			if (parentMsgs.length) {
 				const chosen = inReplyTo
-					? parentMsgs.find((m) => m.messageId === inReplyTo)
+					? parentMsgs.find((m: any) => m.messageId === inReplyTo)
 					: parentMsgs[0];
 
 				if (chosen?.threadId) {
@@ -202,7 +211,7 @@ export async function createOrInitializeThread(
 			}
 		}
 
-		if (existingThread) return existingThread;
+		if (existingThread) return { ...existingThread, ss2iFoundParent: true };
 
 		const [newThread] = await tx
 			.insert(threads)
@@ -213,8 +222,10 @@ export async function createOrInitializeThread(
 			})
 			.returning();
 
-		return newThread;
-	});
+		return { ...newThread, ss2iFoundParent: false };
+	};
+
+	return outerTx ? run(outerTx) : db.transaction(run);
 }
 
 function getFromAddress(parsed: ParsedMail) {
@@ -259,6 +270,55 @@ function stripNul<T>(value: T): T {
 		return out as T;
 	}
 	return value;
+}
+
+/**
+ * ss2i fils : choix du fil, insertion du message, regroupement des fils lies
+ * (lib/thread-links.ts) et ligne mailbox_threads dans une transaction, sous le verrou du proprietaire. Un message deja
+ * present (meme dossier, meme Message-ID) annule tout et renvoie null : plus de fil vide cree
+ * pour rien.
+ */
+export async function storeMessageInThread(
+	parsed: ParsedMail,
+	decoratedParsed: Record<string, any>,
+	opts: { ownerId: string; workspaceId: string },
+): Promise<{ message: typeof messages.$inferSelect; threadId: string; merged: boolean } | null> {
+	const { ownerId, workspaceId } = opts;
+	try {
+		return await db.transaction(async (tx) => {
+			await lockOwnerThreads(tx, ownerId);
+			const thread = await createOrInitializeThread({ ...parsed, ownerId, workspaceId }, tx);
+			const messagePayload = stripNul(
+				MessageInsertSchema.parse({ ...decoratedParsed, threadId: thread.id }),
+			);
+			const [inserted] = await tx
+				.insert(messages)
+				.values(messagePayload as MessageCreate)
+				.onConflictDoNothing({
+					target: [messages.mailboxId, messages.messageId],
+				})
+				.returning();
+			if (!inserted) tx.rollback();
+			const linked = await mergeLinkedThreads(tx, {
+				ownerId,
+				messageId: inserted.messageId,
+				candidates: parentCandidates(parsed).candidates,
+				threadId: thread.id,
+				foundParent: thread.ss2iFoundParent,
+			});
+			// Ligne de liste ecrite sous le meme verrou : hors transaction, elle croisait une fusion
+			// concurrente du meme fil (verrou mortel vu en test parallele).
+			await upsertMailboxThreadItem(inserted.id, tx);
+			return {
+				message: { ...inserted, threadId: linked.threadId },
+				threadId: linked.threadId,
+				merged: linked.merged,
+			};
+		});
+	} catch (err) {
+		if (err instanceof TransactionRollbackError) return null;
+		throw err;
+	}
 }
 
 export async function parseAndStoreEmail(
@@ -311,13 +371,6 @@ export async function parseAndStoreEmail(
 		return null;
 	}
 
-	const thread = await createOrInitializeThread({
-		...parsed,
-		ownerId,
-		workspaceId,
-		// mailboxId,
-	});
-
 	// ss2i : la ligne `messages` recevait `created_at = now()` (defaut de la colonne), c'est-a-dire
 	// l'heure d'ingestion, alors que l'affichage du lecteur, la date du fil (`threads.last_message_date`)
 	// et le tri de la recherche se fondent sur `createdAt`. Un rattrapage de plusieurs annees de
@@ -344,7 +397,6 @@ export async function parseAndStoreEmail(
 		createdAt: messageDate,
 		mailboxId,
 		workspaceId,
-		threadId: thread.id,
 		ownerId,
 		headersJson: Object.fromEntries(parsed.headers as Map<string, any>),
 		hasAttachments: (parsed.attachments?.length ?? 0) > 0,
@@ -377,16 +429,22 @@ export async function parseAndStoreEmail(
 		(decoratedParsed as any).flagged = opts.flagged;
 	}
 
-	const messagePayload = stripNul(MessageInsertSchema.parse(decoratedParsed));
-	const [message] = await db
-		.insert(messages)
-		.values(messagePayload as MessageCreate)
-		.onConflictDoNothing({
-			target: [messages.mailboxId, messages.messageId],
-		})
-		.returning();
-
-	if (!message) return null;
+	const placed = await storeMessageInThread(parsed, decoratedParsed, { ownerId, workspaceId });
+	if (!placed) return null;
+	const message = placed.message;
+	const thread = { id: placed.threadId };
+	if (placed.merged) {
+		try {
+			const { searchIngestQueue } = await getRedis();
+			await searchIngestQueue.add(
+				"refresh-thread",
+				{ threadId: thread.id },
+				{ jobId: `ss2i-refresh-thread-${thread.id}`, delay: 5_000, removeOnComplete: true, removeOnFail: true },
+			);
+		} catch (err: any) {
+			console.error("[parseAndStoreEmail] refresh-thread enqueue failed:", err?.message ?? err);
+		}
+	}
 	await db
 		.update(workspaces)
 		.set({
@@ -405,7 +463,6 @@ export async function parseAndStoreEmail(
 		fallbackOwnerId: ownerId,
 	});
 	const contactId = contactRes?.contactIdForMessage ?? null;
-	await upsertMailboxThreadItem(message.id);
 
 	const msgDate = message.createdAt ?? new Date();
 	const [t] = await db

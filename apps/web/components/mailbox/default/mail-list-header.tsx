@@ -164,6 +164,7 @@ function MailListHeader({
 	const applyToSelection = (
 		run: (ids: string[], mailboxId: string) => Promise<unknown>,
 		done: (n: number) => string,
+		archive = false,
 	) => {
 		const ids = Array.from(state?.selectedThreadIds ?? []).map(String);
 		const mailboxId = String(mailboxIdRef.current);
@@ -174,6 +175,7 @@ function MailListHeader({
 			threadIds: ids,
 			message: done(ids.length),
 			run: () => run(ids, mailboxId),
+			archive,
 		});
 	};
 	const plural = (n: number) => (n > 1 ? `${n} conversations` : "Conversation");
@@ -193,6 +195,7 @@ function MailListHeader({
 		applyToSelection(
 			(ids, mailboxId) => archiveThread(ids, mailboxId, !!mailboxSync, true),
 			(n) => `${plural(n)} archived`,
+			true,
 		);
 
 	// ss2i : page Spam. Presélection des fils probablement legitimes (expediteur

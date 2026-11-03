@@ -35,6 +35,8 @@ type WebListProps = {
     // ss2i : « Select all » au-dela de la page (recherche seulement pour l'instant).
     selectAllScope?: SelectAllScope;
     totalThreads?: number;
+    // ss2i : vue qui montre aussi les fils archives (dossier client) : archiver ne les en retire pas.
+    keepArchived?: boolean;
 };
 
 export default function WebmailListLabelSearch({
@@ -50,11 +52,12 @@ export default function WebmailListLabelSearch({
                                         mailboxById,
                                         selectAllScope,
                                         totalThreads,
+                                        keepArchived,
                                     }: WebListProps) {
     const mailboxOf = (mailboxId: string) => mailboxById?.[mailboxId] ?? activeMailbox;
     // ss2i : comme webmail-list, les fils en cours de depart (corbeille, archive...)
     // disparaissent des le clic. Avant, ils restaient affiches jusqu'au rechargement.
-    const isHidden = useHiddenThreads();
+    const isHidden = useHiddenThreads({ keepArchived });
     const mailboxThreads = serverThreads.filter(
         (t) => !isHidden(String(t.mailboxId), String(t.threadId)),
     );

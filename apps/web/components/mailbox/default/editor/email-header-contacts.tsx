@@ -1,5 +1,6 @@
 "use client";
 import React, { useEffect, useRef, useState } from "react";
+import { IconGripVertical, IconX } from "@tabler/icons-react";
 import {
 	ComboboxItem,
 	TagsInput,
@@ -10,6 +11,7 @@ import {
 } from "@mantine/core";
 import { useRecipientsDnD } from "@/components/mailbox/default/editor/recipients-dnd";
 import {
+	addRecipients,
 	RECIPIENT_DRAG_TYPE,
 	RECIPIENT_FIELDS,
 	type RecipientField,
@@ -31,7 +33,6 @@ export default function EmailHeaderContacts({
 	const dnd = useRecipientsDnD();
 	const [value, setValue] = useState<string[]>(defaultValues ?? []);
 	const valueRef = useRef(value);
-	const wrapRef = useRef<HTMLDivElement>(null);
 	// ss2i : menu contextuel d'une pastille (alternative au glisser-deposer).
 	const [menu, setMenu] = useState<{ x: number; y: number; email: string } | null>(null);
 	const [searchValue, setSearchValue] = useState("");
@@ -40,29 +41,33 @@ export default function EmailHeaderContacts({
 	const update = (v: string[]) => {
 		valueRef.current = v;
 		setValue(v);
+		onChange?.(v);
 	};
 
 	// Enregistrement aupres du fournisseur de glisser-deposer (To / Cc / Bcc).
 	useEffect(() => {
 		if (!dnd) return;
-		return dnd.register(name, { get: () => valueRef.current, set: update });
+		return dnd.register(name, {
+			get: () => valueRef.current,
+			set: (v) => {
+				valueRef.current = v;
+				setValue(v);
+			},
+		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [dnd, name]);
 
-	// Pastilles Mantine (classe statique `mantine-TagsInput-pill`, Mantine 8.3) rendues
-	// glissables ; React ne les connait pas, on repose l'attribut apres chaque rendu.
-	const PILL = ".mantine-TagsInput-pill";
-	useEffect(() => {
-		wrapRef.current?.querySelectorAll<HTMLElement>(PILL).forEach((p) => {
-			p.draggable = !!dnd;
-		});
-	});
-
-	const pillIndex = (target: EventTarget | null) => {
-		const pill = (target as HTMLElement | null)?.closest?.(PILL) as HTMLElement | null;
-		if (!pill || !wrapRef.current) return -1;
-		return Array.from(wrapRef.current.querySelectorAll(PILL)).indexOf(pill);
+	// ss2i : les pastilles sont les notres, hors du TagsInput. Celles de Mantine vivaient
+	// dans le PillsInput, dont le mousedown fait preventDefault (pour garder le focus) :
+	// le navigateur ne demarrait jamais de glisser, et un clic ouvrait les suggestions.
+	// Le TagsInput ne sert plus qu'a saisir une nouvelle adresse (valeur toujours vide) ;
+	// le champ cache lu par le formulaire est le notre, meme format (virgules).
+	const add = (emails: string[]) => {
+		let next = addRecipients(valueRef.current, emails.map((e) => e.trim()).filter(Boolean));
+		if (maxTags) next = next.slice(0, maxTags);
+		if (next !== valueRef.current) update(next);
 	};
+	const remove = (email: string) => update(valueRef.current.filter((e) => e !== email));
 
 	// ss2i : suggestions classees par usage reel cote serveur (recence, frequence,
 	// association avec les adresses deja saisies dans les trois champs) ; le texte tape
@@ -98,39 +103,68 @@ export default function EmailHeaderContacts({
 	const filter: OptionsFilter = ({ options }) => options;
 
 	return (
-		<div
-			ref={wrapRef}
-			onDragStart={(e) => {
-				const email = value[pillIndex(e.target)];
-				if (!dnd || !email) return;
-				e.dataTransfer.setData(RECIPIENT_DRAG_TYPE, JSON.stringify({ email, from: name }));
-				e.dataTransfer.effectAllowed = "move";
-			}}
-			onContextMenu={(e) => {
-				const email = value[pillIndex(e.target)];
-				if (!dnd || !email) return;
-				e.preventDefault();
-				setMenu({ x: e.clientX, y: e.clientY, email });
-			}}
-		>
+		<div className="flex flex-wrap items-center gap-1 w-full min-h-[28px]">
+			<input type="hidden" name={name} value={value.join(",")} />
+			{value.map((email) => (
+				<span
+					key={email}
+					draggable={!!dnd}
+					onDragStart={(e) => {
+						e.dataTransfer.setData(RECIPIENT_DRAG_TYPE, JSON.stringify({ email, from: name }));
+						e.dataTransfer.effectAllowed = "move";
+						// Differe : modifier le DOM pendant dragstart peut annuler le glisser (Chrome).
+						setTimeout(() => dnd?.setDragging(name), 0);
+					}}
+					onDragEnd={() => dnd?.setDragging(null)}
+					onContextMenu={(e) => {
+						if (!dnd) return;
+						e.preventDefault();
+						setMenu({ x: e.clientX, y: e.clientY, email });
+					}}
+					title={dnd ? "Drag to To, Cc or Bcc (right-click: Move to)" : email}
+					className="group inline-flex items-center gap-0.5 rounded-full border border-border bg-muted pl-0.5 pr-1 py-0.5 text-[13px] leading-5 select-none"
+				>
+					{dnd && (
+						<IconGripVertical
+							size={14}
+							aria-hidden
+							className="cursor-grab active:cursor-grabbing text-muted-foreground group-hover:text-foreground"
+						/>
+					)}
+					<span className="cursor-grab active:cursor-grabbing">{email}</span>
+					<button
+						type="button"
+						aria-label={`Remove ${email}`}
+						title="Remove"
+						onClick={() => remove(email)}
+						className="ml-0.5 rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+					>
+						<IconX size={12} />
+					</button>
+				</span>
+			))}
 			<FocusTrap active={true}>
 				<TagsInput
-					value={value}
+					value={[]}
 					searchValue={searchValue}
 					onSearchChange={searchContacts}
 					onFocus={() => void loadSuggestions(searchValue)}
+					onKeyDown={(e) => {
+						// Retour arriere dans un champ vide : retire la derniere adresse, comme avant.
+						if (e.key === "Backspace" && !searchValue && valueRef.current.length) {
+							remove(valueRef.current[valueRef.current.length - 1]);
+						}
+					}}
 					data={options}
 					onChange={(v) => {
-						update(v);
-						onChange?.(v);
+						add(v);
+						setSearchValue("");
 					}}
 					renderOption={renderOption}
 					filter={filter}
-					maxTags={maxTags}
-					name={name}
 					size="sm"
 					variant="unstyled"
-					className="min-h-[28px] text-sm w-96"
+					className="min-h-[28px] text-sm flex-1 min-w-[14rem]"
 					comboboxProps={{
 						dropdownPadding: 0,
 						withinPortal: false,

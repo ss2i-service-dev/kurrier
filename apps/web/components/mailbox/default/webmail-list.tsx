@@ -18,7 +18,8 @@ import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-ite
 import { usePathname } from "next/navigation";
 import {use} from "react";
 import { useHiddenThreads } from "@/lib/pending-moves";
-import { anySendTracked, useSendRefresh } from "@/components/mailbox/default/draft-send-status";
+import { anySendTracked, isSendingDraft, useSendRefresh } from "@/components/mailbox/default/draft-send-status";
+import { IconSend } from "@tabler/icons-react";
 
 type WebListProps = {
 	mailboxThreadPromise: Promise<{ mailboxThreads: FetchMailboxThreadsResult, labelsByThreadId: FetchMailboxThreadLabelsResult }>;
@@ -54,6 +55,40 @@ export default function WebmailList({
 		(t) => !isHidden(String(t.mailboxId), String(t.threadId)),
 	);
 
+	// ss2i : dans Drafts, les envois en attente (Undo encore possible) forment une Outbox
+	// en tete, a part des brouillons : on ne doit pas les prendre pour des brouillons.
+	const isDraftsBox = activeMailbox.kind === "drafts";
+	const sending = isDraftsBox ? mailboxThreads.filter((t) => isSendingDraft(t.draftSend)) : [];
+	const drafts = isDraftsBox ? mailboxThreads.filter((t) => !isSendingDraft(t.draftSend)) : mailboxThreads;
+
+	const renderItem = (mailboxThreadItem: (typeof mailboxThreads)[number]) =>
+								isMobile ? (
+									<WebmailListItemMobile
+										key={
+											mailboxThreadItem.threadId + mailboxThreadItem.mailboxId
+										}
+										mailboxThreadItem={mailboxThreadItem}
+										activeMailbox={activeMailbox}
+										identityPublicId={identityPublicId}
+										mailboxSync={mailboxSync ?? undefined}
+										labelsByThreadId={labelsByThreadId}
+									/>
+								) : (
+									<WebmailListItem
+										key={
+											mailboxThreadItem.threadId + mailboxThreadItem.mailboxId
+										}
+										mailboxThreadItem={mailboxThreadItem}
+										workspacePublicId={workspacePublicId}
+										orderedThreadIds={mailboxThreads.map((t) => String(t.threadId))}
+										activeMailbox={activeMailbox}
+										identityPublicId={identityPublicId}
+										mailboxSync={mailboxSync ?? undefined}
+										globalLabels={globalLabels}
+										labelsByThreadId={labelsByThreadId}
+									/>
+								);
+
 	// ss2i : tant qu'un brouillon de la liste est en cours d'envoi, la liste est actualisee.
 	useSendRefresh(anySendTracked(mailboxThreads.map((t) => t.draftSend)));
 
@@ -86,33 +121,20 @@ export default function WebmailList({
 						/>
 
 						<ul role="list" className={`divide-y rounded-4xl`}>
-							{mailboxThreads.map((mailboxThreadItem) =>
-								isMobile ? (
-									<WebmailListItemMobile
-										key={
-											mailboxThreadItem.threadId + mailboxThreadItem.mailboxId
-										}
-										mailboxThreadItem={mailboxThreadItem}
-										activeMailbox={activeMailbox}
-										identityPublicId={identityPublicId}
-										mailboxSync={mailboxSync ?? undefined}
-										labelsByThreadId={labelsByThreadId}
-									/>
-								) : (
-									<WebmailListItem
-										key={
-											mailboxThreadItem.threadId + mailboxThreadItem.mailboxId
-										}
-										mailboxThreadItem={mailboxThreadItem}
-										workspacePublicId={workspacePublicId}
-										orderedThreadIds={mailboxThreads.map((t) => String(t.threadId))}
-										activeMailbox={activeMailbox}
-										identityPublicId={identityPublicId}
-										mailboxSync={mailboxSync ?? undefined}
-										globalLabels={globalLabels}
-										labelsByThreadId={labelsByThreadId}
-									/>
-								),
+							{sending.length > 0 ? (
+								<>
+									<li className="flex items-center gap-2 bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-900 dark:bg-sky-900/50 dark:text-sky-100">
+										<IconSend size={14} aria-hidden />
+										Outbox ({sending.length}) — being sent, Undo still possible. These are not drafts anymore.
+									</li>
+									{sending.map(renderItem)}
+									<li className="px-3 py-1.5 text-xs font-semibold text-muted-foreground">
+										Drafts ({drafts.length})
+									</li>
+									{drafts.map(renderItem)}
+								</>
+							) : (
+								mailboxThreads.map(renderItem)
 							)}
 						</ul>
 					</div>

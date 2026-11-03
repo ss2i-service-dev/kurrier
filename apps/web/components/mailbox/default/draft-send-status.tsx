@@ -2,6 +2,7 @@
 import type { DraftSendState } from "@common";
 import { useRouter } from "next/navigation";
 import React, { useEffect, useState } from "react";
+import { IconSend } from "@tabler/icons-react";
 import { cancelPendingSend, sendPendingNow } from "@/lib/actions/mailbox";
 
 // ss2i : etat d'envoi d'un brouillon (marque pendingSend / sendError de meta.draft).
@@ -103,6 +104,11 @@ export function SendActions({
 	);
 }
 
+// ss2i : un brouillon dont l'envoi a ete demande n'est plus un brouillon : il part (ou est
+// parti, etat inconnu). La liste Drafts le range a part (Outbox), le compteur l'ignore.
+export const isSendingDraft = (state: DraftSendState | null | undefined) =>
+	!!state?.pendingSend;
+
 // Badge d'une ligne de la liste Drafts.
 export function DraftSendBadge({ state }: { state: DraftSendState | null | undefined }) {
 	const pending = state?.pendingSend ?? null;
@@ -111,7 +117,8 @@ export function DraftSendBadge({ state }: { state: DraftSendState | null | undef
 		const phase = sendPhaseOf(pending.sendAt, now);
 		return (
 			<span className="inline-flex shrink-0 items-center gap-1.5">
-				<span className="whitespace-nowrap rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800">
+				<span className="inline-flex items-center gap-1 whitespace-nowrap rounded bg-sky-600 px-1.5 py-0.5 text-xs font-semibold text-white">
+					<IconSend size={12} aria-hidden />
 					{sendLabel(pending.sendAt, now)}
 				</span>
 				{phase !== "unknown" && <SendActions jobId={pending.jobId} size="xs" />}

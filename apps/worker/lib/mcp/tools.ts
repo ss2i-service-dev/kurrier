@@ -1100,7 +1100,9 @@ export const TOOLS: ToolDefinition[] = [
 		handler: async (ctx, args) => {
 			const att = await getOwnedAttachment(ctx.userId, str(args.attachment_id, "attachment_id")!);
 			const { S3_BUCKET } = getServerEnv();
-			const bucket = att.bucketId || S3_BUCKET;
+			// Toujours S3_BUCKET, comme le web (mailbox.ts) et l'envoi (send-mail.ts) : bucket_id
+			// vaut "attachments" (reste Supabase) sur les PJ entrantes, bucket inexistant (OI 10178).
+			const bucket = S3_BUCKET;
 			const contentType = String(att.contentType ?? "application/octet-stream").toLowerCase();
 			const textLike =
 				/^text\//.test(contentType) ||

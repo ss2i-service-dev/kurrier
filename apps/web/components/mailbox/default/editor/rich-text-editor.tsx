@@ -163,11 +163,12 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 						quoteScope={quoteScope}
 						onQuoteScopeChange={changeQuoteScope}
 					/>
-					{state.rfcStyle ? quoteEditor : null}
+					{/* Style RFC : citation d'une reponse au-dessus ; un transfert garde le texte en tete et le message transfere dessous, comme a l'envoi. */}
+					{state.rfcStyle && !isForward ? quoteEditor : null}
 					<FocusTrap active={focusOnSubject}>
 						<RichTextEditor.Content className="prose min-h-96 text-sm p-2 leading-5" />
 					</FocusTrap>
-					{!state.rfcStyle ? quoteEditor : null}
+					{!state.rfcStyle || isForward ? quoteEditor : null}
 					<EditorFooter />
 				</RichTextEditor>
 

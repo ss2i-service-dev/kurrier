@@ -15,7 +15,7 @@ import WebmailListItem from "@/components/mailbox/default/webmail-list-item";
 import { DynamicContextProvider } from "@/hooks/use-dynamic-context";
 import { useMediaQuery } from "@mantine/hooks";
 import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-item-mobile";
-import { useParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 type WebListProps = {
     mailboxThreads: FetchMailboxThreadsResult;
@@ -46,10 +46,13 @@ export default function WebmailListLabelSearch({
                                     }: WebListProps) {
     const mailboxOf = (mailboxId: string) => mailboxById?.[mailboxId] ?? activeMailbox;
     const isMobile = useMediaQuery("(max-width: 768px)");
-    const params = useParams();
+    // ss2i : chemin reel de l'URL, pas useParams : apres une recherche lancee depuis un fil ouvert,
+    // le slot @thread conserve garde l'ancien threadId et la liste des resultats restait masquee.
+    const pathname = usePathname();
+    const onThread = /\/threads\/[^/]+/.test(pathname ?? "");
 
     return (
-        <div className={params?.threadId ? "hidden" : ""}>
+        <div className={onThread ? "hidden" : ""}>
             <DynamicContextProvider
                 initialState={{
                     selectedThreadIds: new Set(),

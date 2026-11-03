@@ -131,6 +131,9 @@ export default function MailboxSearch({
 					placeholder="Search mail…"
 					value={query}
 					onValueChange={setQuery}
+					// ss2i : requete precedente selectionnee a l'ouverture : une nouvelle frappe la remplace
+					// au lieu de s'y ajouter, les fleches permettent encore de l'affiner.
+					onFocus={(e) => e.currentTarget.select()}
 					onKeyDown={(e) => {
 						if (e.key !== "Enter") return;
 						e.preventDefault();

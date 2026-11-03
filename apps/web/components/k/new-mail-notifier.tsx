@@ -10,7 +10,28 @@
 // (clic, touche) : le contexte audio est debloque a ce moment-la.
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { kInboxPulse } from "@/lib/actions/k-pulse";
+
+// Apres un deploiement, un onglet reste sur l'ancienne version : ses actions
+// serveur n'existent plus (« Failed to find Server Action ») et la premiere
+// action de l'utilisateur (lu, non lu...) recharge la page d'un coup. Le pouls
+// le detecte avant (deux echecs d'appel de suite) et propose de recharger, sans
+// jamais le faire de force (un message peut etre en cours d'ecriture).
+let staleShown = false;
+function announceNewVersion(nouvelle: boolean) {
+	if (staleShown) return;
+	staleShown = true;
+	toast(nouvelle ? "Nouvelle version de Kurrier disponible" : "A new version of Kurrier is available", {
+		id: "k-new-version",
+		description: nouvelle
+			? "Rechargez la page pour en profiter (vos brouillons sont enregistrés)."
+			: "Reload the page to get it (your drafts are saved).",
+		duration: Infinity,
+		position: "bottom-center",
+		action: { label: nouvelle ? "Recharger" : "Reload", onClick: () => window.location.reload() },
+	});
+}
 
 const POLL_MS = 20_000;
 const SOUND_KEY = "k-new-mail-sound";
@@ -217,12 +238,21 @@ export default function KNewMailNotifier({ nouvelle }: { nouvelle: boolean }) {
 
 		let stopped = false;
 		let inFlight = false;
+		let failures = 0;
 		let timer: ReturnType<typeof setTimeout> | null = null;
 		const tick = async () => {
 			if (inFlight) return;
 			inFlight = true;
 			if (timer) clearTimeout(timer);
-			const res = await kInboxPulse().catch(() => null);
+			let res: Awaited<ReturnType<typeof kInboxPulse>> = null;
+			try {
+				res = await kInboxPulse();
+				failures = 0;
+			} catch {
+				// L'action elle-meme est introuvable ou injoignable (le serveur, lui,
+				// renvoie null en cas d'erreur interne) : nouvelle version probable.
+				if (navigator.onLine && ++failures >= 2) announceNewVersion(badgeRef.current);
+			}
 			inFlight = false;
 			if (stopped) return;
 			if (res) {

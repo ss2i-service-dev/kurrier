@@ -66,8 +66,27 @@ function MailListHeader({
 
 	const selectedSize = state?.selectedThreadIds?.size ?? 0;
 	const hasSelected = selectedSize > 0;
+	// ss2i : « tout coche » = chaque fil affiche est dans la selection. Avant, on comparait
+	// seulement les tailles : apres un rechargement de la liste (fils supprimes remplaces
+	// par la page suivante), une selection d'anciens fils de meme taille cochait la case
+	// sans qu'aucune ligne ne le soit, et un clic ne faisait plus que « tout decocher ».
+	const visibleIds = mailboxThreads.map((t) => t.threadId);
 	const isChecked =
-		selectedSize === mailboxThreads.length && mailboxThreads.length > 0;
+		visibleIds.length > 0 &&
+		visibleIds.every((id) => state?.selectedThreadIds?.has(id));
+
+	// ss2i : la selection ne garde que des fils affiches, sinon une action (corbeille,
+	// archive) partirait sur des fils que l'on ne voit plus.
+	const visibleKey = visibleIds.join(",");
+	useEffect(() => {
+		const visible = new Set(visibleKey ? visibleKey.split(",") : []);
+		setState((prev) => {
+			const sel = prev?.selectedThreadIds;
+			if (!sel?.size) return prev;
+			const kept = new Set([...sel].filter((id) => visible.has(id)));
+			return kept.size === sel.size ? prev : { ...prev, selectedThreadIds: kept };
+		});
+	}, [visibleKey, setState]);
 
 	const [reloading, setReloading] = useState(false);
 	const reload = async () => {
@@ -193,7 +212,7 @@ function MailListHeader({
 						type="checkbox"
 						onChange={(e) => {
 							const newSet = new Set(state?.selectedThreadIds ?? []);
-							if (e.target.checked) {
+							if (!isChecked) {
 								mailboxThreads.forEach((t) => newSet.add(t.threadId));
 							} else {
 								mailboxThreads.forEach((t) => newSet.delete(t.threadId));

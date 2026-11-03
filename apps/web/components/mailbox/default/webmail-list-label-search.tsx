@@ -16,6 +16,7 @@ import { DynamicContextProvider } from "@/hooks/use-dynamic-context";
 import { useMediaQuery } from "@mantine/hooks";
 import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-item-mobile";
 import { usePathname } from "next/navigation";
+import { useHiddenThreads } from "@/lib/pending-moves";
 
 type WebListProps = {
     mailboxThreads: FetchMailboxThreadsResult;
@@ -33,7 +34,7 @@ type WebListProps = {
 };
 
 export default function WebmailListLabelSearch({
-                                        mailboxThreads,
+                                        mailboxThreads: serverThreads,
                                         identityPublicId,
                                         mailboxSync,
                                         activeMailbox,
@@ -45,6 +46,12 @@ export default function WebmailListLabelSearch({
                                         mailboxById,
                                     }: WebListProps) {
     const mailboxOf = (mailboxId: string) => mailboxById?.[mailboxId] ?? activeMailbox;
+    // ss2i : comme webmail-list, les fils en cours de depart (corbeille, archive...)
+    // disparaissent des le clic. Avant, ils restaient affiches jusqu'au rechargement.
+    const isHidden = useHiddenThreads();
+    const mailboxThreads = serverThreads.filter(
+        (t) => !isHidden(String(t.mailboxId), String(t.threadId)),
+    );
     const isMobile = useMediaQuery("(max-width: 768px)");
     // ss2i : chemin reel de l'URL, pas useParams : apres une recherche lancee depuis un fil ouvert,
     // le slot @thread conserve garde l'ancien threadId et la liste des resultats restait masquee.

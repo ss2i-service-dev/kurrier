@@ -7,15 +7,19 @@ import SectionCard from "@/components/mailbox/settings/settings-section-card";
 import { setUnreadPanelEnabled } from "@/lib/actions/unread-panel";
 import SettingsListPreview from "@/components/mailbox/settings/settings-list-preview";
 import type { ListPreviewMode } from "@/lib/actions/list-preview";
+import SettingsThreadOrder from "@/components/mailbox/settings/settings-thread-order";
+import type { ThreadOrder } from "@/lib/actions/thread-order";
 
 // ss2i : interrupteur du panneau lateral des fils non lus (option par
 // utilisateur, memorisee cote serveur).
 function SettingsUnreadPanel({
 	enabled: initial,
 	listPreview,
+	threadOrder,
 }: {
 	enabled: boolean;
 	listPreview: ListPreviewMode;
+	threadOrder: ThreadOrder;
 }) {
 	const [enabled, setEnabled] = useState(initial);
 	const [pending, startTransition] = useTransition();
@@ -38,6 +42,7 @@ function SettingsUnreadPanel({
 	return (
 		<SectionCard title="Reading" description="How conversations and the message list are displayed.">
 			<SettingsListPreview mode={listPreview} />
+			<SettingsThreadOrder order={threadOrder} />
 			<Switch
 				label="Unread messages panel"
 				description="Show a side panel listing the unread conversations of the current folder next to the open conversation (wide screens only)."

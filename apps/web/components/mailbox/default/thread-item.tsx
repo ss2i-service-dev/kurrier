@@ -23,6 +23,7 @@ export default async function ThreadItem({
 	message,
 	threadIndex,
 	numberOfMessages,
+	showSubject,
 	threadId,
 	activeMailboxId,
 	markSmtp,
@@ -32,6 +33,10 @@ export default async function ThreadItem({
 	message: MessageEntity;
 	threadIndex: number;
 	numberOfMessages: number;
+	// ss2i : objet du fil au-dessus du premier message affiche (ordre du fil
+	// au choix de l'utilisateur, thread-order.ts). threadIndex reste l'index
+	// chronologique : les boutons Reply suivent le message le plus recent.
+	showSubject?: boolean;
 	threadId: string;
 	activeMailboxId: string;
 	markSmtp: boolean;
@@ -88,6 +93,7 @@ export default async function ThreadItem({
 						<EmailRenderer
 							threadIndex={threadIndex}
 							numberOfMessages={numberOfMessages}
+							showSubject={showSubject}
 							message={message}
 							attachments={attachments}
 							inlineShownIds={inlineShownIds}

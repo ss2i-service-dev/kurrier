@@ -90,6 +90,7 @@ export function scrollToEditor(
 function EmailRenderer({
 	threadIndex,
 	numberOfMessages,
+	showSubject,
 	message,
 	attachments,
 	inlineShownIds = [],
@@ -103,6 +104,7 @@ function EmailRenderer({
 }: {
 	threadIndex: number;
 	numberOfMessages: number;
+	showSubject?: boolean;
 	message: MessageEntity;
 	// attachments: MessageAttachmentEntity[];
 	attachments: MessageAttachmentWithUrl[];
@@ -379,7 +381,7 @@ function EmailRenderer({
 			)}
 			<div className={"grid grid-cols-12"}>
 				<div className={"col-span-12"}>
-					{threadIndex === 0 && <div className={"flex gap-3 items-center"}>
+					{(showSubject ?? threadIndex === 0) && <div className={"flex gap-3 items-center"}>
 						<div className="text-2xl font-semibold tracking-tight">
 							{message.subject || "No Subject"}
 						</div>

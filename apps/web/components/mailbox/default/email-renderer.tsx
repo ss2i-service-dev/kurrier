@@ -1,6 +1,7 @@
 // @ts-nocheck
 "use client";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { leaveThreadToList } from "@/lib/leave-thread";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
 import slugify from "@sindresorhus/slugify";
@@ -148,10 +149,7 @@ function EmailRenderer({
 
 	const router = useRouter();
 	const pathname = usePathname();
-	const leaveThread = () => {
-		router.push(pathname.replace(/\/threads\/[^/]+\/?$/, ""));
-		router.refresh();
-	};
+	const leaveThread = () => leaveThreadToList(router, pathname);
 	// ss2i : retour immediat a la liste, deja privee du fil ; le serveur suit
 	// (cf. lib/pending-moves). En cas d'echec, le fil revient avec l'erreur.
 	const archiveMessage = () => {
@@ -177,11 +175,13 @@ function EmailRenderer({
 		leaveThread();
 	};
 	// Non lu : on revient a la liste, sinon la reouverture du fil le remarque lu.
+	// ss2i : retour a la liste d'abord, le serveur suit (la liste se met a jour au
+	// rafraichissement) ; une erreur reste signalee.
 	const unreadMessage = async () => {
+		leaveThread();
 		try {
 			await markAsUnread(threadId, activeMailboxId, markSmtp, true);
 			toast.success("Marked as unread", { position: "bottom-left" });
-			leaveThread();
 		} catch (err: any) {
 			toast.error(err?.message ?? "Mark as unread failed");
 		}

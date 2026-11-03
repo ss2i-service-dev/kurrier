@@ -728,7 +728,9 @@ async function searchThreads(ctx: ToolContext, args: Record<string, any>) {
 		if (bool(args.has_attachment, false)) filters.push("hasAttachment:=1");
 		const result = (await typesense.collections("messages").documents().search({
 			q: query,
-			query_by: "subject,snippet,fromName,fromEmail,participants",
+			// ss2i : fromDomain interroge, sinon un domaine seul ("tdsynnex.com") ne trouve rien :
+			// Typesense retire les symboles et indexe "x-y@tdsynnex.com" comme un seul mot.
+			query_by: "subject,snippet,fromName,fromEmail,fromDomain,participants",
 			filter_by: filters.join(" && "),
 			sort_by: "createdAt:desc",
 			group_by: "threadId",

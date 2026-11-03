@@ -599,7 +599,9 @@ export const initSearch = async (
 
 	const result = (await client.collections("messages").documents().search({
 		q,
-		query_by: "subject,snippet,fromName,fromEmail,participants",
+		// ss2i : fromDomain interroge, sinon un domaine seul ("tdsynnex.com") ne trouve rien :
+		// Typesense retire les symboles et indexe "x-y@tdsynnex.com" comme un seul mot.
+		query_by: "subject,snippet,fromName,fromEmail,fromDomain,participants",
 		filter_by: filters.join(" && "),
 		sort_by: "createdAt:desc",
 		group_by: "threadId",

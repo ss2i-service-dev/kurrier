@@ -19,6 +19,13 @@ import {
 import ContactSuggestionItem from "@/components/mailbox/default/editor/contact-suggestion-item";
 import { suggestRecipients } from "@/lib/actions/recipient-suggestions";
 
+// Adresse d'une saisie (« a@b.c » ou « Nom <a@b.c> »), null si ce n'en est pas une.
+export function emailOf(input: string): string | null {
+	const m = input.match(/<([^<>]+)>\s*$/);
+	const addr = (m ? m[1] : input).trim();
+	return /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/.test(addr) ? addr : null;
+}
+
 export default function EmailHeaderContacts({
 	name,
 	defaultValues,
@@ -62,10 +69,41 @@ export default function EmailHeaderContacts({
 	// le navigateur ne demarrait jamais de glisser, et un clic ouvrait les suggestions.
 	// Le TagsInput ne sert plus qu'a saisir une nouvelle adresse (valeur toujours vide) ;
 	// le champ cache lu par le formulaire est le notre, meme format (virgules).
+	// ss2i : seule une vraie adresse devient une pastille. « Nom <a@b.c> » donne a@b.c ;
+	// un texte sans @ (« dev ») n'est jamais accepte : il partait en copie sans adresse
+	// et l'envoi l'ignorait sans rien dire (Re: Unisens - Bitwarden, 03/11).
+	const [inputError, setInputError] = useState<string | null>(null);
 	const add = (emails: string[]) => {
-		let next = addRecipients(valueRef.current, emails.map((e) => e.trim()).filter(Boolean));
+		const ok: string[] = [];
+		const bad: string[] = [];
+		for (const raw of emails) {
+			const e = raw.trim();
+			if (!e) continue;
+			const addr = emailOf(e);
+			(addr ? ok : bad).push(addr ?? e);
+		}
+		let next = addRecipients(valueRef.current, ok);
 		if (maxTags) next = next.slice(0, maxTags);
 		if (next !== valueRef.current) update(next);
+		setInputError(bad.length ? `"${bad.join(", ")}" is not an email address` : null);
+		return bad;
+	};
+	// Entree, virgule : la suggestion surlignee (Mantine s'en charge), a defaut la premiere
+	// suggestion, a defaut le texte tape s'il est une adresse. Jamais le texte brut.
+	const wrapRef = useRef<HTMLDivElement>(null);
+	const commitTyped = (e: React.KeyboardEvent) => {
+		const typed = searchValue.trim();
+		if (!typed) return;
+		const highlighted = wrapRef.current?.querySelector("[data-combobox-selected]");
+		if (e.key === "Enter" && highlighted) return; // option choisie au clavier
+		e.preventDefault();
+		e.stopPropagation();
+		// Premiere suggestion correspondant au texte tape (une liste en retard sur la
+		// frappe ne doit pas imposer un destinataire sans rapport).
+		const first = enterPick;
+		const pick = emailOf(typed) ?? first ?? typed;
+		const bad = add([pick]);
+		setSearchValue(bad.length ? typed : "");
 	};
 	const remove = (email: string) => update(valueRef.current.filter((e) => e !== email));
 
@@ -95,15 +133,26 @@ export default function EmailHeaderContacts({
 		void loadSuggestions(val);
 	};
 
+	// Suggestion que prendra Entree (sans option surlignee au clavier) : marquee.
+	const typedLower = searchValue.trim().toLowerCase();
+	const enterPick =
+		typedLower && !emailOf(searchValue.trim())
+			? options.find((o) => `${o.label} ${o.value}`.toLowerCase().includes(typedLower))?.value
+			: undefined;
 	const renderOption: TagsInputProps["renderOption"] = ({ option }) => (
-		<ContactSuggestionItem option={option} />
+		<div className="flex w-full items-center justify-between gap-2">
+			<ContactSuggestionItem option={option} />
+			{option.value === enterPick && (
+				<kbd className="shrink-0 rounded border px-1 text-[10px] text-muted-foreground">Enter</kbd>
+			)}
+		</div>
 	);
 
 	// Ordre du serveur conserve : le filtrage textuel est deja fait la-bas.
 	const filter: OptionsFilter = ({ options }) => options;
 
 	return (
-		<div className="flex flex-wrap items-center gap-1 w-full min-h-[28px]">
+		<div ref={wrapRef} className="flex flex-wrap items-center gap-1 w-full min-h-[28px]">
 			<input type="hidden" name={name} value={value.join(",")} />
 			{value.map((email) => (
 				<span
@@ -154,11 +203,20 @@ export default function EmailHeaderContacts({
 						if (e.key === "Backspace" && !searchValue && valueRef.current.length) {
 							remove(valueRef.current[valueRef.current.length - 1]);
 						}
+						if (e.key === "Enter" || e.key === ",") commitTyped(e);
 					}}
+					// Perte du focus : une adresse complete est gardee, un debut de saisie reste
+					// dans le champ au lieu de devenir un destinataire.
+					acceptValueOnBlur={false}
+					onBlur={() => {
+						const typed = searchValue.trim();
+						if (typed && emailOf(typed) && !add([typed]).length) setSearchValue("");
+					}}
+					error={inputError ?? undefined}
 					data={options}
 					onChange={(v) => {
-						add(v);
-						setSearchValue("");
+						const bad = add(v);
+						setSearchValue(bad.length ? bad.join(", ") : "");
 					}}
 					renderOption={renderOption}
 					filter={filter}

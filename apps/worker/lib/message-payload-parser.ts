@@ -423,7 +423,7 @@ export async function parseAndStoreEmail(
 	const seenIcsChecksums = new Set<string>();
 
 	for (const attachment of parsed.attachments ?? []) {
-		const bucket = "attachments";
+		const bucket = process.env.S3_BUCKET!;
 		const fileName = generateFileName(attachment);
 		const objectPath = `private/${ownerId}/${message.id}/${fileName}`;
 

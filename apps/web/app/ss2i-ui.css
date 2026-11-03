@@ -563,3 +563,8 @@
 	content-visibility: auto;
 	contain-intrinsic-size: auto 68px;
 }
+
+/* Apercu de signature dans l'editeur (Outlook) : rendu proche du mail envoye. */
+[data-ui="ss2i"] .k-signature-body p { margin: 0; }
+[data-ui="ss2i"] .k-signature-body img { max-width: 100%; height: auto; display: inline-block; }
+[data-ui="ss2i"] .k-signature-body a { color: var(--k-accent); }

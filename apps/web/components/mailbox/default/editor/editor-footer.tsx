@@ -2,6 +2,8 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
+import { createPortal } from "react-dom";
+import { useKSignatureSlot } from "@/components/k/signature-slot";
 import { Checkbox } from "@mantine/core";
 import { ActionIcon, Button, Popover, Progress, Tooltip } from "@mantine/core";
 import { Baseline, Paperclip, Save, Trash2, X as IconX } from "lucide-react";
@@ -45,6 +47,7 @@ export default function EditorFooter({
 	onToggleFormat?: () => void;
 } = {}) {
 	const nouvelle = useNouvelle();
+	const sigSlot = useKSignatureSlot();
 	const t = useK();
 	const { state } = useDynamicContext<{
 		isPending: boolean;
@@ -255,7 +258,28 @@ export default function EditorFooter({
 
 	return (
 		<>
-			{signaturePreview && (
+			{/* ss2i (Outlook) : apercu a la place reelle de la signature (sous le texte, au-dessus de la citation). */}
+			{signaturePreview && nouvelle && sigSlot &&
+				createPortal(
+					<div className={`k-signature group/sig px-4 pb-3 pt-1 ${includeSignature ? "" : "opacity-40"}`}>
+						<div className="mb-1.5 flex items-center gap-2 text-[11.5px] text-k-ink-3">
+							<span className="h-px w-6 bg-k-line-strong" />
+							<span>Signature, ajoutée à l'envoi</span>
+							<label className="ml-auto flex cursor-pointer items-center gap-1.5 opacity-70 transition-opacity hover:opacity-100 group-hover/sig:opacity-100">
+								<input
+									type="checkbox"
+									checked={includeSignature}
+									onChange={(e) => setIncludeSignature(e.currentTarget.checked)}
+									className="h-3.5 w-3.5 accent-[var(--k-accent)]"
+								/>
+								Inclure
+							</label>
+						</div>
+						<div className="k-signature-body text-[13.5px] text-k-ink" dangerouslySetInnerHTML={{ __html: signaturePreview }} />
+					</div>,
+					sigSlot,
+				)}
+			{signaturePreview && !(nouvelle && sigSlot) && (
 				<div className="px-3 pb-2">
 					<div className="flex items-center justify-between gap-2 mb-1">
 						<span className="text-xs text-neutral-500">

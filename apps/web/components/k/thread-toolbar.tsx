@@ -6,7 +6,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { Archive, ArrowLeft, ChevronDown, ChevronUp, Mail, Trash2, X } from "lucide-react";
 import KIconButton from "@/components/k/icon-button";
 import SnoozeMail from "@/components/k/snooze";
-import { isMarkedRead, mailActions } from "@/components/k/mail-store";
+import { IconPin, IconPinnedOff } from "@tabler/icons-react";
+import { isMarkedRead, mailActions, useMailStore } from "@/components/k/mail-store";
 
 /** Lignes de la liste visibles, dans l'ordre affiche. */
 function rows(): HTMLElement[] {
@@ -19,13 +20,17 @@ export default function ThreadToolbar({
 	activeMailboxKind,
 	markSmtp,
 	hasUnread,
+	pinned: serverPinned = false,
 }: {
 	threadId: string;
 	activeMailboxId: string;
 	activeMailboxKind: string;
 	markSmtp: boolean;
 	hasUnread: boolean;
+	pinned?: boolean;
 }) {
+	const pinOverride = useMailStore((s) => s.pinned.get(String(threadId)));
+	const pinned = pinOverride ?? serverPinned;
 	const router = useRouter();
 	const pathname = usePathname() ?? "";
 	const listUrl = pathname.replace(/\/threads\/[^/]+\/?$/, "");
@@ -102,6 +107,13 @@ export default function ThreadToolbar({
 				<Mail />
 			</KIconButton>
 			<SnoozeMail mailboxThreadId={threadId} activeMailboxId={activeMailboxId} />
+			<KIconButton
+				label={pinned ? "Désépingler" : "Épingler en haut du dossier"}
+				onClick={() => mailActions.pin(threadId, !pinned)}
+				className={pinned ? "text-k-accent" : undefined}
+			>
+				{pinned ? <IconPinnedOff /> : <IconPin />}
+			</KIconButton>
 
 			<div className="ml-auto flex items-center">
 				<KIconButton label="Fil précédent" shortcut="K" onClick={() => go(-1)}>

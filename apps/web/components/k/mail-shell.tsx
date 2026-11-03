@@ -19,7 +19,10 @@ import {
 	Settings,
 	Sun,
 	Undo2,
+	Volume2,
+	VolumeX,
 } from "lucide-react";
+import { setNewMailSound, useNewMailSound } from "@/components/k/new-mail-notifier";
 import KAvatar from "@/components/k/avatar";
 import { useAppearance } from "@/components/providers/appearance-provider";
 import { signOut } from "@/lib/actions/auth";
@@ -202,6 +205,7 @@ function SidebarContent({
 							<span className="text-[13px]">Paramètres de l'adresse</span>
 						</Menu.Item>
 					)}
+					<SoundToggle />
 					<Menu.Item
 						leftSection={<Undo2 size={15} />}
 						onClick={async () => {
@@ -241,5 +245,20 @@ function SidebarContent({
 				})}
 			</div>
 		</div>
+	);
+}
+
+/** Menu du compte : son a l'arrivee d'un message (prefere par navigateur). */
+function SoundToggle() {
+	const on = useNewMailSound();
+	return (
+		<Menu.Item
+			closeMenuOnClick={false}
+			leftSection={on ? <Volume2 size={15} /> : <VolumeX size={15} />}
+			rightSection={on ? <Check size={14} className="text-k-accent" /> : null}
+			onClick={() => setNewMailSound(!on)}
+		>
+			<span className="text-[13px]">Son des nouveaux messages</span>
+		</Menu.Item>
 	);
 }

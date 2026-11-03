@@ -38,6 +38,7 @@ import { modals } from "@mantine/modals";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import { MessageEntity } from "@db";
 import { FocusTrap } from "@mantine/core";
+import { KSignatureSlot } from "@/components/k/signature-slot";
 
 function formatWhen(d: Date) {
 	return Temporal.Instant.from(d.toISOString())
@@ -68,6 +69,8 @@ export function fromStoredHtml(html: string): string {
 export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 	({ name, defaultValue = "", onChange }, ref) => {
 		const containerRef = useRef<HTMLDivElement>(null);
+		// ss2i (Outlook) : emplacement de l'apercu de signature, entre le texte et la citation.
+		const [sigSlot, setSigSlot] = useState<HTMLElement | null>(null);
 		const [value, setValue] = useState(toStoredHtml(defaultValue));
 		const [textValue, setTextValue] = useState("");
 
@@ -200,6 +203,7 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 			) : null;
 
 		return (
+			<KSignatureSlot.Provider value={sigSlot}>
 			<div ref={containerRef} className="scroll-mt-[72px]">
 				<RichTextEditor
 					editor={editor}
@@ -225,7 +229,9 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 					<FocusTrap active={focusOnSubject}>
 						<RichTextEditor.Content className={nouvelle ? "k-editor-content" : "prose min-h-96 text-sm p-2 leading-5"} />
 					</FocusTrap>
+					{nouvelle && !(state.rfcStyle && isForward) && <div ref={setSigSlot} className="k-sig-slot" />}
 					{!state.rfcStyle || isForward ? quoteEditor : null}
+					{nouvelle && state.rfcStyle && isForward && <div ref={setSigSlot} className="k-sig-slot" />}
 					<EditorFooter formatOpen={formatOpen} onToggleFormat={toggleFormat} />
 				</RichTextEditor>
 
@@ -242,6 +248,7 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 				<input type="hidden" name="quoteMode" value={hasQuote && state.message ? quoteMode : ""} readOnly />
 				<input type="hidden" name="quoteHtml" value={hasQuote && quoteMode === "custom" ? quoteHtml : ""} readOnly />
 			</div>
+			</KSignatureSlot.Provider>
 		);
 	},
 );

@@ -13,7 +13,7 @@ import { useRouter } from "next/navigation";
 import { MailboxEntity, MailboxSyncEntity } from "@db";
 import { FetchMailboxThreadsResult } from "@/lib/actions/mailbox";
 import { FetchLabelsResult, FetchMailboxThreadLabelsResult } from "@/lib/actions/labels";
-import { IconStar, IconStarFilled } from "@tabler/icons-react";
+import { IconPin, IconPinnedFilled, IconPinnedOff, IconStar, IconStarFilled } from "@tabler/icons-react";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 import ThreadLabelHoverButtons from "@/components/dashboard/labels/thread-label-hover-buttons";
@@ -36,6 +36,8 @@ type Props = {
 	orderedThreadIds: string[];
 	ownAddresses: Set<string>;
 	isOnSnoozedPage?: boolean;
+	/** Fil epingle (liste d'un dossier) ; absent : pas d'epinglage ici (recherche...). */
+	pinned?: boolean;
 };
 
 export default function KThreadRow({
@@ -49,6 +51,7 @@ export default function KThreadRow({
 	orderedThreadIds,
 	ownAddresses,
 	isOnSnoozedPage = false,
+	pinned,
 }: Props) {
 	const router = useRouter();
 	const showSnippet = useShowSnippet();
@@ -210,6 +213,7 @@ export default function KThreadRow({
 					)}
 					<span className="ml-auto flex shrink-0 items-center gap-1.5">
 						<span className="k-row-meta flex items-center gap-1.5 transition-opacity">
+							{pinned && <IconPinnedFilled size={13} className="text-k-accent" aria-label="Épinglé" />}
 							{item.hasAttachments && <Paperclip className="h-3.5 w-3.5 text-k-ink-3" />}
 							<time
 								className={`text-[12px] tabular-nums ${snoozed ? "text-k-warn" : isUnread ? "font-semibold text-k-accent" : "text-k-ink-3"}`}
@@ -259,6 +263,11 @@ export default function KThreadRow({
 								<Mail />
 							</KIconButton>
 						))}
+					{pinned !== undefined && (
+						<KIconButton size="sm" label={pinned ? "Désépingler" : "Épingler en haut"} onClick={() => mailActions.pin(item.threadId, !pinned)}>
+							{pinned ? <IconPinnedOff /> : <IconPin />}
+						</KIconButton>
+					)}
 					<SnoozeMail mailboxThreadId={item.threadId} activeMailboxId={activeMailbox.id} />
 					{activeMailbox.kind !== "archive" && (
 						<KIconButton size="sm" label="Archiver" onClick={() => mailActions.archive(item.threadId, activeMailbox.id, smtp, isUnread ? 1 : 0)}>

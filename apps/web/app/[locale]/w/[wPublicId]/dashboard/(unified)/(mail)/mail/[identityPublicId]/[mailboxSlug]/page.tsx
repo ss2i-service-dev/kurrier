@@ -10,6 +10,7 @@ import WebmailList from "@/components/mailbox/default/webmail-list";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
 import { isNouvelleInterface } from "@/lib/actions/interface-pref";
 import KThreadList from "@/components/k/thread-list";
+import { fetchKPinnedThreads } from "@/lib/actions/k-pins";
 
 async function ClassicPage({
 	params,
@@ -87,6 +88,7 @@ async function NouvellePage({
 		<div className="k-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
 			<KThreadList
 				mailboxThreadPromise={mailboxThreadPromise}
+				pinnedPromise={fetchKPinnedThreads(identityPublicId, String(mailboxSlug))}
 				publicConfig={publicConfig}
 				identityPublicId={identityPublicId}
 				fetchMailboxPromise={fetchMailboxPromise}

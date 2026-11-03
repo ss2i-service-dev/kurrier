@@ -184,8 +184,9 @@ function IdentityExtraCounts({
 }
 
 // ss2i : section « Clients » d'une identite pro : un dossier virtuel par societe de la
-// CRM, derniere activite en premier, nombre de fils entre parentheses (pas de non lus :
-// rien a annoncer). Au-dela de SIDEBAR_CLIENTS, un champ filtre la liste complete.
+// CRM, clients avec des fils non lus en tete (nom en gras, nombre de non lus), puis
+// derniere activite. Au-dela de SIDEBAR_CLIENTS, un champ filtre la liste complete.
+// La section se replie (chevron), etat garde par identite dans le navigateur.
 const SIDEBAR_CLIENTS = 20;
 
 function IdentityClients({
@@ -202,7 +203,19 @@ function IdentityClients({
 	const all = use(clientsPromise);
 	const entry = all.find((e) => e.identityId === identity.id);
 	const [filter, setFilter] = React.useState("");
+	const collapseKey = `ss2i:clients-collapsed:${identity.publicId}`;
+	const [collapsed, setCollapsed] = React.useState(false);
+	useEffect(() => {
+		setCollapsed(localStorage.getItem(collapseKey) === "1");
+	}, [collapseKey]);
+	const toggleCollapsed = () => {
+		setCollapsed((c) => {
+			localStorage.setItem(collapseKey, c ? "0" : "1");
+			return !c;
+		});
+	};
 	if (!entry || entry.clients.length === 0) return null;
+	const unreadClients = entry.clients.filter((c) => (c.unreadCount ?? 0) > 0).length;
 
 	const base = `/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/clients`;
 	const needle = filter.trim().toLowerCase();
@@ -214,17 +227,34 @@ function IdentityClients({
 
 	return (
 		<div className="mt-2">
-			<Link
-				href={base}
-				className={`px-1 mb-1 text-xs font-semibold flex items-center gap-1 hover:text-sidebar-foreground ${
-					isIndex ? "text-sidebar-foreground" : "text-sidebar-foreground/60"
-				}`}
-				title="All clients"
-			>
-				<Building2 className="h-3.5 w-3.5 shrink-0" />
-				<span>Clients ({entry.clients.length})</span>
-			</Link>
-			{entry.clients.length > SIDEBAR_CLIENTS && (
+			<div className="flex items-center mb-1">
+				<button
+					type="button"
+					onClick={toggleCollapsed}
+					className="p-0.5 text-sidebar-foreground/60 hover:text-sidebar-foreground"
+					title={collapsed ? "Show clients" : "Hide clients"}
+					aria-label={collapsed ? "Show clients" : "Hide clients"}
+					aria-expanded={!collapsed}
+				>
+					{collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+				</button>
+				<Link
+					href={base}
+					className={`px-1 text-xs font-semibold flex items-center gap-1 hover:text-sidebar-foreground ${
+						isIndex ? "text-sidebar-foreground" : "text-sidebar-foreground/60"
+					}`}
+					title="All clients"
+				>
+					<Building2 className="h-3.5 w-3.5 shrink-0" />
+					<span>Clients ({entry.clients.length})</span>
+					{collapsed && unreadClients > 0 && (
+						<span className="ml-1 rounded bg-brand/20 px-1 text-[10px] font-semibold text-brand" title="Clients with unread messages">
+							{unreadClients}
+						</span>
+					)}
+				</Link>
+			</div>
+			{!collapsed && entry.clients.length > SIDEBAR_CLIENTS && (
 				<input
 					type="text"
 					value={filter}
@@ -233,10 +263,11 @@ function IdentityClients({
 					className="mx-1.5 my-1 w-[calc(100%-12px)] rounded border bg-transparent px-2 py-1 text-xs outline-none focus:border-brand"
 				/>
 			)}
-			<div className="space-y-0.5">
+			{!collapsed && <div className="space-y-0.5">
 				{shown.map((c) => {
 					const href = `${base}/${c.companyId}`;
 					const active = pathname === href || pathname.startsWith(`${href}/`);
+					const unread = c.unreadCount ?? 0;
 					return (
 						<Link
 							key={c.companyId}
@@ -246,8 +277,18 @@ function IdentityClients({
 								active ? "dark:bg-neutral-800 dark:text-brand-foreground bg-brand-200 text-brand" : ""
 							} flex items-center gap-1 w-full p-1.5 pl-2`}
 						>
-							<span className="truncate font-normal text-sm">{c.name}</span>
-							<span className="ml-auto shrink-0 text-xs text-sidebar-foreground/60">{c.threadCount}</span>
+							<span className={`truncate text-sm ${unread ? "font-semibold" : "font-normal"}`}>{c.name}</span>
+							{unread > 0 && (
+								<span className="ml-auto shrink-0 text-xs font-semibold text-brand" title={`${unread} unread`}>
+									{unread}
+								</span>
+							)}
+							<span
+								className={`${unread > 0 ? "" : "ml-auto "}shrink-0 text-xs text-sidebar-foreground/60`}
+								title={`${c.threadCount} conversations`}
+							>
+								{unread > 0 ? `/ ${c.threadCount}` : c.threadCount}
+							</span>
 						</Link>
 					);
 				})}
@@ -259,7 +300,7 @@ function IdentityClients({
 						All clients ({entry.clients.length})
 					</Link>
 				)}
-			</div>
+			</div>}
 		</div>
 	);
 }

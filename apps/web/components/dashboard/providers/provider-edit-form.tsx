@@ -8,6 +8,8 @@ import {
 } from "@/lib/actions/dashboard";
 import { parseSecret } from "@/lib/utils";
 import { VerifyResult } from "@providers";
+import { useNouvelle } from "@/components/k/ui-context";
+import { envLabel } from "@/components/k/platform/ui";
 
 function ProviderEditForm({
 	spec,
@@ -21,12 +23,18 @@ function ProviderEditForm({
 	decryptedSecret: FetchDecryptedSecretsResult[number];
 }) {
 	const decryptedValues = parseSecret(decryptedSecret);
+	// ss2i : textes francais et libelles lisibles dans la nouvelle interface
+	const nv = useNouvelle();
 
 	const fields = [
 		{
 			type: "el",
 			el:	<div className="mb-2 block text-sm font-medium leading-6 text-brand-foreground">
-				You can use any S3 compatible storage provider that supports the S3 API. Just fill in the required fields and we will take care of the rest.
+				{nv
+					? spec.key === "s3"
+						? "Tout stockage compatible S3 convient. Renseignez les champs ci-dessous, le reste est géré pour vous."
+						: "Les informations sont chiffrées et conservées dans le coffre. Renseignez les champs ci-dessous."
+					: "You can use any S3 compatible storage provider that supports the S3 API. Just fill in the required fields and we will take care of the rest."}
 			</div>
 		},
 		{
@@ -41,7 +49,7 @@ function ProviderEditForm({
 		},
 		...spec.requiredEnv.map((row: string) => ({
 			name: `required.${row}`,
-			label: (
+			label: nv ? envLabel(row) : (
 				<code className="rounded bg-muted/50 px-2 py-1 text-xs">{row}</code>
 			),
 			required: true,
@@ -59,6 +67,11 @@ function ProviderEditForm({
 			fields={fields}
 			onSuccess={onCompleted}
 			action={upsertProviderAccount}
+			submitButtonProps={
+				nv
+					? { submitLabel: "Enregistrer", wrapperClasses: "mt-6", fullWidth: true }
+					: undefined
+			}
 		/>
 	);
 }

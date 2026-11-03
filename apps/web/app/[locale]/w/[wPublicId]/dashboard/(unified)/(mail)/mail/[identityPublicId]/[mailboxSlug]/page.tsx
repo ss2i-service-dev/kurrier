@@ -8,8 +8,10 @@ import { getPublicEnv } from "@schema";
 import MailPagination from "@/components/mailbox/default/mail-pagination";
 import WebmailList from "@/components/mailbox/default/webmail-list";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import KThreadList from "@/components/k/thread-list";
 
-async function Page({
+async function ClassicPage({
 	params,
 	searchParams,
 }: {
@@ -63,6 +65,45 @@ async function Page({
 			</div>
 		</>
 	);
+}
+
+// ss2i : nouvelle interface (option par utilisateur), meme donnees, autre presentation.
+async function NouvellePage({
+	params,
+	searchParams,
+}: {
+	params: { identityPublicId: string; mailboxSlug?: string };
+	searchParams: { page?: string };
+}) {
+	const { page } = await searchParams;
+	const { identityPublicId, mailboxSlug } = await params;
+	const publicConfig = getPublicEnv();
+	const mailboxThreadPromise = fetchMailboxThreads(identityPublicId, String(mailboxSlug), Number(page)).then(
+		async (mailboxThreads) => ({ mailboxThreads, labelsByThreadId: await fetchMailboxThreadLabels(mailboxThreads) }),
+	);
+	const fetchMailboxPromise = fetchMailbox(identityPublicId, mailboxSlug);
+	const workspacePublicId = await getWorkspacePublicId();
+	return (
+		<div className="k-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
+			<KThreadList
+				mailboxThreadPromise={mailboxThreadPromise}
+				publicConfig={publicConfig}
+				identityPublicId={identityPublicId}
+				fetchMailboxPromise={fetchMailboxPromise}
+				identityMailboxesPromise={fetchIdentityMailboxList()}
+				globalLabelsPromise={fetchLabelsByIdentityPublicId({ identityPublicId, scope: "thread" })}
+				workspacePublicId={workspacePublicId}
+				startPage={Number(page) > 0 ? Number(page) : 1}
+			/>
+		</div>
+	);
+}
+
+async function Page(props: {
+	params: { identityPublicId: string; mailboxSlug?: string };
+	searchParams: { page?: string };
+}) {
+	return (await isNouvelleInterface()) ? <NouvellePage {...props} /> : <ClassicPage {...props} />;
 }
 
 export default Page;

@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useMemo, useRef } from "react";
+import { useK, useNouvelle } from "@/components/k/ui-context";
+import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { MessageEntity } from "@db";
 import {
@@ -38,6 +39,9 @@ export default function ReplyQuoteEditor({
 	customHtml: string;
 	onChange: (mode: QuoteMode, html: string) => void;
 }) {
+	const t = useK(); // ss2i : francais dans la nouvelle interface
+	const nouvelle = useNouvelle();
+	const [quoteOpen, setQuoteOpen] = useState(false);
 	const elRef = useRef<HTMLDivElement | null>(null);
 	// Derniere div initialisee : la ref callback est rappelee (null puis l'element) a chaque
 	// rendu, le contenu ne doit etre pose qu'a un vrai montage.
@@ -69,25 +73,26 @@ export default function ReplyQuoteEditor({
 	if (mode === "none" && !forward) {
 		return (
 			<div className="px-3 pt-2 text-xs text-neutral-500">
-				No quoted message.{" "}
+				{t("No quoted message.", "Pas de message cité.")}{" "}
 				<button
 					type="button"
 					className="underline hover:text-neutral-800"
 					onClick={() => onChange("auto", "")}
 				>
-					Add quote
+					{t("Add quote", "Ajouter la citation")}
 				</button>
 			</div>
 		);
 	}
 
 	return (
-		<div className="px-3 pt-2">
+		// ss2i : classe k-quote, reperee par le CSS de la nouvelle interface (sans effet ailleurs).
+		<div className="k-quote px-3 pt-2">
 			<div className="flex items-center gap-3 text-xs text-neutral-500 mb-1">
 				<span>
 					{forward
-						? "Forwarded message (editable)"
-						: `Quoted message (editable) - ${quoteScope === "last" ? "last message only" : "whole thread"}`}
+						? t("Forwarded message (editable)", "Message transféré (modifiable)")
+						: t(`Quoted message (editable) - ${quoteScope === "last" ? "last message only" : "whole thread"}`, `Message cité (modifiable) · ${quoteScope === "last" ? "dernier message" : "tout le fil"}`)}
 				</span>
 				<button
 					type="button"
@@ -95,7 +100,7 @@ export default function ReplyQuoteEditor({
 					disabled={mode !== "custom"}
 					onClick={() => onChange("auto", "")}
 				>
-					Restore quote
+					{t("Restore quote", "Rétablir la citation")}
 				</button>
 				{!forward && (
 					<button
@@ -103,10 +108,23 @@ export default function ReplyQuoteEditor({
 						className="underline hover:text-neutral-800"
 						onClick={() => onChange("none", "")}
 					>
-						Don&apos;t quote
+						{t("Don't quote", "Ne pas citer")}
 					</button>
 				)}
 			</div>
+			{/* ss2i : nouvelle interface, citation repliee par defaut (la zone de saisie
+			    garde la place) ; elle reste montee, donc envoyee comme avant. */}
+			{nouvelle && (
+				<button
+					type="button"
+					onClick={() => setQuoteOpen((v) => !v)}
+					className="k-quote-toggle mb-1 rounded-full border border-k-line-strong px-2.5 py-0.5 text-[12px] text-k-ink-2 hover:bg-k-hover"
+					aria-expanded={quoteOpen}
+				>
+					{quoteOpen ? "Masquer le message cité" : "··· Afficher le message cité"}
+				</button>
+			)}
+			<div hidden={nouvelle && !quoteOpen}>
 			<div className="text-xs text-neutral-500 mb-1">{computed.attribution}</div>
 			<div
 				ref={(el) => {
@@ -125,6 +143,7 @@ export default function ReplyQuoteEditor({
 				onInput={(e) => onChange("custom", DOMPurify.sanitize(e.currentTarget.innerHTML))}
 				className="rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 bg-white text-neutral-800 [color-scheme:light] p-2 text-sm max-h-96 overflow-auto outline-none focus:border-neutral-500 [&_img]:max-w-full"
 			/>
+			</div>
 		</div>
 	);
 }

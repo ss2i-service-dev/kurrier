@@ -6,8 +6,12 @@ import {
 import DriveEntry from "@/components/dashboard/drive/drive-entry";
 import Link from "next/link";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import { KDriveBrowser, KDriveVolumes } from "@/components/k/drive-browser";
+import { KEmptyState } from "@/components/k/section";
+import { HardDrive } from "lucide-react";
 
-export default async function Page({
+async function ClassicPage({
                                        params,
                                    }: {
     params: Promise<{ segments?: string[] }>;
@@ -56,5 +60,54 @@ export default async function Page({
                 ))}
             </div>
         </div>
+    );
+}
+
+// ss2i : nouvelle interface (option par utilisateur) : memes donnees, presentation
+// de la nouvelle interface (volumes, liste/grille, etats vides en francais).
+export default async function Page(props: {
+    params: Promise<{ segments?: string[] }>;
+}) {
+    if (!(await isNouvelleInterface())) return <ClassicPage {...props} />;
+
+    const { segments } = await props.params;
+    const ctx = await normalizeWithinPath(segments ?? []);
+    const workspacePublicId = await getWorkspacePublicId();
+
+    if (!ctx.driveVolume) {
+        const volumes = await fetchVolumes();
+        return (
+            <KDriveVolumes
+                workspacePublicId={workspacePublicId}
+                volumes={volumes.map((v) => ({ id: v.id, publicId: v.publicId, label: v.label, kind: String(v.kind) }))}
+            />
+        );
+    }
+
+    let entries: any[];
+    try {
+        entries = await fetchCloudListPath(ctx);
+    } catch {
+        return (
+            <KEmptyState
+                icon={<HardDrive size={22} />}
+                title="Impossible de lire ce dossier"
+                text="Le stockage ne répond pas. Réessayez dans un instant."
+            />
+        );
+    }
+
+    return (
+        <KDriveBrowser
+            volumeLabel={ctx.driveVolume.label}
+            entries={entries.map((e) => ({
+                id: String(e.id),
+                name: String(e.name),
+                type: e.type === "folder" ? "folder" : "file",
+                sizeBytes: Number(e.sizeBytes ?? 0),
+                mimeType: e.mimeType ?? null,
+                lastModified: (e.metaData as any)?.lastModified ?? null,
+            }))}
+        />
     );
 }

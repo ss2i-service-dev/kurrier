@@ -1,0 +1,281 @@
+"use client";
+// SS2i (nouvelle interface) : ligne de la liste des fils. Deux lignes de texte
+// (correspondants + date, objet + extrait), avatar qui devient case a cocher au
+// survol, actions rapides au survol (montees seulement pour la ligne survolee).
+//
+// Reprend les comportements de l'interface classique (webmail-list-item.tsx) :
+// mode selection (un clic coche quand une case l'est deja, Maj = plage),
+// brouillons « A : ... » et badge d'envoi en attente, corbeille sans lu/non lu,
+// option « objet seul », archivage et suppression avec Undo (pending-moves).
+import React from "react";
+import { Archive, Mail, MailOpen, Paperclip, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { MailboxEntity, MailboxSyncEntity } from "@db";
+import { FetchMailboxThreadsResult } from "@/lib/actions/mailbox";
+import { FetchLabelsResult, FetchMailboxThreadLabelsResult } from "@/lib/actions/labels";
+import { IconStar, IconStarFilled } from "@tabler/icons-react";
+import { useDynamicContext } from "@/hooks/use-dynamic-context";
+import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
+import ThreadLabelHoverButtons from "@/components/dashboard/labels/thread-label-hover-buttons";
+import SnoozeMail from "@/components/k/snooze";
+import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
+import { DraftSendBadge, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
+import KAvatar from "@/components/k/avatar";
+import KIconButton from "@/components/k/icon-button";
+import { correspondents, listDate } from "@/components/k/format";
+import { closeCompose, mailActions, setActiveThread, useMailStore } from "@/components/k/mail-store";
+
+type Props = {
+	item: FetchMailboxThreadsResult[number];
+	activeMailbox: MailboxEntity;
+	identityPublicId: string;
+	mailboxSync: MailboxSyncEntity | undefined;
+	globalLabels: FetchLabelsResult;
+	labelsByThreadId: FetchMailboxThreadLabelsResult;
+	workspacePublicId?: string;
+	orderedThreadIds: string[];
+	ownAddresses: Set<string>;
+	isOnSnoozedPage?: boolean;
+};
+
+export default function KThreadRow({
+	item,
+	activeMailbox,
+	identityPublicId,
+	mailboxSync,
+	globalLabels,
+	labelsByThreadId,
+	workspacePublicId,
+	orderedThreadIds,
+	ownAddresses,
+	isOnSnoozedPage = false,
+}: Props) {
+	const router = useRouter();
+	const showSnippet = useShowSnippet();
+	const isActive = useMailStore((s) => s.active === item.threadId);
+	const readOverride = useMailStore((s) => s.read.get(String(item.threadId)));
+	const starOverride = useMailStore((s) => s.starred.get(String(item.threadId)));
+	const isTrash = activeMailbox.kind === "trash";
+	const isDrafts = activeMailbox.kind === "drafts";
+	const sending = isDrafts && isSendingDraft(item.draftSend);
+	const isUnread = !isTrash && (readOverride === undefined ? item.unreadCount > 0 : !readOverride);
+	const starred = starOverride ?? item.starred;
+	const smtp = !!mailboxSync;
+	// Actions de survol montees seulement pour la ligne survolee ou focalisee.
+	const [armed, setArmed] = React.useState(false);
+
+	const { state, setState } = useDynamicContext<{
+		selectedThreadIds: Set<string>;
+		lastSelectedThreadId?: string;
+	}>();
+	const isSelected = !!state?.selectedThreadIds?.has(item.threadId);
+	const selecting = (state?.selectedThreadIds?.size ?? 0) > 0;
+
+	// Correspondants : dans Envoyes et Brouillons, les destinataires ; ailleurs, les expediteurs.
+	const outgoing = activeMailbox.kind === "sent" || isDrafts;
+	const p = item.participants ?? {};
+	const people = outgoing
+		? [...(p.to ?? []), ...(p.cc ?? []), ...(p.bcc ?? [])]
+		: [...(p.from ?? []), ...(p.to ?? [])].filter(
+				(_x, i) =>
+					i < (p.from?.length ?? 0) || (p.from ?? []).every((f) => ownAddresses.has(String(f.e).toLowerCase())),
+			);
+	const { label: whoRaw, primary } = correspondents(people, ownAddresses);
+	const who = isDrafts ? `À : ${people.length ? whoRaw : "(aucun destinataire)"}` : whoRaw;
+	// L'extrait d'un brouillon peut arriver en HTML brut (« <p></p> ») : texte seul.
+	const preview = String(item.previewText ?? "")
+		.replace(/<[^>]*>/g, " ")
+		.replace(/&nbsp;/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	const snoozed = item.snoozedUntil && new Date(item.snoozedUntil).getTime() > Date.now();
+
+	const threadUrl = `/w/${workspacePublicId}/dashboard/mail/${identityPublicId}/${activeMailbox.slug}/threads/${item.threadId}`;
+
+	const toggleSelection = (shiftKey: boolean) => {
+		const id = item.threadId;
+		setState((prev) => {
+			const next = new Set(prev?.selectedThreadIds);
+			const willCheck = !next.has(id);
+			const anchor = prev?.lastSelectedThreadId;
+			const from = anchor ? orderedThreadIds.indexOf(anchor) : -1;
+			const to = orderedThreadIds.indexOf(id);
+			const range =
+				shiftKey && from >= 0 && to >= 0 ? orderedThreadIds.slice(Math.min(from, to), Math.max(from, to) + 1) : [id];
+			for (const t of range) {
+				if (willCheck) next.add(t);
+				else next.delete(t);
+			}
+			return { ...prev, selectedThreadIds: next, lastSelectedThreadId: id };
+		});
+	};
+
+	const openThread = (e: React.MouseEvent) => {
+		// Mode selection (comme la classique) : un clic coche au lieu d'ouvrir.
+		if (selecting) {
+			toggleSelection(e.shiftKey);
+			return;
+		}
+		if (isOnSnoozedPage) {
+			window.location.href = threadUrl;
+			return;
+		}
+		// Retour immediat : surbrillance tout de suite, le contenu suit.
+		setActiveThread(item.threadId);
+		closeCompose();
+		// Lu tout de suite (ligne et compteurs), sans attendre le chargement du fil.
+		if (isUnread && !isTrash) mailActions.read(item.threadId, activeMailbox.id, smtp, 1);
+		router.push(threadUrl);
+	};
+
+	const prefetched = React.useRef(false);
+	const arm = () => {
+		setArmed(true);
+		if (prefetched.current || isOnSnoozedPage) return;
+		prefetched.current = true;
+		router.prefetch(threadUrl);
+	};
+
+	const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+	const starButton = (
+			<button
+				type="button"
+				aria-label={starred ? "Retirer l'étoile" : "Ajouter une étoile"}
+				onClick={(e) => {
+					stop(e);
+					mailActions.star(item.threadId, activeMailbox.id, starred, smtp);
+				}}
+				className={`ml-auto shrink-0 rounded p-0.5 transition-opacity ${
+					starred ? "text-k-star" : "text-k-ink-3 opacity-0 hover:text-k-ink group-hover:opacity-100"
+				}`}
+			>
+				{starred ? <IconStarFilled size={14} /> : <IconStar size={14} />}
+			</button>
+	);
+
+	return (
+		<li
+			role="listitem"
+			data-thread-id={item.threadId}
+			aria-current={isActive ? "true" : undefined}
+			onClick={openThread}
+			onMouseEnter={arm}
+			onFocus={arm}
+			className={[
+				"k-row group relative flex cursor-pointer gap-3 rounded-k px-3 py-2.5 transition-colors",
+				isActive ? "bg-k-selected" : isSelected ? "bg-k-accent-soft" : "hover:bg-k-hover",
+				sending ? "shadow-[inset_3px_0_0_0_var(--k-accent)]" : "",
+			].join(" ")}
+		>
+			<span
+				aria-hidden
+				className={`absolute left-[3px] top-[19px] h-1.5 w-1.5 rounded-full bg-k-accent transition-opacity ${isUnread ? "opacity-100" : "opacity-0"}`}
+			/>
+
+			{/* Avatar / case a cocher : toute la zone est cliquable */}
+			<div
+				className="relative mt-0.5 h-8 w-8 shrink-0"
+				onClick={(e) => {
+					stop(e);
+					if (!isOnSnoozedPage) toggleSelection(e.shiftKey);
+				}}
+			>
+				{!isOnSnoozedPage && (
+					<span
+						className={`absolute inset-0 z-10 flex cursor-pointer items-center justify-center rounded-full bg-k-surface ring-1 ring-k-line-strong transition-opacity ${
+							isSelected || selecting ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+						}`}
+					>
+						<input
+							type="checkbox"
+							checked={isSelected}
+							onChange={() => toggleSelection(false)}
+							aria-label={`Sélectionner « ${item.subject ?? ""} »`}
+							className="pointer-events-none h-4 w-4 accent-[var(--k-accent)]"
+						/>
+					</span>
+				)}
+				<KAvatar name={primary?.n} email={primary?.e ?? whoRaw} size={32} />
+			</div>
+
+			<div className="min-w-0 flex-1">
+				<div className="flex items-baseline gap-2">
+					<span className={`truncate text-[13.5px] ${isUnread ? "font-semibold text-k-ink" : "font-medium text-k-ink-2"}`}>
+						{who}
+					</span>
+					{item.messageCount > 1 && (
+						<span className="shrink-0 rounded-full bg-k-hover px-1.5 text-[11px] font-medium leading-[18px] text-k-ink-3">
+							{item.messageCount}
+						</span>
+					)}
+					<span className="ml-auto flex shrink-0 items-center gap-1.5">
+						<span className="k-row-meta flex items-center gap-1.5 transition-opacity">
+							{item.hasAttachments && <Paperclip className="h-3.5 w-3.5 text-k-ink-3" />}
+							<time
+								className={`text-[12px] tabular-nums ${snoozed ? "text-k-warn" : isUnread ? "font-semibold text-k-accent" : "text-k-ink-3"}`}
+								title={
+									snoozed
+										? `Reporté jusqu'au ${new Date(item.snoozedUntil!).toLocaleString("fr-FR")}`
+										: new Date(item.lastActivityAt).toLocaleString("fr-FR")
+								}
+							>
+								{snoozed ? "Reporté" : listDate(item.lastActivityAt)}
+							</time>
+						</span>
+					</span>
+				</div>
+
+				<div className="mt-0.5 flex items-center gap-1.5">
+					{isDrafts && <DraftSendBadge state={item.draftSend} />}
+					<span className={`truncate text-[13px] ${isUnread ? "font-medium text-k-ink" : "text-k-ink-2"}`}>
+						{item.subject || "(sans objet)"}
+					</span>
+					{!showSnippet && starButton}
+				</div>
+
+				{showSnippet && (
+					<div className="mt-0.5 flex items-center gap-1.5">
+						<LabelRowTag threadId={item.threadId} labelsByThreadId={labelsByThreadId} isRead={!isUnread} />
+						<span className="truncate text-[12.5px] text-k-ink-3">{preview || (isDrafts ? "(brouillon vide)" : "")}</span>
+						{starButton}
+					</div>
+				)}
+			</div>
+
+			{armed && (
+				<div
+					onClick={stop}
+					data-k-small
+					className={`k-row-actions absolute right-2 top-1.5 flex items-center gap-0.5 rounded-k-sm p-0.5 shadow-k-pop ${isActive ? "bg-k-selected" : "bg-k-surface"}`}
+				>
+					<ThreadLabelHoverButtons mailboxThreadItem={item} labelsByThreadId={labelsByThreadId} allLabels={globalLabels} />
+					{!isTrash &&
+						(isUnread ? (
+							<KIconButton size="sm" label="Marquer comme lu" onClick={() => mailActions.read(item.threadId, activeMailbox.id, smtp, 1)}>
+								<MailOpen />
+							</KIconButton>
+						) : (
+							<KIconButton size="sm" label="Marquer comme non lu" onClick={() => mailActions.unread(item.threadId, activeMailbox.id, smtp, 1)}>
+								<Mail />
+							</KIconButton>
+						))}
+					<SnoozeMail mailboxThreadId={item.threadId} activeMailboxId={activeMailbox.id} />
+					{activeMailbox.kind !== "archive" && (
+						<KIconButton size="sm" label="Archiver" onClick={() => mailActions.archive(item.threadId, activeMailbox.id, smtp, isUnread ? 1 : 0)}>
+							<Archive />
+						</KIconButton>
+					)}
+					<KIconButton
+						size="sm"
+						tone="danger"
+						label={isTrash ? "Supprimer définitivement" : "Supprimer"}
+						onClick={() => mailActions.trash(item.threadId, activeMailbox.id, smtp, isTrash, isUnread ? 1 : 0)}
+					>
+						<Trash2 />
+					</KIconButton>
+				</div>
+			)}
+		</li>
+	);
+
+}

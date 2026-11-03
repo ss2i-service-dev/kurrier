@@ -8,6 +8,7 @@ import { Button } from "@mantine/core";
 import { Ellipsis } from "lucide-react";
 import { setRemoteImagesForContact } from "@/lib/actions/contact-images";
 import { toast } from "sonner";
+import { useK } from "@/components/k/ui-context";
 
 const BASE_CSS = `
 :host {
@@ -118,18 +119,68 @@ div[style*="border-left"][style*="solid"] blockquote {
 }
 `;
 
+// ss2i : nouvelle interface (prop adaptTheme). Le corps prend les couleurs du
+// theme (variables --k-* heritees a travers le shadow DOM) au lieu du fond
+// blanc impose. En sombre, un mail HTML (couleurs souvent fixees en dur) est
+// inverse a 90 % (le blanc devient le gris du panneau) et ses images sont
+// re-inversees exactement (invert(1) puis contrast(1.25)) pour garder leurs
+// couleurs. Sans adaptTheme, rien ne change.
+const THEME_CSS = `
+:host { color-scheme: light dark; }
+.email-root.k-theme {
+  --bg: transparent;
+  --text: var(--k-ink, #1b1a19);
+  --muted: var(--k-ink-2, #57534e);
+  --border: var(--k-line, #e8e6e1);
+  --quote-bg: var(--k-surface-2, #f8f7f5);
+  --quote-bar: var(--k-line-strong, #d7d3cc);
+  --link: var(--k-accent, #3555d6);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14.5px;
+}
+.email-root.k-theme.k-dark-html {
+  filter: invert(0.9) hue-rotate(180deg);
+  --text: #1b1a19;
+  --muted: #57534e;
+  --border: #e8e6e1;
+  --quote-bg: #f3f2ef;
+  --quote-bar: #d7d3cc;
+  --link: #2945bd;
+}
+.email-root.k-dark-html img,
+.email-root.k-dark-html video,
+.email-root.k-dark-html picture,
+.email-root.k-dark-html [style*="background-image"] {
+  filter: hue-rotate(180deg) invert(1) contrast(1.25);
+}
+`;
+
 export default function EmailViewer({
 	message,
 	remoteImagesAllowed = false,
 	cidUrls,
+	adaptTheme = false,
 }: {
 	message: MessageEntity;
 	remoteImagesAllowed?: boolean;
 	// ss2i : Content-ID (sans chevrons, en minuscules) -> URL signee de la piece jointe.
 	// Resout les images inline restees en cid: dans le HTML stocke.
 	cidUrls?: Record<string, string>;
+	// ss2i : nouvelle interface, corps adapte au theme (voir THEME_CSS).
+	adaptTheme?: boolean;
 }) {
+	const k = useK(); // ss2i : francais dans la nouvelle interface
 	const hostRef = useRef<HTMLDivElement>(null);
+	const [isDark, setIsDark] = useState(false);
+	useEffect(() => {
+		if (!adaptTheme) return;
+		const html = document.documentElement;
+		const sync = () => setIsDark(html.classList.contains("dark"));
+		sync();
+		const obs = new MutationObserver(sync);
+		obs.observe(html, { attributes: true, attributeFilter: ["class"] });
+		return () => obs.disconnect();
+	}, [adaptTheme]);
 	const [hideQuotes, setHideQuotes] = useState(true);
 
 	const [showRemoteImages, setShowRemoteImages] = useState(remoteImagesAllowed);
@@ -161,7 +212,7 @@ export default function EmailViewer({
 				if (!allowImages) {
 					img.setAttribute("data-blocked-src", src);
 					img.removeAttribute("src");
-					img.setAttribute("alt", img.getAttribute("alt") || "Remote image blocked");
+					img.setAttribute("alt", img.getAttribute("alt") || k("Remote image blocked", "Image distante bloquée"));
 				}
 			}
 		});
@@ -217,7 +268,7 @@ export default function EmailViewer({
 			window.dispatchEvent(new CustomEvent("ss2i:remote-images", { detail: { email: senderEmail, allow } }));
 			if (allow && r?.created) toast.success(`${senderEmail} added to your contacts`);
 		} catch (e: any) {
-			toast.error(e?.message ?? "Could not save the preference");
+			toast.error(e?.message ?? k("Could not save the preference", "Impossible d'enregistrer la préférence"));
 		} finally {
 			setSavingPref(false);
 		}
@@ -237,7 +288,7 @@ export default function EmailViewer({
 				: // ss2i : mail en texte seul ; classe dédiée pour garder retours à la ligne et
 					// alignements (la règle générale `white-space: normal !important` les écrasait),
 					// adresses web rendues cliquables.
-					`<div class="ss2i-plain">${(message.text || "No content")
+					`<div class="ss2i-plain">${(message.text || k("No content", "Aucun contenu"))
 						.toString()
 						.replace(
 							/[<>&]/g,
@@ -260,8 +311,8 @@ export default function EmailViewer({
 		setHasBlockedImages(blocked);
 
 		shadow.innerHTML = `
-      <style>${BASE_CSS}${hideQuotes ? QUOTE_HIDE_CSS : ""}</style>
-      <article class="email-root">${safeHtml}</article>
+      <style>${BASE_CSS}${adaptTheme ? THEME_CSS : ""}${hideQuotes ? QUOTE_HIDE_CSS : ""}</style>
+      <article class="email-root${adaptTheme ? ` k-theme${isDark && message.html?.trim() ? " k-dark-html" : ""}` : ""}">${safeHtml}</article>
     `;
 
 		const root = shadow.querySelector(".email-root") as HTMLElement | null;
@@ -283,32 +334,38 @@ export default function EmailViewer({
 				a.rel = "nofollow noopener noreferrer";
 			});
 		}
-	}, [message.html, message.text, hideQuotes, showRemoteImages, cidUrls]);
+	}, [message.html, message.text, hideQuotes, showRemoteImages, cidUrls, adaptTheme, isDark]);
 
 	return (
-		<div className="mb-10 mt-5 overflow-x-hidden rounded-xl border border-neutral-200 bg-white text-neutral-900 px-6 py-5 dark:border-neutral-700">
+		<div
+			className={
+				adaptTheme
+					? "mt-1 overflow-x-hidden"
+					: "mb-10 mt-5 overflow-x-hidden rounded-xl border border-neutral-200 bg-white text-neutral-900 px-6 py-5 dark:border-neutral-700"
+			}
+		>
 			{hasBlockedImages && (
 				<div className="mb-4 flex flex-wrap items-center gap-2 rounded-md bg-neutral-100 px-3 py-2 text-xs text-neutral-600">
 					{!showRemoteImages ? (
 						<>
-							<span>Remote images are blocked.</span>
+							<span>{k("Remote images are blocked.", "Les images distantes sont bloquées.")}</span>
 							{/* ss2i : charger une fois = charger toujours pour cet expediteur. */}
-							<Button size="xs" variant="default" loading={savingPref} onClick={allowRemoteImagesForSender} title={`Also loads them automatically in future messages from ${senderEmail}`}>
-								Load images
+							<Button size="xs" variant="default" loading={savingPref} onClick={allowRemoteImagesForSender} title={k(`Also loads them automatically in future messages from ${senderEmail}`, `Les charge aussi automatiquement dans les prochains messages de ${senderEmail}`)}>
+								{k("Load images", "Afficher les images")}
 							</Button>
 						</>
 					) : alwaysForSender ? (
 						<>
-							<span>Images from {senderEmail} are loaded automatically.</span>
+							<span>{k(`Images from ${senderEmail} are loaded automatically.`, `Les images de ${senderEmail} sont chargées automatiquement.`)}</span>
 							<Button size="xs" variant="default" loading={savingPref} onClick={blockRemoteImagesAgain}>
-								Stop loading automatically
+								{k("Stop loading automatically", "Arrêter le chargement automatique")}
 							</Button>
 						</>
 					) : (
 						<>
-							<span>Remote images loaded for this message.</span>
+							<span>{k("Remote images loaded for this message.", "Images distantes affichées pour ce message.")}</span>
 							<Button size="xs" variant="default" onClick={() => setShowRemoteImages(false)}>
-								Block again
+								{k("Block again", "Bloquer à nouveau")}
 							</Button>
 						</>
 					)}
@@ -326,7 +383,7 @@ export default function EmailViewer({
 					leftSection={<Ellipsis size={14} />}
 					onClick={() => setHideQuotes((v) => !v)}
 				>
-					{hideQuotes ? "Show previous messages" : "Hide previous messages"}
+					{hideQuotes ? k("Show previous messages", "Afficher les messages précédents") : k("Hide previous messages", "Masquer les messages précédents")}
 				</Button>
 			)}
 		</div>

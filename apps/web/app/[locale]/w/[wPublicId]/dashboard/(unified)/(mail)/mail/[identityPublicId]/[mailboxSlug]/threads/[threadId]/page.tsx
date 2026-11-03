@@ -1,3 +1,5 @@
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import MailboxPage from "../../page";
 import { fetchThreadMailbox } from "@/lib/thread-mailbox";
 import React from "react";
 import {fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
@@ -8,7 +10,7 @@ import ThreadClientsBar from "@/components/mailbox/default/thread-clients-bar";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
 import { threadOrder } from "@/lib/actions/thread-order";
 
-async function Page({
+async function ClassicPage({
 	params,
 }: {
 	params: Promise<{
@@ -72,6 +74,14 @@ async function Page({
 			})}
 		</>
 	);
+}
+
+// ss2i : nouvelle interface : sur un chargement direct de l'URL d'un fil, la
+// colonne liste garde la liste du dossier ; le fil est rendu dans @thread
+// (@thread/threads/[threadId]/page.tsx), comme en navigation douce.
+async function Page(props: { params: Promise<{ identityPublicId: string; mailboxSlug: string; threadId: string }> } & { searchParams: Promise<{ page?: string }> }) {
+	if (await isNouvelleInterface()) return <MailboxPage {...(props as any)} />;
+	return <ClassicPage {...props} />;
 }
 
 export default Page;

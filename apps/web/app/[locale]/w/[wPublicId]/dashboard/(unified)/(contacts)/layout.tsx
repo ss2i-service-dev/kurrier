@@ -1,3 +1,5 @@
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import KAppShell from "@/components/k/app-shell";
 import { SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/ui/dashboards/unified/default/app-sidebar";
 import { fetchContactLabelsWithCounts } from "@/lib/actions/labels";
@@ -10,9 +12,12 @@ import {getWorkspacePublicId} from "@/lib/actions/clients";
 import {Suspense} from "react";
 import Loading from "@/app/loading";
 import NavUserWrapper from "@/components/ui/dashboards/workspace/nav-user-wrapper";
+import KNewContactButton from "@/components/k/new-contact-button";
+import { loadKBooks } from "@/components/k/contacts-data";
+import KContactsNav from "@/components/k/contacts-nav";
 import RenderContactsLabelHomeSidebar from "@/components/dashboard/labels/render-contacts-label-home-sidebar";
 
-export default async function DashboardLayout({
+async function ClassicDashboardLayout({
 	children
 }: {
 	children: React.ReactNode;
@@ -52,5 +57,32 @@ export default async function DashboardLayout({
 			/>
 			<SidebarInset>{children}</SidebarInset>
 		</>
+	);
+}
+
+// ss2i : nouvelle interface (option par utilisateur) : coque de la nouvelle
+// interface, meme navigation et meme contenu.
+export default async function DashboardLayout(props: { children: React.ReactNode }) {
+	if (!(await isNouvelleInterface())) return <ClassicDashboardLayout {...props} />;
+	const [contactLabels, workspacePublicId] = await Promise.all([fetchContactLabelsWithCounts(), getWorkspacePublicId()]);
+	const { books, total } = await loadKBooks();
+	return (
+		<KAppShell
+			action={<KNewContactButton workspacePublicId={workspacePublicId} />}
+			nav={
+				<DynamicContextProvider initialState={{ labels: contactLabels, scope: "contact" as LabelScope, workspacePublicId }}>
+					<Suspense fallback={null}>
+						<KContactsNav
+							workspacePublicId={workspacePublicId}
+							books={books}
+							total={total}
+							globalLabels={contactLabels}
+						/>
+					</Suspense>
+				</DynamicContextProvider>
+			}
+		>
+			{props.children}
+		</KAppShell>
 	);
 }

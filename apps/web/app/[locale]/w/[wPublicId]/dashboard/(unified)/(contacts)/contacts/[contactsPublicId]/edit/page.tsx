@@ -1,3 +1,5 @@
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import KContactForm from "@/components/k/contact-form";
 import React from "react";
 import NewContactForm from "@/components/dashboard/contacts/new-contact-form";
 import { isSignedIn } from "@/lib/actions/auth";
@@ -12,7 +14,7 @@ import {getSignedUrl} from "@aws-sdk/s3-request-presigner";
 import {s3} from "@/lib/create-s3-client";
 import {getRedis} from "@/lib/actions/get-redis";
 
-async function Page({ params }: { params: { contactsPublicId: string } }) {
+async function ClassicPage({ params, nouvelle = false }: { params: { contactsPublicId: string }; nouvelle?: boolean }) {
 	const { contactsPublicId } = await params;
 
 	const rls = await rlsClient();
@@ -83,8 +85,9 @@ async function Page({ params }: { params: { contactsPublicId: string } }) {
 	};
 	const workspacePublicId = await getWorkspacePublicId()
 
+	const ContactForm = nouvelle ? KContactForm : NewContactForm;
 	return (
-		<NewContactForm
+		<ContactForm
 			contact={contact}
 			profilePictureUrl={profilePictureUrl}
 			createContactAction={updateContactAction}
@@ -95,4 +98,8 @@ async function Page({ params }: { params: { contactsPublicId: string } }) {
 	);
 }
 
-export default Page;
+
+// ss2i : nouvelle interface : meme action serveur, formulaire au style Outlook.
+export default async function Page(props: { params: any }) {
+	return <ClassicPage params={props.params} nouvelle={await isNouvelleInterface()} />;
+}

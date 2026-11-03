@@ -1,3 +1,5 @@
+"use client";
+
 import { MailboxThreadEntity } from "@db";
 import {
 	addLabelToThread,
@@ -6,6 +8,7 @@ import {
 	FetchMailboxThreadLabelsResult,
 } from "@/lib/actions/labels";
 import { LabelAssignPopover } from "@/components/dashboard/labels/label-assign-popover";
+import { useK } from "@/components/k/ui-context";
 
 type ThreadLabelHoverButtonsProps = {
 	mailboxThreadItem: MailboxThreadEntity;
@@ -18,6 +21,7 @@ export function ThreadLabelHoverButtons({
 	allLabels,
 	labelsByThreadId,
 }: ThreadLabelHoverButtonsProps) {
+	const k = useK();
 	const labelThreads = labelsByThreadId[mailboxThreadItem.threadId] || [];
 	const selectedLabelIds = labelThreads
 		.map((lt) => lt?.label?.id)
@@ -41,7 +45,7 @@ export function ThreadLabelHoverButtons({
 
 	return (
 		<LabelAssignPopover
-			title="Label message"
+			title={k("Label message", "Libeller le message")}
 			scope="thread"
 			allLabels={allLabels}
 			selectedLabelIds={selectedLabelIds}

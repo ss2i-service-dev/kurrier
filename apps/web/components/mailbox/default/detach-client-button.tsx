@@ -4,6 +4,7 @@ import React, { useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import { detachThreadClient } from "@/lib/actions/thread-clients";
+import { useK } from "@/components/k/ui-context";
 
 // ss2i clients : detache le fil du client (memorise : le rattrapage ne le remet pas).
 export default function DetachClientButton({
@@ -17,6 +18,7 @@ export default function DetachClientButton({
 	companyId: number;
 	name: string;
 }) {
+	const k = useK();
 	const [pending, startTransition] = useTransition();
 	const router = useRouter();
 	const pathname = usePathname();
@@ -24,10 +26,11 @@ export default function DetachClientButton({
 		<button
 			type="button"
 			disabled={pending}
-			title={`Not ${name}: detach this thread from the client`}
+			title={k(`Not ${name}: detach this thread from the client`, `Pas ${name} : détacher ce fil du client`)}
+			aria-label={k(`Detach this thread from ${name}`, `Détacher ce fil de ${name}`)}
 			className="ml-0.5 rounded-full opacity-50 hover:opacity-100 disabled:opacity-30"
 			onClick={() => {
-				if (!window.confirm(`Detach this thread from ${name}?`)) return;
+				if (!window.confirm(k(`Detach this thread from ${name}?`, `Détacher ce fil de ${name} ?`))) return;
 				startTransition(async () => {
 					await detachThreadClient(threadId, identityPublicId, companyId, pathname);
 					router.refresh();

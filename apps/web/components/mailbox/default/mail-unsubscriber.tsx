@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { chooseUnsubscribeMethod } from "@common/list-unsubscribe";
 import { confirmUnsubscribed, unsubscribeFromMail } from "@/lib/actions/unsubscribe";
 import BlockSenderModal from "@/components/mailbox/default/block-sender-modal";
+import { useK, useNouvelle } from "@/components/k/ui-context";
 
 // ss2i : desinscription en un clic (cf. lib/actions/unsubscribe.ts). Le bouton est mis en
 // avant dans l'en-tete du mail ; le resultat est toujours visible (toast, puis badge).
@@ -19,6 +20,7 @@ function UnsubscribeControl({ mailSubscription, message, onBlock }: {
     mailSubscription: MailSubscriptionEntity | null;
     onBlock: (t: BlockTarget) => void;
 }) {
+    const k = useK();
     const pathname = usePathname();
     const [busy, setBusy] = useState(false);
     // Etat local : la page n'est pas forcement rechargee apres l'action.
@@ -33,7 +35,7 @@ function UnsubscribeControl({ mailSubscription, message, onBlock }: {
     if (status === "unsubscribed") {
         return (
             <Badge size="sm" color="gray" variant="light" className="mt-0.5">
-                Unsubscribed
+                {k("Unsubscribed", "Désinscrit")}
             </Badge>
         );
     }
@@ -42,9 +44,9 @@ function UnsubscribeControl({ mailSubscription, message, onBlock }: {
         const res = await confirmUnsubscribed({ mailSubscriptionId: mailSubscription.id, pathname });
         if (res.success) {
             setLocal("unsubscribed");
-            toast.success("Unsubscribed", { position: "bottom-left" });
+            toast.success(k("Unsubscribed", "Désinscription effectuée"), { position: "bottom-left" });
         } else {
-            toast.error(res.error ?? "Update failed", { position: "bottom-left" });
+            toast.error(res.error ?? k("Update failed", "Échec de la mise à jour"), { position: "bottom-left" });
         }
     };
 
@@ -52,7 +54,7 @@ function UnsubscribeControl({ mailSubscription, message, onBlock }: {
         return (
             <div className="flex items-center gap-2">
                 <Badge size="sm" color="yellow" variant="light">
-                    Finish on the sender&apos;s page
+                    {k("Finish on the sender's page", "À terminer sur la page de l'expéditeur")}
                 </Badge>
                 {mailSubscription.unsubscribeHttpUrl && (
                     <Button
@@ -64,11 +66,11 @@ function UnsubscribeControl({ mailSubscription, message, onBlock }: {
                         variant="subtle"
                         rightSection={<ExternalLink size={12} />}
                     >
-                        Reopen
+                        {k("Reopen", "Rouvrir")}
                     </Button>
                 )}
                 <Button size="compact-xs" variant="light" onClick={markDone}>
-                    Done
+                    {k("Done", "Terminé")}
                 </Button>
             </div>
         );
@@ -77,7 +79,7 @@ function UnsubscribeControl({ mailSubscription, message, onBlock }: {
     if (method === "none") {
         return (
             <Badge size="sm" color="gray" variant="light">
-                No unsubscribe link
+                {k("No unsubscribe link", "Pas de lien de désinscription")}
             </Badge>
         );
     }
@@ -95,7 +97,7 @@ function UnsubscribeControl({ mailSubscription, message, onBlock }: {
             });
             if (!res.success || !res.data) {
                 win?.close();
-                toast.error(res.error ?? "Unsubscribe failed", { position: "bottom-left", duration: 8000 });
+                toast.error(res.error ?? k("Unsubscribe failed", "Échec de la désinscription"), { position: "bottom-left", duration: 8000 });
                 return;
             }
             const { status: st, domain, openUrl, block } = res.data;
@@ -103,9 +105,12 @@ function UnsubscribeControl({ mailSubscription, message, onBlock }: {
                 if (win && openUrl) win.location.href = openUrl;
                 else if (openUrl) window.open(openUrl, "_blank");
                 setLocal("pending");
-                toast.message("Finish on the sender's page", {
+                toast.message(k("Finish on the sender's page", "À terminer sur la page de l'expéditeur"), {
                     position: "bottom-left",
-                    description: "Complete the unsubscribe on the page that just opened, then press Done.",
+                    description: k(
+                        "Complete the unsubscribe on the page that just opened, then press Done.",
+                        "Terminez la désinscription sur la page qui vient de s'ouvrir, puis appuyez sur Terminé.",
+                    ),
                     duration: 10000,
                 });
                 return;
@@ -114,16 +119,16 @@ function UnsubscribeControl({ mailSubscription, message, onBlock }: {
             const target = block.domain
                 ? { kind: "domain" as const, value: block.domain }
                 : { kind: "address" as const, value: block.address };
-            toast.success(`Unsubscribed from ${domain || target.value}`, {
+            toast.success(k(`Unsubscribed from ${domain || target.value}`, `Désinscription de ${domain || target.value}`), {
                 position: "bottom-left",
                 duration: 12000,
                 action: target.value
-                    ? { label: `Also block ${target.value}`, onClick: () => onBlock(target) }
+                    ? { label: k(`Also block ${target.value}`, `Bloquer aussi ${target.value}`), onClick: () => onBlock(target) }
                     : undefined,
             });
         } catch (e: any) {
             win?.close();
-            toast.error(e?.message ?? "Unsubscribe failed", { position: "bottom-left", duration: 8000 });
+            toast.error(e?.message ?? k("Unsubscribe failed", "Échec de la désinscription"), { position: "bottom-left", duration: 8000 });
         } finally {
             setBusy(false);
         }
@@ -139,13 +144,13 @@ function UnsubscribeControl({ mailSubscription, message, onBlock }: {
             onClick={run}
             title={
                 method === "one-click"
-                    ? "Unsubscribe automatically"
+                    ? k("Unsubscribe automatically", "Se désinscrire automatiquement")
                     : method === "mailto"
-                      ? "Send the unsubscribe mail automatically"
-                      : "Open the sender's unsubscribe page"
+                      ? k("Send the unsubscribe mail automatically", "Envoyer automatiquement le message de désinscription")
+                      : k("Open the sender's unsubscribe page", "Ouvrir la page de désinscription de l'expéditeur")
             }
         >
-            Unsubscribe
+            {k("Unsubscribe", "Se désinscrire")}
         </Button>
     );
 }

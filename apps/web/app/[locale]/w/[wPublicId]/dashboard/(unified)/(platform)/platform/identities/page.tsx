@@ -1,3 +1,5 @@
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import KIdentitiesPage from "@/components/k/platform/identities-page";
 import React from "react";
 import MailIdentities from "@/components/dashboard/identities/mail-identities";
 import {
@@ -15,7 +17,7 @@ import {
 	fetchWorkspaceMembers, workspaceIdentityAssignments
 } from "@/lib/actions/workspace";
 
-async function Page() {
+async function ClassicPage() {
 	const [userSmtpAccounts, userProviderAccounts] = await Promise.all([
 		fetchDecryptedSecrets({
 			linkTable: smtpAccountSecrets,
@@ -87,4 +89,8 @@ async function Page() {
 	);
 }
 
-export default Page;
+// ss2i : nouvelle interface (option par utilisateur) : page refaite dans components/k/platform.
+export default async function Page() {
+	if (!(await isNouvelleInterface())) return <ClassicPage />;
+	return <KIdentitiesPage />;
+}

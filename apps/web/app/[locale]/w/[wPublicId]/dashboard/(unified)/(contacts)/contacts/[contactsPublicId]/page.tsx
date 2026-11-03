@@ -25,8 +25,10 @@ import ContactListAvatar from "@/components/dashboard/contacts/contact-list-avat
 import {getRedis} from "@/lib/actions/get-redis";
 import {isSignedIn} from "@/lib/actions/auth";
 import {generateSignedUrl} from "@common";
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import KContactPage from "@/components/k/contact-page";
 
-async function Page({ params }: { params: { contactsPublicId: string } }) {
+async function ClassicPage({ params }: { params: { contactsPublicId: string } }) {
 	const { contactsPublicId } = await params;
 
 	const rls = await rlsClient();
@@ -404,4 +406,9 @@ async function Page({ params }: { params: { contactsPublicId: string } }) {
 	);
 }
 
-export default Page;
+
+// ss2i : nouvelle interface : fiche au style Outlook (components/k/contact-page.tsx).
+export default async function Page(props: { params: any }) {
+	if (!(await isNouvelleInterface())) return <ClassicPage {...props} />;
+	return <KContactPage params={props.params} />;
+}

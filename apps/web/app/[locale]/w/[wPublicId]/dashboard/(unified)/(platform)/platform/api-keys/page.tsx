@@ -1,10 +1,12 @@
+import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import { KApiKeysPage } from "@/components/k/platform/simple-pages";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import React from "react";
 import ManageApiKeys from "@/components/dashboard/api-keys/manage-api-keys";
 import { fetchUserAPIKeys } from "@/lib/actions/dashboard";
 
-export default async function Page() {
+async function ClassicPage() {
 	const apiKeysList = await fetchUserAPIKeys();
 	return (
 		<>
@@ -22,4 +24,10 @@ export default async function Page() {
 			</div>
 		</>
 	);
+}
+
+// ss2i : nouvelle interface (option par utilisateur) : page refaite dans components/k/platform.
+export default async function Page() {
+	if (!(await isNouvelleInterface())) return <ClassicPage />;
+	return <KApiKeysPage />;
 }

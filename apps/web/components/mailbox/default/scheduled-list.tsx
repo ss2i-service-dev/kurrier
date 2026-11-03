@@ -6,6 +6,8 @@ import { Clock, Paperclip, Trash } from "lucide-react";
 import dayjs from "dayjs";
 import { ReusableFormButton } from "@/components/common/reusable-form-button";
 import { deleteScheduledDraft } from "@/lib/actions/mailbox";
+import { useNouvelle } from "@/components/k/ui-context";
+import { KEmptyState } from "@/components/k/section";
 
 type DraftMessageRow = {
 	id: string;
@@ -134,6 +136,56 @@ function ScheduledListItem({ draft }: { draft: DraftMessageRow }) {
 	);
 }
 
+// ss2i : ligne de la nouvelle interface (meme donnees, meme action de suppression).
+function KScheduledItem({ draft }: { draft: DraftMessageRow }) {
+	const when = draft.scheduledAt ?? draft.updatedAt ?? draft.createdAt;
+	const d = when ? new Date(when) : null;
+	const whenLabel =
+		d && !Number.isNaN(d.getTime())
+			? d.toLocaleString("fr-FR", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+			: "";
+	const raw = draft.payload?.to;
+	const toLabel = !raw
+		? "Aucun destinataire"
+		: Array.isArray(raw)
+			? raw.filter(Boolean).slice(0, 3).map(String).join(", ") + (raw.length > 3 ? "…" : "")
+			: String(raw);
+	const subject = draft.payload?.subject ? String(draft.payload.subject) : "(sans objet)";
+	const preview = getPreview(draft.payload);
+	return (
+		<li className="group flex items-start gap-3 rounded-k px-3 py-2.5 transition-colors hover:bg-k-hover">
+			<div className="min-w-0 flex-1">
+				<div className="flex items-center gap-2">
+					<span className="truncate text-[13.5px] font-semibold text-k-ink">À : {toLabel}</span>
+					{hasAttachments(draft.payload) && <Paperclip className="h-3.5 w-3.5 shrink-0 text-k-ink-3" />}
+				</div>
+				<div className="truncate text-[13px] text-k-ink-2">
+					{subject}
+					{preview && <span className="text-k-ink-3"> – {preview}</span>}
+				</div>
+				<div className="mt-1 flex items-center gap-1.5 text-[12px] text-k-accent">
+					<Clock className="h-3.5 w-3.5" />
+					<span className="whitespace-nowrap">Envoi prévu le {whenLabel}</span>
+				</div>
+			</div>
+			<ReusableFormButton
+				action={deleteScheduledDraft}
+				actionIcon={true}
+				actionIconProps={{
+					size: "sm",
+					variant: "subtle",
+					color: "red",
+					children: <Trash size={14} />,
+					title: "Annuler l'envoi programmé",
+					"aria-label": "Annuler l'envoi programmé",
+				}}
+			>
+				<input type="hidden" name="draftId" value={draft.id} />
+			</ReusableFormButton>
+		</li>
+	);
+}
+
 export default function ScheduledList({
 	drafts,
 	title,
@@ -148,6 +200,26 @@ export default function ScheduledList({
 				return aa - bb;
 			});
 	}, [drafts]);
+
+	const nouvelle = useNouvelle();
+	if (nouvelle) {
+		if (scheduledDrafts.length === 0) {
+			return (
+				<KEmptyState
+					icon={<Clock size={22} strokeWidth={1.6} />}
+					title="Aucun envoi programmé"
+					text="Programmez l'envoi d'un message depuis la fenêtre de rédaction : il apparaîtra ici jusqu'à son départ."
+				/>
+			);
+		}
+		return (
+			<ul role="list" className="space-y-px px-1.5 pb-2">
+				{scheduledDrafts.map((draft) => (
+					<KScheduledItem key={draft.id} draft={draft} />
+				))}
+			</ul>
+		);
+	}
 
 	if (scheduledDrafts.length === 0) {
 		return (

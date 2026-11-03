@@ -34,6 +34,7 @@ import AddNewFolder from "@/components/mailbox/default/add-new-folder";
 import { Menu, Select } from "@mantine/core";
 import DeleteMailboxFolder from "@/components/mailbox/default/delete-folder";
 import { setIdentityCollapsed } from "@/lib/actions/collapsed-identities";
+import { useK } from "@/components/k/ui-context";
 import type { IdentityClients as IdentityClientsData } from "@/lib/actions/thread-clients";
 import { IconMailFast } from "@tabler/icons-react";
 
@@ -189,7 +190,7 @@ function IdentityExtraCounts({
 // La section se replie (chevron), etat garde par identite dans le navigateur.
 const SIDEBAR_CLIENTS = 20;
 
-function IdentityClients({
+export function IdentityClients({
 	identity,
 	clientsPromise,
 	workspacePublicId,
@@ -200,6 +201,7 @@ function IdentityClients({
 	workspacePublicId: string | undefined;
 	pathname: string;
 }) {
+	const k = useK(); // ss2i : francais dans la nouvelle interface
 	const all = use(clientsPromise);
 	const entry = all.find((e) => e.identityId === identity.id);
 	const [filter, setFilter] = React.useState("");
@@ -232,8 +234,8 @@ function IdentityClients({
 					type="button"
 					onClick={toggleCollapsed}
 					className="p-0.5 text-sidebar-foreground/60 hover:text-sidebar-foreground"
-					title={collapsed ? "Show clients" : "Hide clients"}
-					aria-label={collapsed ? "Show clients" : "Hide clients"}
+					title={collapsed ? k("Show clients", "Afficher les clients") : k("Hide clients", "Masquer les clients")}
+					aria-label={collapsed ? k("Show clients", "Afficher les clients") : k("Hide clients", "Masquer les clients")}
 					aria-expanded={!collapsed}
 				>
 					{collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
@@ -243,12 +245,12 @@ function IdentityClients({
 					className={`px-1 text-xs font-semibold flex items-center gap-1 hover:text-sidebar-foreground ${
 						isIndex ? "text-sidebar-foreground" : "text-sidebar-foreground/60"
 					}`}
-					title="All clients"
+					title={k("All clients", "Tous les clients")}
 				>
 					<Building2 className="h-3.5 w-3.5 shrink-0" />
 					<span>Clients ({entry.clients.length})</span>
 					{collapsed && unreadClients > 0 && (
-						<span className="ml-1 rounded bg-brand/20 px-1 text-[10px] font-semibold text-brand" title="Clients with unread messages">
+						<span className="ml-1 rounded bg-brand/20 px-1 text-[10px] font-semibold text-brand" title={k("Clients with unread messages", "Clients avec des messages non lus")}>
 							{unreadClients}
 						</span>
 					)}
@@ -259,7 +261,7 @@ function IdentityClients({
 					type="text"
 					value={filter}
 					onChange={(e) => setFilter(e.target.value)}
-					placeholder="Filter clients"
+					placeholder={k("Filter clients", "Filtrer les clients")}
 					className="mx-1.5 my-1 w-[calc(100%-12px)] rounded border bg-transparent px-2 py-1 text-xs outline-none focus:border-brand"
 				/>
 			)}
@@ -279,13 +281,13 @@ function IdentityClients({
 						>
 							<span className={`truncate text-sm ${unread ? "font-semibold" : "font-normal"}`}>{c.name}</span>
 							{unread > 0 && (
-								<span className="ml-auto shrink-0 text-xs font-semibold text-brand" title={`${unread} unread`}>
+								<span className="ml-auto shrink-0 text-xs font-semibold text-brand" title={k(`${unread} unread`, `${unread} non lu(s)`)}>
 									{unread}
 								</span>
 							)}
 							<span
 								className={`${unread > 0 ? "" : "ml-auto "}shrink-0 text-xs text-sidebar-foreground/60`}
-								title={`${c.threadCount} conversations`}
+								title={k(`${c.threadCount} conversations`, `${c.threadCount} conversation(s)`)}
 							>
 								{unread > 0 ? `/ ${c.threadCount}` : c.threadCount}
 							</span>
@@ -293,11 +295,11 @@ function IdentityClients({
 					);
 				})}
 				{needle && shown.length === 0 && (
-					<div className="px-2 py-1 text-xs text-sidebar-foreground/60">No client matches</div>
+					<div className="px-2 py-1 text-xs text-sidebar-foreground/60">{k("No client matches", "Aucun client ne correspond")}</div>
 				)}
 				{!needle && entry.clients.length > SIDEBAR_CLIENTS && (
 					<Link href={base} className="mx-1.5 block p-1.5 pl-2 text-xs text-sidebar-foreground/60 hover:text-sidebar-foreground">
-						All clients ({entry.clients.length})
+						{k("All clients", "Tous les clients")} ({entry.clients.length})
 					</Link>
 				)}
 			</div>}

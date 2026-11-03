@@ -8,6 +8,7 @@ import {
 	FetchIdentityMailboxListResult,
 } from "@/lib/actions/mailbox";
 import { useMailboxOptions } from "@/hooks/use-mailbox-options";
+import { useK, useNouvelle } from "@/components/k/ui-context";
 
 export default function AddNewFolder({
 	mailboxes,
@@ -16,6 +17,7 @@ export default function AddNewFolder({
 	mailboxes: FetchIdentityMailboxListResult[number]["mailboxes"];
 	identity: FetchIdentityMailboxListResult[number]["identity"];
 }) {
+	const k = useK();
 	const [opened, { open, close }] = useDisclosure(false);
 
 	const { options: mailboxOptions } = useMailboxOptions({
@@ -26,7 +28,7 @@ export default function AddNewFolder({
 	const fields = [
 		{
 			name: "name",
-			label: "Folder Name",
+			label: k("Folder Name", "Nom du dossier"),
 			wrapperClasses: "col-span-12",
 			props: {},
 		},
@@ -42,7 +44,7 @@ export default function AddNewFolder({
 		},
 		{
 			name: "parentId",
-			label: "Nest Folder Under (Optional)",
+			label: k("Nest Folder Under (Optional)", "Placer dans (facultatif)"),
 			kind: "select" as const,
 			options: mailboxOptions,
 			wrapperClasses: "col-span-12",
@@ -57,7 +59,7 @@ export default function AddNewFolder({
 
 	return (
 		<>
-			<Modal opened={opened} onClose={close} title="New folder">
+			<Modal opened={opened} onClose={close} title={k("New folder", "Nouveau dossier")}>
 				<ReusableForm
 					fields={fields}
 					onSuccess={close}
@@ -65,7 +67,7 @@ export default function AddNewFolder({
 				/>
 			</Modal>
 
-			<ActionIcon size={10} onClick={open}>
+			<ActionIcon size={10} onClick={open} aria-label={k("New folder", "Nouveau dossier")}>
 				<Plus />
 			</ActionIcon>
 		</>

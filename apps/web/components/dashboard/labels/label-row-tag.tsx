@@ -1,6 +1,8 @@
 import React from "react";
 import { Badge } from "@mantine/core";
 import { useParams } from "next/navigation";
+import { useNouvelle } from "@/components/k/ui-context";
+import { frLabelName } from "@/components/k/fr-messages";
 import { FetchMailboxThreadLabelsResult } from "@/lib/actions/labels";
 
 type LabelRowTagProps = {
@@ -12,6 +14,7 @@ type LabelRowTagProps = {
 function LabelRowTag({ threadId, labelsByThreadId, isRead }: LabelRowTagProps) {
 	const labelThreads = labelsByThreadId[threadId] ?? [];
 
+	const nouvelle = useNouvelle();
 	const { labelSlug } = useParams<{ labelSlug?: string }>();
 	const slug =
 		typeof labelSlug === "string" ? labelSlug.toLowerCase() : undefined;
@@ -36,7 +39,7 @@ function LabelRowTag({ threadId, labelsByThreadId, isRead }: LabelRowTagProps) {
 				radius="md"
 				variant="filled"
 			>
-				{label.name}
+				{frLabelName(label.name, nouvelle)}
 			</Badge>
 		);
 	});

@@ -9,6 +9,7 @@ import { parseSecret } from "@/lib/utils";
 import { imapQuotaList } from "@schema";
 import {Checkbox, MultiSelect, Select} from "@mantine/core";
 import {FetchWorkspaceMembersResult} from "@/lib/actions/workspace";
+import { useNouvelle } from "@/components/k/ui-context";
 
 function AddEmailIdentityForm({
 	onCompleted,
@@ -27,6 +28,8 @@ function AddEmailIdentityForm({
 	userDomainIdentities: FetchUserIdentitiesResult;
 	userEmailIdentities: FetchUserIdentitiesResult;
 }) {
+	// ss2i : textes francais dans la nouvelle interface
+	const nv = useNouvelle();
 	const [provider, setProvider] = React.useState<
 		FetchDecryptedSecretsResult[number] | null
 	>(null);
@@ -62,7 +65,7 @@ function AddEmailIdentityForm({
 		return [
 			{
 				name: "value",
-				label: "Email address",
+				label: nv ? "Adresse e-mail" : "Email address",
 				required: true,
 				wrapperClasses: "col-span-12",
 				props: {
@@ -74,13 +77,14 @@ function AddEmailIdentityForm({
 			},
 			{
 				name: "displayName",
-				label: "Display Name",
+				label: nv ? "Nom affiché" : "Display Name",
 				required: true,
 				wrapperClasses: "col-span-12",
 				bottomStartPrefix: (
 					<span className={"text-xs"}>
-						This name will appear as the organizer when you create calendar
-						events or send invitations.
+						{nv
+							? "Ce nom apparaît comme organisateur lorsque vous créez des événements d'agenda ou envoyez des invitations."
+							: "This name will appear as the organizer when you create calendar events or send invitations."}
 					</span>
 				),
 				props: {
@@ -90,8 +94,8 @@ function AddEmailIdentityForm({
 			},
 			{
 				name: "dailyQuota",
-				label: "Daily IMAP quota (Used for backfilling older mails)",
-				labelSuffix: "(Default: 500 MB per day)",
+				label: nv ? "Quota IMAP quotidien (récupération des anciens messages)" : "Daily IMAP quota (Used for backfilling older mails)",
+				labelSuffix: nv ? "(par défaut : 500 Mo par jour)" : "(Default: 500 MB per day)",
 				kind: "select" as const,
 				defaultValue: "500",
 				options: imapQuotaList.map((quota) => {
@@ -122,7 +126,7 @@ function AddEmailIdentityForm({
 		return [
 			{
 				name: "domain",
-				label: "Choose a verified domain",
+				label: nv ? "Domaine vérifié" : "Choose a verified domain",
 				kind: "select" as const,
 				options: userDomainIdentities
 					?.filter((userDomainIdentity) => {
@@ -149,13 +153,14 @@ function AddEmailIdentityForm({
 			},
 			{
 				name: "displayName",
-				label: "Display Name",
+				label: nv ? "Nom affiché" : "Display Name",
 				required: true,
 				wrapperClasses: "col-span-12",
 				bottomStartPrefix: (
 					<span className={"text-xs"}>
-						This name will appear as the organizer when you create calendar
-						events or send invitations.
+						{nv
+							? "Ce nom apparaît comme organisateur lorsque vous créez des événements d'agenda ou envoyez des invitations."
+							: "This name will appear as the organizer when you create calendar events or send invitations."}
 					</span>
 				),
 				props: {
@@ -165,18 +170,20 @@ function AddEmailIdentityForm({
 			},
 			{
 				name: "local",
-				label: "Local part",
+				label: nv ? "Partie locale" : "Local part",
 				wrapperClasses: "col-span-12",
 				props: {
 					defaultValue: localPart,
 					autoComplete: "off",
-					placeholder: "e.g. support",
+					placeholder: nv ? "ex. contact" : "e.g. support",
 					required: true,
 					onInput: (e: any) => setLocalPart(e.target.value),
 				},
 				bottomStartPrefix: (
 					<p className="text-xs text-muted-foreground">
-						The part before the “@”. Example: <code>support</code> → support@…
+						{nv
+							? <>La partie avant le « @ ». Exemple : <code>contact</code> → contact@…</>
+							: <>The part before the “@”. Example: <code>support</code> → support@…</>}
 					</p>
 				),
 			},
@@ -212,7 +219,7 @@ function AddEmailIdentityForm({
 	const fields = [
 		{
 			name: "provider",
-			label: "Choose a verified provider",
+			label: nv ? "Fournisseur vérifié" : "Choose a verified provider",
 			kind: "select" as const,
 			options: providerOptions,
 			wrapperClasses: "col-span-12",
@@ -244,7 +251,7 @@ function AddEmailIdentityForm({
 			el: <>
 				{composedEmail && provider?.linkRow.providerId === activeId && (
 					<div className="mt-3 p-3 border rounded-md bg-muted text-sm text-muted-foreground text-center">
-						Preview:
+						{nv ? "Aperçu :" : "Preview:"}
 						<span className="mx-2 font-medium text-foreground">
 						{composedEmail}{" "}
 					</span>
@@ -255,7 +262,7 @@ function AddEmailIdentityForm({
 		},
 		{
 			name: "shared",
-			label: <div className={"flex flex-col"}>Share this identity with workspace members <span className={"text-xxs"}>(All members in this workspace will be able to access this identity. A workspace needs to have a default identity.)</span></div>,
+			label: <div className={"flex flex-col"}>{nv ? "Partager cette identité avec les membres de l'espace de travail" : "Share this identity with workspace members"} <span className={"text-xxs"}>{nv ? "(Tous les membres de l'espace de travail pourront l'utiliser. Un espace de travail doit avoir une identité par défaut.)" : "(All members in this workspace will be able to access this identity. A workspace needs to have a default identity.)"}</span></div>,
 			kind: "custom" as const,
 			component: Checkbox,
 			wrapperClasses: provider || smtpAccount ? "flex col-span-12 flex-row-reverse gap-2 justify-end" : "hidden",
@@ -272,7 +279,7 @@ function AddEmailIdentityForm({
 				? []
 				: [{
 					name: "workspaceMembers",
-					label: "Assign to workspace members",
+					label: nv ? "Attribuer à des membres de l'espace de travail" : "Assign to workspace members",
 					kind: "custom" as const,
 					component: MultiSelect,
 					wrapperClasses: provider || smtpAccount ? "col-span-12" : "hidden",
@@ -284,7 +291,7 @@ function AddEmailIdentityForm({
 						})),
 						minLength: 1,
 						required: true,
-						placeholder: "Select members",
+						placeholder: nv ? "Choisir des membres" : "Select members",
 						className: "w-full",
 					},
 				}]
@@ -302,6 +309,9 @@ function AddEmailIdentityForm({
 				onSuccess={finalizeEmail}
 				fields={fields}
 				formKey={String(activeId)}
+				submitButtonProps={
+					nv ? { submitLabel: "Ajouter l'adresse", wrapperClasses: "mt-8", fullWidth: true } : undefined
+				}
 			/>
 		</div>
 	);

@@ -29,6 +29,8 @@ export type ClientRow = {
 	name: string;
 	ebpCustomerId: string | null;
 	threadCount: number;
+	// ss2i : fils non lus du client (liste de la barre laterale seulement).
+	unreadCount?: number;
 	lastActivityAt: string;
 };
 
@@ -44,6 +46,16 @@ const liveThreadCondition = sql`EXISTS (
 	JOIN mailboxes mb ON mb.id = mt.mailbox_id
 	WHERE mt.thread_id = ${threadClients.threadId}
 	  AND mt.identity_id = ${threadClients.identityId}
+	  AND mb.kind NOT IN ('trash', 'spam')
+)`;
+
+// ss2i : fil non lu = au moins un message non lu dans un dossier hors corbeille et spam.
+const unreadThreadCondition = sql`EXISTS (
+	SELECT 1 FROM mailbox_threads mt
+	JOIN mailboxes mb ON mb.id = mt.mailbox_id
+	WHERE mt.thread_id = ${threadClients.threadId}
+	  AND mt.identity_id = ${threadClients.identityId}
+	  AND mt.unread_count > 0
 	  AND mb.kind NOT IN ('trash', 'spam')
 )`;
 
@@ -79,6 +91,7 @@ export const fetchIdentityClients = cache(async (): Promise<IdentityClients[]> =
 			name: crmCompanies.name,
 			ebpCustomerId: crmCompanies.ebpCustomerId,
 			threadCount: sql<number>`count(*)`,
+			unreadCount: sql<number>`count(*) filter (where ${unreadThreadCondition})`,
 			lastActivityAt: sql<Date>`max(${threadClients.lastActivityAt})`,
 		})
 		.from(threadClients)
@@ -91,7 +104,12 @@ export const fetchIdentityClients = cache(async (): Promise<IdentityClients[]> =
 			),
 		)
 		.groupBy(threadClients.identityId, threadClients.crmCompanyId, crmCompanies.name, crmCompanies.ebpCustomerId)
-		.orderBy(desc(sql`max(${threadClients.lastActivityAt})`), asc(crmCompanies.name));
+		// ss2i : clients avec des fils non lus d'abord, puis derniere activite.
+		.orderBy(
+			desc(sql`(count(*) filter (where ${unreadThreadCondition})) > 0`),
+			desc(sql`max(${threadClients.lastActivityAt})`),
+			asc(crmCompanies.name),
+		);
 	return idents.map((i) => ({
 		identityId: i.id,
 		identityPublicId: i.publicId,
@@ -102,6 +120,7 @@ export const fetchIdentityClients = cache(async (): Promise<IdentityClients[]> =
 				name: r.name,
 				ebpCustomerId: r.ebpCustomerId,
 				threadCount: Number(r.threadCount),
+				unreadCount: Number(r.unreadCount),
 				lastActivityAt: new Date(r.lastActivityAt).toISOString(),
 			})),
 	}));

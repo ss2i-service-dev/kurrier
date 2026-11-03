@@ -7,7 +7,7 @@ import { Archive, ArrowLeft, ChevronDown, ChevronUp, Mail, Trash2, X } from "luc
 import KIconButton from "@/components/k/icon-button";
 import SnoozeMail from "@/components/k/snooze";
 import { IconPin, IconPinnedOff } from "@tabler/icons-react";
-import { isManuallyUnread, isMarkedRead, mailActions, useMailStore } from "@/components/k/mail-store";
+import { isManuallyUnread, isMarkedRead, mailActions, setActiveThread, setClosingThread, useMailStore } from "@/components/k/mail-store";
 
 /** Lignes de la liste visibles, dans l'ordre affiche. */
 function rows(): HTMLElement[] {
@@ -34,10 +34,15 @@ export default function ThreadToolbar({
 	const router = useRouter();
 	const pathname = usePathname() ?? "";
 	const listUrl = pathname.replace(/\/threads\/[^/]+\/?$/, "");
-	// Fermer le fil : la liste est deja affichee, inutile de la redemander au
-	// serveur. Un pushState natif suffit (Next le synchronise avec usePathname,
-	// et le panneau de lecture se masque d'apres le chemin).
-	const close = () => window.history.pushState(null, "", listUrl);
+	// Fermer le fil : vraie navigation vers la liste (le routeur de Next doit
+	// savoir que le fil est ferme, sinon l'actualisation suivante, apres lu / non
+	// lu..., ne correspond plus et recharge toute la page). Le panneau de lecture
+	// se masque tout de suite, sans attendre la reponse.
+	const close = () => {
+		setClosingThread(threadId);
+		setActiveThread(null);
+		router.push(listUrl, { scroll: false });
+	};
 
 	// Ouvrir un fil le marque lu : tout de suite a l'ecran, en arriere-plan au serveur.
 	const marked = useRef<string | null>(null);

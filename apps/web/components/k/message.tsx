@@ -96,6 +96,9 @@ function KMessage({
 	const to = addrList(message, "to");
 	const cc = addrList(message, "cc");
 	const toLine = [...to, ...cc].map(who).filter(Boolean);
+	// Pieces jointes reelles (les images affichees dans le corps, signatures
+	// comprises, ne comptent pas).
+	const realFiles = (attachments ?? []).filter((a) => !inlineShownIds.includes(a.id)).length;
 	const snippet = String(message.snippet ?? message.text ?? "").replace(/\s+/g, " ").slice(0, 200);
 
 	// Blocage de l'expediteur (meme regles que la classique : pas les domaines grand public).
@@ -133,7 +136,7 @@ function KMessage({
 					{fromMe ? "Moi" : fromName}
 				</span>
 				<span className="min-w-0 flex-1 truncate text-[13px] text-k-ink-3">{snippet}</span>
-				{attachments?.length > 0 && <Paperclip className="h-3.5 w-3.5 shrink-0 text-k-ink-3" />}
+				{realFiles > 0 && <Paperclip className="h-3.5 w-3.5 shrink-0 text-k-ink-3" />}
 				<time className="shrink-0 text-[12px] tabular-nums text-k-ink-3" title={fullDate(message.createdAt)}>
 					{listDate(message.createdAt)}
 				</time>

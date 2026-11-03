@@ -10,7 +10,9 @@ import {
 	companiesOf,
 	crmCompanyUrl,
 	externalAddresses,
+	htmlToPlainLines,
 	isAutomatedAddress,
+	quotedHeaderAddresses,
 	isProIdentity,
 	normalizeEmail,
 	parseDomainList,
@@ -108,6 +110,20 @@ test("societes d'un fil : une par id, adresse exacte prime sur domaine, non ratt
 test("URL de la fiche CRM : defaut, base sans barre finale", () => {
 	assert.equal(crmCompanyUrl(undefined, 12), "https://crm.ss2i-services.fr/companies/12");
 	assert.equal(crmCompanyUrl("https://crm.test/", 12), "https://crm.test/companies/12");
+});
+
+test("en-tetes d'un message transfere dans le corps (Outlook FR, Gmail EN, HTML)", () => {
+	const outlook = "Bien cordialement,\nHugo\ncontact@ss2i-services.fr\n\nDe : Sylvain Darroy <s.darroy@groupe-libaud.fr>\nEnvoy\u00e9 : lundi 2 novembre 2026 17:13\n\u00c0 : Hugo Mayonobe <hugo@ss2i-services.fr>\nCc : a@x.fr; B <b@y.fr>\nObjet : SOAP LIBAUD\n\nvoir support@editeur.com";
+	assert.deepEqual(quotedHeaderAddresses(outlook), ["s.darroy@groupe-libaud.fr", "hugo@ss2i-services.fr", "a@x.fr", "b@y.fr"]);
+	assert.deepEqual(quotedHeaderAddresses("---------- Forwarded message ---------\nFrom: Jane <jane@client.com>\nTo: me@ss2i-digital.fr"), ["jane@client.com", "me@ss2i-digital.fr"]);
+	assert.deepEqual(quotedHeaderAddresses("> *From:* x@c.fr"), ["x@c.fr"]);
+	const html = "<p>Bonjour</p><div><b>De&nbsp;:</b> Sylvain Darroy &lt;s.darroy@groupe-libaud.fr&gt;<br><b>Objet :</b> SOAP</div>";
+	assert.deepEqual(quotedHeaderAddresses(htmlToPlainLines(html)), ["s.darroy@groupe-libaud.fr"]);
+	assert.deepEqual(
+		externalAddresses([{ value: [{ address: "hugo@ss2i-services.fr" }] }, quotedHeaderAddresses(outlook)], DEFAULT_INTERNAL_DOMAINS.split(",")),
+		["s.darroy@groupe-libaud.fr", "a@x.fr", "b@y.fr"],
+	);
+	assert.deepEqual(quotedHeaderAddresses(null), []);
 });
 
 if (failures) {

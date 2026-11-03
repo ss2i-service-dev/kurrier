@@ -64,6 +64,8 @@ function MailListHeader({
 		identityPublicId: string;
 		// ss2i : la selection couvre tout le dossier ou toute la recherche, pages invisibles comprises.
 		allMatching?: boolean;
+		// Plafond atteint : seuls les plus recents sont selectionnes.
+		allMatchingTruncated?: boolean;
 	}>();
 
 	const identityIdRef = useRef<string | undefined>(activeMailbox?.identityId);
@@ -112,11 +114,12 @@ function MailListHeader({
 		try {
 			const { ids, truncated } = await fetchAllThreadIds(selectAllScope);
 			const next = new Set<string>([...visibleIds, ...ids]);
-			setState((prev) => ({ ...prev, selectedThreadIds: next, allMatching: true }));
-			if (truncated)
-				toast.warning(`Selection limited to the ${next.size} most recent conversations`, {
-					position: "bottom-left",
-				});
+			setState((prev) => ({
+				...prev,
+				selectedThreadIds: next,
+				allMatching: true,
+				allMatchingTruncated: truncated,
+			}));
 		} catch (e: any) {
 			toast.error(e?.message ?? "Selection failed", { position: "bottom-left" });
 		} finally {
@@ -369,7 +372,9 @@ function MailListHeader({
 					{allMatching ? (
 						<>
 							<span>
-								All {selectedSize} conversations {scopeLabel} are selected.
+								{state?.allMatchingTruncated
+									? `The ${selectedSize} most recent conversations ${scopeLabel} are selected (limit).`
+									: `All ${selectedSize} conversations ${scopeLabel} are selected.`}
 							</span>
 							<button type="button" onClick={clearSelection} className="font-semibold text-brand hover:underline">
 								Clear selection

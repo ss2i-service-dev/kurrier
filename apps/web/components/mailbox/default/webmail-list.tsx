@@ -93,7 +93,7 @@ export default function WebmailList({
 	useSendRefresh(anySendTracked(mailboxThreads.map((t) => t.draftSend)));
 
 	return (
-		<div className={onThread ? "hidden" : ""}>
+		<div className={onThread ? "hidden" : ""} data-ss2i-mail-list="">
 			<DynamicContextProvider
 				initialState={{
 					selectedThreadIds: new Set(),

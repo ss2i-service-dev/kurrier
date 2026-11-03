@@ -420,7 +420,8 @@ export default function IdentityMailboxesList({
 							<Icon className="h-4 w-4 shrink-0" />
 							<span className="truncate">
 								{m.kind === "custom" ? (m.name ?? "Mailbox") : TITLE[m.kind]}
-								{m.unread > 0 && <span> ({m.unread})</span>}
+								{/* ss2i : pas de compteur sur Archive, il n'apporte rien */}
+								{m.unread > 0 && m.kind !== "archive" && <span> ({m.unread})</span>}
 							</span>
 						</Link>
 

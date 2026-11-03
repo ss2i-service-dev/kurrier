@@ -74,6 +74,7 @@ export default async function ClientThreadsPage({
 					identityMailboxes={identityMailboxes}
 					globalLabels={globalLabels}
 					labelsByThreadId={labelsByThreadId}
+					keepArchived
 				/>
 			)}
 

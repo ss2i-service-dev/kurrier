@@ -162,6 +162,7 @@ function EmailRenderer({
 			message: "Archived",
 			run: () => archiveThread(id, activeMailboxId, markSmtp, true),
 			failure: "Archive failed",
+			archive: true,
 		});
 		leaveThread();
 	};

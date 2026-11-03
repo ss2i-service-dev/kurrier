@@ -9,22 +9,24 @@ import { toast } from "sonner";
 // Duree de vie bornee : si le deplacement echoue sans erreur remontee, le fil
 // revient a l'affichage suivant au lieu de disparaitre pour toujours.
 const TTL_MS = 10 * 60 * 1000;
-const pending = new Map<string, number>();
+// ss2i : valeur = echeance et nature du depart. Archiver ne fait que sortir le fil de
+// l'Inbox : un dossier client (qui montre aussi les archives) le garde a l'ecran.
+const pending = new Map<string, { until: number; archive: boolean }>();
 const listeners = new Set<() => void>();
-let snapshot = new Set<string>();
+let snapshot = new Map<string, boolean>();
 
 const key = (mailboxId: string, threadId: string) => `${mailboxId}:${threadId}`;
 
 function publish() {
 	const now = Date.now();
-	for (const [k, until] of pending) if (until < now) pending.delete(k);
-	snapshot = new Set(pending.keys());
+	for (const [k, v] of pending) if (v.until < now) pending.delete(k);
+	snapshot = new Map([...pending].map(([k, v]) => [k, v.archive]));
 	listeners.forEach((l) => l());
 }
 
-export function hideThreads(mailboxId: string, threadIds: string[]) {
+export function hideThreads(mailboxId: string, threadIds: string[], archive = false) {
 	const until = Date.now() + TTL_MS;
-	threadIds.forEach((id) => pending.set(key(mailboxId, id), until));
+	threadIds.forEach((id) => pending.set(key(mailboxId, id), { until, archive }));
 	publish();
 }
 
@@ -38,8 +40,9 @@ export async function optimisticMove<T>(
 	mailboxId: string,
 	threadIds: string[],
 	run: () => Promise<T>,
+	archive = false,
 ): Promise<T> {
-	hideThreads(mailboxId, threadIds);
+	hideThreads(mailboxId, threadIds, archive);
 	try {
 		return await run();
 	} catch (err) {
@@ -60,6 +63,7 @@ export function moveWithUndo<T>({
 	run,
 	onDone,
 	failure = "Action failed, messages restored",
+	archive = false,
 }: {
 	mailboxId: string;
 	threadIds: string[];
@@ -67,13 +71,14 @@ export function moveWithUndo<T>({
 	run: () => Promise<T>;
 	onDone?: (result: T) => void;
 	failure?: string;
+	archive?: boolean;
 }) {
 	if (!threadIds.length) return;
-	hideThreads(mailboxId, threadIds);
+	hideThreads(mailboxId, threadIds, archive);
 	const fire = () => {
 		clearTimeout(timer);
 		waiting.delete(fire);
-		optimisticMove(mailboxId, threadIds, run)
+		optimisticMove(mailboxId, threadIds, run, archive)
 			.then((r) => onDone?.(r))
 			.catch((e: any) =>
 				toast.error(e?.message ?? failure, { position: "bottom-left" }),
@@ -106,10 +111,13 @@ const subscribe = (l: () => void) => {
 	listeners.add(l);
 	return () => listeners.delete(l);
 };
-const empty = new Set<string>();
+const empty = new Map<string, boolean>();
 
-export function useHiddenThreads() {
+// keepArchived : vue qui contient aussi les archives (dossier client), un fil archive y reste.
+export function useHiddenThreads({ keepArchived = false }: { keepArchived?: boolean } = {}) {
 	const hidden = useSyncExternalStore(subscribe, () => snapshot, () => empty);
-	return (mailboxId: string, threadId: string) =>
-		hidden.has(key(mailboxId, threadId));
+	return (mailboxId: string, threadId: string) => {
+		const k = key(mailboxId, threadId);
+		return hidden.has(k) && !(keepArchived && hidden.get(k));
+	};
 }

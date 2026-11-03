@@ -1,5 +1,6 @@
+import { fetchThreadMailbox } from "@/lib/thread-mailbox";
 import React, {Suspense} from "react";
-import {fetchMailbox, fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
+import {fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
 import ThreadItem from "@/components/mailbox/default/thread-item";
 import { Divider } from "@mantine/core";
 import {MessageEntity} from "@db";
@@ -17,12 +18,12 @@ async function Page({
 	}>;
 }) {
 	const { threadId, identityPublicId, mailboxSlug } = await params;
-	const { activeMailbox, mailboxSync } = await fetchMailbox(
+	const activeThread = await fetchWebMailThreadDetail(threadId);
+	const { activeMailbox, mailboxSync } = await fetchThreadMailbox(
 		identityPublicId,
 		mailboxSlug,
+		activeThread?.messages ?? [],
 	);
-
-	const activeThread = await fetchWebMailThreadDetail(threadId);
 
     const { byMessageId } = await fetchThreadMailSubscriptions({
         ownerId: activeMailbox.ownerId,

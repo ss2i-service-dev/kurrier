@@ -7,14 +7,14 @@ import { FileText, FileImage, FileVideo, FileAudio, CalendarDays, Paperclip } fr
 import mime from "mime-types";
 import {MessageAttachmentWithUrl} from "@/components/mailbox/default/email-renderer";
 
-function formatBytes(bytes?: number | null) {
+export function formatBytes(bytes?: number | null) {
     if (!bytes || bytes <= 0) return null;
     const kb = bytes / 1024;
     if (kb < 1024) return `${kb.toFixed(1)} KB`;
     return `${(kb / 1024).toFixed(1)} MB`;
 }
 
-function getKind(a: MessageAttachmentEntity) {
+export function getKind(a: MessageAttachmentEntity) {
     const ct = (a.contentType || "").toLowerCase();
     const name = (a.filenameOriginal || "").toLowerCase();
     const ext = name.includes(".") ? name.split(".").pop() || "" : "";
@@ -30,7 +30,7 @@ function getKind(a: MessageAttachmentEntity) {
     return "file";
 }
 
-function KindIcon({ kind }: { kind: string }) {
+export function KindIcon({ kind }: { kind: string }) {
     if (kind === "image") return <FileImage className="h-4 w-4" />;
     if (kind === "pdf") return <FileText className="h-4 w-4" />;
     if (kind === "video") return <FileVideo className="h-4 w-4" />;

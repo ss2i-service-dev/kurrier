@@ -50,7 +50,7 @@ export default async function KThreadItem({
 	if (message.draft) {
 		const original = await fetchDraftOriginal((message.metaData as any)?.draft?.originalMessageId);
 		return (
-			<div className="border-b border-k-line py-4">
+			<div className="k-msg-card rounded-k-pane border border-k-line bg-k-surface px-4 py-3">
 				<DraftThreadItem draft={message} original={original} publicConfig={publicConfig} identityMailboxes={identityMailboxes} />
 			</div>
 		);

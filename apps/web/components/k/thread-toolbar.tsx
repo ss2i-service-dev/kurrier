@@ -7,7 +7,7 @@ import { Archive, ArrowLeft, ChevronDown, ChevronUp, Mail, Trash2, X } from "luc
 import KIconButton from "@/components/k/icon-button";
 import SnoozeMail from "@/components/k/snooze";
 import { IconPin, IconPinnedOff } from "@tabler/icons-react";
-import { isMarkedRead, mailActions, useMailStore } from "@/components/k/mail-store";
+import { isManuallyUnread, isMarkedRead, mailActions, useMailStore } from "@/components/k/mail-store";
 
 /** Lignes de la liste visibles, dans l'ordre affiche. */
 function rows(): HTMLElement[] {
@@ -44,6 +44,9 @@ export default function ThreadToolbar({
 	useEffect(() => {
 		if (!hasUnread || marked.current === threadId) return;
 		marked.current = threadId;
+		// remis en non lu a la main : on le laisse non lu (le panneau peut etre
+		// redessine apres l'actualisation qui suit l'action)
+		if (isManuallyUnread(threadId)) return;
 		// deja fait au clic dans la liste (ouverture depuis la liste)
 		if (isMarkedRead(threadId)) return;
 		mailActions.read(threadId, activeMailboxId, markSmtp, 1);

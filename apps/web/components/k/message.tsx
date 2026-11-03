@@ -7,7 +7,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
-import { Ban, Code, Download, EllipsisVertical, Forward, Paperclip, Reply, ReplyAll } from "lucide-react";
+import { Ban, ChevronUp, Code, Download, EllipsisVertical, Forward, Paperclip, Reply, ReplyAll } from "lucide-react";
+import { useExpandSignal } from "@/components/k/thread-messages";
 import { Menu, Modal } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { PublicConfig } from "@schema";
@@ -66,6 +67,19 @@ function KMessage({
 	const isLast = threadIndex === numberOfMessages - 1;
 	const [expanded, setExpanded] = useState<boolean>(defaultExpanded || isLast);
 	const [showDetails, setShowDetails] = useState(false);
+	// « Tout deplier / Tout replier » (au-dessus des messages).
+	const signal = useExpandSignal();
+	useEffect(() => {
+		if (signal) setExpanded(signal.mode === "expand");
+	}, [signal]);
+	// Clic sur l'en-tete d'un message deplie : on le replie, sauf sur un bouton,
+	// un lien, ou une selection de texte en cours.
+	const onHeaderClick = (e: React.MouseEvent) => {
+		const t = e.target as HTMLElement;
+		if (t.closest("button, a, input, [role='menu'], [role='menuitem']")) return;
+		if (window.getSelection()?.toString()) return;
+		setExpanded(false);
+	};
 
 	const own = useMemo(
 		() => (identityMailboxes ?? []).map((im) => String(im.identity.value)),
@@ -111,10 +125,11 @@ function KMessage({
 			<button
 				type="button"
 				onClick={() => setExpanded(true)}
-				className="group/msg flex w-full items-center gap-3 border-b border-k-line px-1 py-2.5 text-left transition-colors hover:bg-k-surface-2"
+				aria-expanded={false}
+				className="k-msg-card group/msg flex w-full items-center gap-3 rounded-k-pane border border-k-line bg-k-surface px-4 py-2.5 text-left transition-colors hover:border-k-line-strong hover:bg-k-surface-2"
 			>
-				<KAvatar name={fromName} email={fromEmail} size={26} />
-				<span className="w-36 shrink-0 truncate text-[13px] font-medium text-k-ink sm:w-44">
+				<KAvatar name={fromName} email={fromEmail} size={28} />
+				<span className="w-36 shrink-0 truncate text-[13.5px] font-medium text-k-ink sm:w-44">
 					{fromMe ? "Moi" : fromName}
 				</span>
 				<span className="min-w-0 flex-1 truncate text-[13px] text-k-ink-3">{snippet}</span>
@@ -137,7 +152,7 @@ function KMessage({
 		);
 
 	return (
-		<article className={`group/msg py-5 ${isLast ? "" : "border-b border-k-line"}`}>
+		<article aria-expanded className="k-msg-card group/msg rounded-k-pane border border-k-line bg-k-surface shadow-k-pane">
 			<Modal opened={opened} onClose={close} title="Message original" size="xl">
 				<div className="overflow-hidden rounded-k border border-k-line text-[13px]">
 					{[
@@ -163,15 +178,12 @@ function KMessage({
 			)}
 
 			{/* En-tete */}
-			<header className="flex items-start gap-3">
-				<button
-					type="button"
-					onClick={() => !isLast && setExpanded(false)}
-					className={isLast ? "cursor-default" : ""}
-					aria-label={isLast ? undefined : "Replier"}
-				>
-					<KAvatar name={fromName} email={fromEmail} size={34} />
-				</button>
+			<header
+				onClick={onHeaderClick}
+				title="Cliquer pour replier"
+				className="flex cursor-pointer items-start gap-3 rounded-t-k-pane px-4 pb-3 pt-3.5 transition-colors hover:bg-k-surface-2/60"
+			>
+				<KAvatar name={fromName} email={fromEmail} size={34} />
 				<div className="min-w-0 flex-1">
 					<div className="flex items-baseline gap-2">
 						<span className="truncate text-[14px] font-semibold text-k-ink">{fromMe ? "Moi" : fromName}</span>
@@ -259,11 +271,14 @@ function KMessage({
 							</Menu.Dropdown>
 						</Menu>
 					</div>
+					<KIconButton size="sm" label="Replier" onClick={() => setExpanded(false)}>
+						<ChevronUp />
+					</KIconButton>
 				</div>
 			</header>
 
 			{/* Corps */}
-			<div className="mt-4">
+			<div className="border-t border-k-line px-4 pb-4 pt-4">
 				{invite}
 				{children}
 

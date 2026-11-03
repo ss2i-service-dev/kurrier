@@ -37,7 +37,8 @@ export type ComposeInput = {
 	orig?: ComposeOriginal | null;
 	rfcStyle?: boolean;
 	quoteScope?: QuoteScope | null;
-	// Reponse seulement : corps cite modifie par l'utilisateur, ou citation supprimee.
+	// Corps cite modifie par l'utilisateur (reponse ou transfert), ou citation supprimee
+	// (reponse seulement).
 	quoteOverride?: QuoteOverride;
 };
 
@@ -505,8 +506,10 @@ export function composeMessage(input: ComposeInput) {
 		subject = "(no subject)";
 	}
 
-	// Citation modifiee ou supprimee : reponse seulement, un transfert l'ignore.
-	const override = isReply ? (input.quoteOverride ?? null) : null;
+	// Citation modifiee (reponse et transfert) ou supprimee (reponse seulement : un
+	// transfert garde toujours le message transfere).
+	const rawOverride = isReply || isForward ? (input.quoteOverride ?? null) : null;
+	const override = isForward && rawOverride?.mode === "none" ? null : rawOverride;
 	const noQuote = override?.mode === "none";
 	const quote = noQuote
 		? { attribution: "", text: "", html: "" }

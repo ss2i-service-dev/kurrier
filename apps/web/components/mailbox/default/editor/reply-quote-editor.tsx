@@ -18,6 +18,7 @@ import {
 // restauration, changement de portee), sinon le curseur sauterait a chaque frappe.
 export default function ReplyQuoteEditor({
 	message,
+	forward = false,
 	quoteScope,
 	timeZone,
 	rfcStyle,
@@ -26,6 +27,8 @@ export default function ReplyQuoteEditor({
 	onChange,
 }: {
 	message: MessageEntity;
+	// Transfert : libelle « Forwarded message », pas de « Don't quote ».
+	forward?: boolean;
 	quoteScope: QuoteScope;
 	// MAIL_TIMEZONE (publicConfig) : le meme fuseau que le worker.
 	timeZone?: string | null;
@@ -59,10 +62,11 @@ export default function ReplyQuoteEditor({
 
 	// Mode auto : le corps calcule suit la portee ; l'effet est idempotent.
 	useEffect(() => {
-		if (mode === "auto" && elRef.current) elRef.current.innerHTML = computed.body;
-	}, [mode, computed.body]);
+		if ((mode === "auto" || (forward && mode === "none")) && elRef.current)
+			elRef.current.innerHTML = computed.body;
+	}, [mode, forward, computed.body]);
 
-	if (mode === "none") {
+	if (mode === "none" && !forward) {
 		return (
 			<div className="px-3 pt-2 text-xs text-neutral-500">
 				No quoted message.{" "}
@@ -81,24 +85,27 @@ export default function ReplyQuoteEditor({
 		<div className="px-3 pt-2">
 			<div className="flex items-center gap-3 text-xs text-neutral-500 mb-1">
 				<span>
-					Quoted message (editable) -{" "}
-					{quoteScope === "last" ? "last message only" : "whole thread"}
+					{forward
+						? "Forwarded message (editable)"
+						: `Quoted message (editable) - ${quoteScope === "last" ? "last message only" : "whole thread"}`}
 				</span>
 				<button
 					type="button"
 					className="underline hover:text-neutral-800 disabled:opacity-40 disabled:no-underline"
-					disabled={mode === "auto"}
+					disabled={mode !== "custom"}
 					onClick={() => onChange("auto", "")}
 				>
 					Restore quote
 				</button>
-				<button
-					type="button"
-					className="underline hover:text-neutral-800"
-					onClick={() => onChange("none", "")}
-				>
-					Don&apos;t quote
-				</button>
+				{!forward && (
+					<button
+						type="button"
+						className="underline hover:text-neutral-800"
+						onClick={() => onChange("none", "")}
+					>
+						Don&apos;t quote
+					</button>
+				)}
 			</div>
 			<div className="text-xs text-neutral-500 mb-1">{computed.attribution}</div>
 			<div

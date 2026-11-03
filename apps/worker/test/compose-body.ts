@@ -460,11 +460,13 @@ test("quoteOverride none : aucune attribution ni blockquote, style d'origine et 
 	}
 });
 
-test("quoteOverride ignore par un transfert, null et absent inchanges", () => {
+test("transfert : none ignore, custom remplace le corps transfere, null et absent inchanges", () => {
 	const base = { mode: "forward" as const, text: "Voir ci-dessous.", html: "<p>Voir</p>", orig };
 	const ref = composeMessage(base);
 	assert.deepEqual(composeMessage({ ...base, quoteOverride: { mode: "none" } }), ref);
-	assert.deepEqual(composeMessage({ ...base, quoteOverride: { mode: "custom", html: EDITED } }), ref);
+	const edited = composeMessage({ ...base, quoteOverride: { mode: "custom", html: EDITED } });
+	assert.ok(edited.html.includes(EDITED) && edited.html.includes("Forwarded message:"));
+	assert.notDeepEqual(edited, ref);
 	const rep = { mode: "reply" as const, text: "Oui.", html: "<p>Oui.</p>", orig, rfcStyle: true };
 	assert.deepEqual(composeMessage({ ...rep, quoteOverride: null }), composeMessage(rep));
 });

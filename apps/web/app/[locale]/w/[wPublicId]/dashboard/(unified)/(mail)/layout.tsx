@@ -13,6 +13,7 @@ import {listPreviewMode} from "@/lib/actions/list-preview";
 import {ListPreviewProvider} from "@/components/mailbox/default/list-preview-context";
 import {rfcStyleEnabled} from "@/lib/actions/rfc-style";
 import {ComposeStyleProvider} from "@/components/mailbox/default/compose-style-context";
+import DraftBackupRecovery from "@/components/mailbox/default/draft-backup-recovery";
 
 export default async function DashboardLayout({
 	children
@@ -29,6 +30,7 @@ export default async function DashboardLayout({
 
 	return (
 		<ComposeStyleProvider rfcStyle={rfcStyle}>
+			<DraftBackupRecovery />
 			<AppSidebar
 				workspacePublicId={workspacePublicId}
 				sidebarTopContent={

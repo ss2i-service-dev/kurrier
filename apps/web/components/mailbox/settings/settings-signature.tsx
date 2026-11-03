@@ -36,10 +36,13 @@ export default function SettingsSignature({
 		else if (formState.success) toast.success(k("Signature saved", "Signature enregistrée"));
 	}, [formState]);
 
-	const preview = useMemo(
-		() => (typeof window === "undefined" ? "" : DOMPurify.sanitize(html)),
-		[html],
-	);
+	// ss2i : apercu calcule apres le montage. Calcule pendant le rendu, il etait
+	// vide cote serveur et rempli cote navigateur : React ne corrige pas un
+	// innerHTML different a l'hydratation, l'apercu restait vide jusqu'a la
+	// premiere modification.
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
+	const preview = useMemo(() => (mounted ? DOMPurify.sanitize(html) : ""), [html, mounted]);
 
 	return (
 		<SectionCard

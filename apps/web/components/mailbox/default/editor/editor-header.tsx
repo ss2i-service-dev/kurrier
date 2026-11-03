@@ -361,9 +361,9 @@ Bcc
 				) : null}
 				<input type={"hidden"} name={"mode"} value={serverMode} />
 
-				<div className="flex-grow flex justify-between">
-					<div className="flex gap- items-stretch flex-col justify-start">
-						<RecipientDropZone name="to" className="flex items-center gap-2"> <span className="text-sm text-muted-foreground">To</span>
+				<div className="flex-grow flex justify-between gap-2 min-w-0">
+					<div className="flex flex-1 min-w-0 items-stretch flex-col justify-start">
+						<RecipientDropZone name="to" className="grid grid-cols-[2.5rem_1fr] items-start gap-2 py-1"> <span className="text-sm font-medium text-muted-foreground text-right leading-7">To</span>
 							<EmailHeaderContacts
 								key={`to-${mode}`}
 								name={"to"}
@@ -374,7 +374,7 @@ Bcc
 									}
 								}}
 							/> </RecipientDropZone> {ccActive && (
-							<RecipientDropZone name="cc" className="flex items-center gap-2"> <span className="text-sm text-muted-foreground">Cc</span>
+							<RecipientDropZone name="cc" className="grid grid-cols-[2.5rem_1fr] items-start gap-2 py-1 border-t border-border/60"> <span className="text-sm font-medium text-muted-foreground text-right leading-7">Cc</span>
 								<EmailHeaderContacts
 									key={`cc-${mode}`}
 									name={"cc"}
@@ -385,7 +385,7 @@ Bcc
 										}
 									}}
 								/> </RecipientDropZone> )} {bccActive && (
-							<RecipientDropZone name="bcc" className="flex items-center gap-2"> <span className="text-sm text-muted-foreground">Bcc</span>
+							<RecipientDropZone name="bcc" className="grid grid-cols-[2.5rem_1fr] items-start gap-2 py-1 border-t border-border/60"> <span className="text-sm font-medium text-muted-foreground text-right leading-7">Bcc</span>
 								<EmailHeaderContacts
 									name={"bcc"}
 									defaultValues={bccValues}

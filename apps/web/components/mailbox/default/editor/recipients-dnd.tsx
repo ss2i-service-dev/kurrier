@@ -22,6 +22,9 @@ type Ctx = {
 	move: (email: string, from: RecipientField, to: RecipientField) => void;
 	// Toutes les adresses saisies, To, Cc et Bcc confondus (suggestions par association).
 	all: () => string[];
+	// Champ d'origine du glisser en cours (null hors glisser) : les zones de depot s'affichent.
+	dragging: RecipientField | null;
+	setDragging: (f: RecipientField | null) => void;
 };
 
 const RecipientsDnDContext = createContext<Ctx | null>(null);
@@ -87,7 +90,22 @@ export function RecipientsDnDProvider({
 		[],
 	);
 
-	const value = useMemo(() => ({ register, move, all }), [register, move, all]);
+	const [dragging, setDragging] = useState<RecipientField | null>(null);
+	// La pastille glissee est demontee par le deplacement : son dragend n'arrive jamais.
+	// Fin de glisser lue au niveau de la fenetre (drop, dragend, ou souris qui bouge a
+	// nouveau, aucun mousemove n'etant emis pendant un glisser).
+	useEffect(() => {
+		if (!dragging) return;
+		const end = () => setDragging(null);
+		const events = ["drop", "dragend", "mousemove"] as const;
+		events.forEach((ev) => window.addEventListener(ev, end, true));
+		return () => events.forEach((ev) => window.removeEventListener(ev, end, true));
+	}, [dragging]);
+
+	const value = useMemo(
+		() => ({ register, move, all, dragging, setDragging }),
+		[register, move, all, dragging],
+	);
 	return (
 		<RecipientsDnDContext.Provider value={value}>
 			{children}
@@ -114,7 +132,13 @@ export function RecipientDropZone({
 
 	return (
 		<Tag
-			className={`${className} ${over ? "rounded outline-dashed outline-1 outline-primary bg-primary/10" : ""}`}
+			className={`${className} rounded transition-colors ${
+				over
+					? "outline-dashed outline-2 outline-primary bg-primary/15"
+					: dnd?.dragging && dnd.dragging !== name
+						? "outline-dashed outline-1 outline-primary/50"
+						: ""
+			}`}
 			onDragOver={(e: React.DragEvent) => {
 				if (!accepts(e)) return;
 				e.preventDefault();
@@ -126,6 +150,7 @@ export function RecipientDropZone({
 			}}
 			onDrop={(e: React.DragEvent) => {
 				setOver(false);
+				dnd?.setDragging(null);
 				if (!accepts(e)) return;
 				e.preventDefault();
 				try {

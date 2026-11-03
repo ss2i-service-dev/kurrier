@@ -282,9 +282,10 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				}
 			}
 			toast.success("Draft discarded", { position: "bottom-left" });
+			// discardDraft revalide les pages (compteur Drafts, liste) ; un router.refresh()
+			// ici annulerait la navigation de handleClose quand le brouillon est ouvert en page.
 			handleClose();
-			router.refresh();
-		}, [handleClose, params.identityPublicId, router]);
+		}, [handleClose, params.identityPublicId]);
 
 		const draftContext: DraftContext = {
 			id: draftId,

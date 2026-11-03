@@ -382,6 +382,16 @@ export async function sendMail(
 			error: "Please provide at least one recipient in the To field.",
 		};
 	}
+	// ss2i : un destinataire sans adresse (« dev ») etait ignore a l'envoi sans rien dire.
+	const badRecipients = (["to", "cc", "bcc"] as const)
+		.flatMap((f) => toArray(decodedForm[f] as any))
+		.filter((a) => !/^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/.test(a.replace(/^.*<([^<>]*)>\s*$/, "$1").trim()));
+	if (badRecipients.length) {
+		return {
+			success: false,
+			error: `Not an email address: ${badRecipients.join(", ")}. Nothing was sent.`,
+		};
+	}
 
 	const scheduledAtRaw = decodedForm.scheduledAt
 		? String(decodedForm.scheduledAt)

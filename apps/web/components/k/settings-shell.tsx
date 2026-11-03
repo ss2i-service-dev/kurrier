@@ -64,7 +64,7 @@ export default function KSettingsShell({
 				</nav>
 			</aside>
 			<div className="k-scroll min-w-0 flex-1 overflow-y-auto bg-k-surface-2/60">
-				<div className="k-fade-in mx-auto max-w-3xl space-y-4 px-4 py-5 md:px-8 md:py-7">{children}</div>
+				<div className="k-fade-in space-y-4 px-4 py-5 md:px-8 md:py-7">{children}</div>
 			</div>
 		</div>
 	);

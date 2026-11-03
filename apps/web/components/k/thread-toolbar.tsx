@@ -7,6 +7,7 @@ import { Archive, ArrowLeft, ChevronDown, ChevronUp, Mail, Trash2, X } from "luc
 import KIconButton from "@/components/k/icon-button";
 import SnoozeMail from "@/components/k/snooze";
 import { IconPin, IconPinnedOff } from "@tabler/icons-react";
+import { useShortcutHint } from "@/components/k/shortcuts-config";
 import { isManuallyUnread, isMarkedRead, mailActions, setActiveThread, setClosingThread, useMailStore } from "@/components/k/mail-store";
 
 /** Lignes de la liste visibles, dans l'ordre affiche. */
@@ -90,28 +91,38 @@ export default function ThreadToolbar({
 		close();
 	};
 
+	// Touches affichees dans les infobulles : celles de l'utilisateur (Parametres).
+	const hint = {
+		close: useShortcutHint("close"),
+		archive: useShortcutHint("archive"),
+		delete: useShortcutHint("delete"),
+		unread: useShortcutHint("unread"),
+		prev: useShortcutHint("prev"),
+		next: useShortcutHint("next"),
+	};
+
 	return (
 		<div className="flex h-12 shrink-0 items-center gap-0.5 border-b border-k-line px-2">
-			<KIconButton label="Fermer" shortcut="Échap" action="close" onClick={close}>
+			<KIconButton label="Fermer" shortcut={hint.close} action="close" onClick={close}>
 				<ArrowLeft className="lg:hidden" />
 				<X className="hidden lg:block" />
 			</KIconButton>
 			<span className="mx-1.5 h-5 w-px bg-k-line" />
 			{activeMailboxKind !== "archive" && (
-				<KIconButton label="Archiver" shortcut="A" action="archive" onClick={archive}>
+				<KIconButton label="Archiver" shortcut={hint.archive} action="archive" onClick={archive}>
 					<Archive />
 				</KIconButton>
 			)}
 			<KIconButton
 				label={activeMailboxKind === "trash" ? "Supprimer définitivement" : "Supprimer"}
-				shortcut="E"
+				shortcut={hint.delete}
 				tone="danger"
 				action="delete"
 				onClick={trash}
 			>
 				<Trash2 />
 			</KIconButton>
-			<KIconButton label="Marquer comme non lu" shortcut="U" action="unread" onClick={unread}>
+			<KIconButton label="Marquer comme non lu" shortcut={hint.unread} action="unread" onClick={unread}>
 				<Mail />
 			</KIconButton>
 			<SnoozeMail mailboxThreadId={threadId} activeMailboxId={activeMailboxId} />
@@ -124,10 +135,10 @@ export default function ThreadToolbar({
 			</KIconButton>
 
 			<div className="ml-auto flex items-center">
-				<KIconButton label="Fil précédent" shortcut="K" onClick={() => go(-1)}>
+				<KIconButton label="Fil précédent" shortcut={hint.prev} onClick={() => go(-1)}>
 					<ChevronUp />
 				</KIconButton>
-				<KIconButton label="Fil suivant" shortcut="J" onClick={() => go(1)}>
+				<KIconButton label="Fil suivant" shortcut={hint.next} onClick={() => go(1)}>
 					<ChevronDown />
 				</KIconButton>
 			</div>

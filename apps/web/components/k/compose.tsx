@@ -11,6 +11,7 @@ import {FetchIdentityMailboxListResult, fetchMailbox} from "@/lib/actions/mailbo
 import { useParams, useRouter } from "next/navigation";
 import { closeCompose, openCompose, setComposeParked, useMailStore } from "@/components/k/mail-store";
 import { useMediaQuery } from "@mantine/hooks";
+import { useShortcutHint } from "@/components/k/shortcuts-config";
 
 function Portal({ children }: { children: React.ReactNode }) {
 	const elRef = useRef<HTMLDivElement | null>(null);
@@ -43,6 +44,8 @@ export default function KCompose({
 	// Mobile : fenetre plein ecran locale. Ordinateur : le nouveau message
 	// occupe le panneau de lecture (etat partage dans components/k/mail-store).
 	const [mobileOpen, setMobileOpen] = useState(false);
+	// Touche de « Nouveau message » choisie par l'utilisateur (Parametres).
+	const composeHint = useShortcutHint("compose");
 	const [appeared, setAppeared] = useState(false);
 	const [sentMailboxId, setSentMailboxId] = useState<string>();
 	const editorRef = useRef<EmailEditorHandle>(null);
@@ -123,7 +126,9 @@ export default function KCompose({
 				>
 					<PencilLine className="h-4 w-4" />
 					<span className="flex-1 text-left">Nouveau message</span>
-					<kbd className="rounded bg-white/15 px-1.5 font-mono text-[11px] leading-5 opacity-80">C</kbd>
+					{composeHint && (
+						<kbd className="rounded bg-white/15 px-1.5 font-mono text-[11px] leading-5 opacity-80">{composeHint}</kbd>
+					)}
 				</button>
 			)}
 

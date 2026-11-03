@@ -7,6 +7,7 @@ import React, { createContext, useContext } from "react";
 import { usePathname } from "next/navigation";
 import KToastFr from "@/components/k/toast-fr";
 import KNewMailNotifier from "@/components/k/new-mail-notifier";
+import KShortcutsConfig from "@/components/k/shortcuts-config";
 
 const KUiContext = createContext(false);
 
@@ -20,6 +21,8 @@ export function KUiProvider({ nouvelle, children }: { nouvelle: boolean; childre
 			{/* Nouveaux messages : verification toutes les 20 s et liste actualisee
 			    (les deux interfaces) ; son et pastille sur l'onglet en Outlook. */}
 			{inApp && <KNewMailNotifier nouvelle={nouvelle} />}
+			{/* Raccourcis clavier personnalises (Parametres > Raccourcis clavier). */}
+			{inApp && <KShortcutsConfig nouvelle={nouvelle} />}
 			{children}
 		</KUiContext.Provider>
 	);

@@ -1,6 +1,6 @@
 "use client";
 import React, {useMemo} from 'react';
-import {Ban, Bell, Cog, Filter, Reply, Trash2} from "lucide-react";
+import {Ban, Bell, Cog, Filter, Keyboard, Reply, Trash2} from "lucide-react";
 import Link from "next/link";
 import {useParams, usePathname} from "next/navigation";
 
@@ -38,6 +38,8 @@ function SettingsTabs({workspacePublicId}: {workspacePublicId: string}) {
             { key: "rules" as const, label: "Rules", icon: <Filter size={16} />, href: `/w/${workspacePublicId}/dashboard/mail/${params.identityPublicId}/settings/rules` },
             { key: "autoreply" as const, label: "Auto-reply", icon: <Reply size={16} />, href: `/w/${workspacePublicId}/dashboard/mail/${params.identityPublicId}/settings/autoreply` },
             { key: "blocked" as const, label: "Blocked senders", icon: <Ban size={16} />, href: `/w/${workspacePublicId}/dashboard/mail/${params.identityPublicId}/settings/blocked` },
+            // ss2i : raccourcis clavier personnalisables.
+            { key: "shortcuts" as const, label: "Keyboard shortcuts", icon: <Keyboard size={16} />, href: `/w/${workspacePublicId}/dashboard/mail/${params.identityPublicId}/settings/shortcuts` },
             // { key: "subscriptions" as const, label: "Subscriptions", icon: <Bell size={16} />, href: `/dashboard/mail/${params.identityPublicId}/settings/subscriptions` },
             // { key: "danger" as const, label: "Danger zone", icon: <Trash2 size={16} />, href: `/dashboard/mail/${params.identityPublicId}/settings/danger` },
         ],

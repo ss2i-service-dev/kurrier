@@ -6,6 +6,7 @@ import { Divider } from "@mantine/core";
 import {MessageEntity} from "@db";
 import ThreadClientsBar from "@/components/mailbox/default/thread-clients-bar";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
+import { threadOrder } from "@/lib/actions/thread-order";
 import Loading from "@/app/loading";
 
 async function Page({
@@ -38,19 +39,29 @@ async function Page({
 	// ss2i clients : pastille du ou des clients CRM du fil (identites pro).
 	const workspacePublicId = await getWorkspacePublicId();
 
+	// ss2i : ordre du fil au choix de l'utilisateur (thread-order.ts). Les
+	// messages arrivent du plus ancien au plus recent ; threadIndex garde
+	// l'index chronologique (Reply sous le plus recent), l'objet va au-dessus
+	// du premier message affiche.
+	const chronological = activeThread?.messages ?? [];
+	const newestFirst = (await threadOrder()) === "newest_first";
+	const shown = newestFirst ? [...chronological].reverse() : chronological;
+
 	return (
 		<>
 			{activeThread?.messages.length ? (
 				<ThreadClientsBar threadId={threadId} identityPublicId={identityPublicId} workspacePublicId={workspacePublicId} />
 			) : null}
-			{activeThread?.messages.map((message, threadIndex) => {
+			{shown.map((message, position) => {
+				const threadIndex = newestFirst ? shown.length - 1 - position : position;
 				return (
 					<Suspense fallback={<Loading />}>
 						<div key={message.id}>
 							<ThreadItem
 								message={message}
 								threadIndex={threadIndex}
-								numberOfMessages={activeThread.messages.length}
+								numberOfMessages={shown.length}
+							showSubject={position === 0}
 								threadId={threadId}
 								activeMailboxId={activeMailbox.id}
 								markSmtp={!!mailboxSync}

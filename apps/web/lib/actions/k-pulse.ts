@@ -1,39 +1,39 @@
 "use server";
-// SS2i (Outlook) : pouls de la boite de reception, interroge toutes les 20 s par
-// le navigateur pour signaler un nouveau message (son, pastille sur l'icone de
-// l'onglet, liste actualisee). Une seule requete legere, sous RLS : nombre de
-// fils non lus de l'Inbox et date du plus recent d'entre eux (elle avance a
-// chaque message entrant, pas quand on envoie ou qu'on remet un fil en non lu).
-import { and, count, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
-import { mailboxes, mailboxThreads } from "@db";
+// SS2i : pouls de la boite de reception, interroge toutes les 20 s par le
+// navigateur pour reperer un nouveau message (liste actualisee ; en Outlook, son,
+// pastille et compteur dans le titre de l'onglet). Sous RLS, deux lectures
+// d'index :
+//  - latest : date du dernier message recu dans les Inbox (index
+//    idx_messages_mailbox_date). Elle n'avance qu'a l'arrivee d'un message :
+//    remettre un fil en non lu, desarchiver un vieux message ou repondre ne la
+//    change pas (sinon, faux « nouveau message ») ;
+//  - unread : nombre de fils non lus de l'Inbox (index ix_mbth_mailbox_unread),
+//    comme le compteur de la barre laterale.
+import { sql } from "drizzle-orm";
 import { rlsClient } from "@/lib/actions/clients";
 
 export async function kInboxPulse(): Promise<{ unread: number; latest: string | null } | null> {
 	try {
 		const rls = await rlsClient();
-		const now = new Date();
-		const [row] = await rls((tx) =>
-			tx
-				.select({
-					unread: count(),
-					latest: sql<string | null>`max(${mailboxThreads.lastActivityAt})`,
-				})
-				.from(mailboxThreads)
-				.where(
-					and(
-						// Par boite (index ix_mbth_mailbox_unread sur mailbox_id, unread_count) :
-						// seules les lignes non lues sont lues, quelle que soit la taille de l'Inbox.
-						inArray(
-							mailboxThreads.mailboxId,
-							tx.select({ id: mailboxes.id }).from(mailboxes).where(eq(mailboxes.slug, "inbox")),
-						),
-						gt(mailboxThreads.unreadCount, 0),
-						or(isNull(mailboxThreads.snoozedUntil), lte(mailboxThreads.snoozedUntil, now)),
-					),
-				),
+		const res: any = await rls((tx) =>
+			tx.execute(sql`
+				with inbox as (select id from mailboxes where slug = 'inbox')
+				select
+					(select count(*) from mailbox_threads mt
+					  where mt.mailbox_id in (select id from inbox)
+					    and mt.unread_count > 0
+					    and (mt.snoozed_until is null or mt.snoozed_until <= now())) as unread,
+					(select max(last_date) from (
+						select (select m.date from messages m
+						         where m.mailbox_id = i.id and m.date is not null
+						         order by m.date desc limit 1) as last_date
+						from inbox i
+					) d) as latest
+			`),
 		);
-		const latest = row?.latest ? new Date(row.latest as any).toISOString() : null;
-		return { unread: Number(row?.unread ?? 0), latest };
+		const row = (res?.rows ?? res ?? [])[0] ?? {};
+		const latest = row.latest ? new Date(row.latest).toISOString() : null;
+		return { unread: Number(row.unread ?? 0), latest };
 	} catch {
 		return null;
 	}

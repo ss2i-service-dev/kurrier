@@ -9,11 +9,11 @@ import { fetchThreadMailbox } from "@/lib/thread-mailbox";
 import { threadOrder } from "@/lib/actions/thread-order";
 import { kPinnedMap } from "@/lib/actions/k-pins";
 import { getWorkspacePublicId } from "@/lib/actions/clients";
-import ThreadClientsBar from "@/components/mailbox/default/thread-clients-bar";
 import KThreadItem from "@/components/k/thread-item";
 import { MessageEntity } from "@db";
 import { getPublicEnv } from "@schema";
 import ThreadToolbar from "@/components/k/thread-toolbar";
+import KThreadClients from "@/components/k/thread-clients";
 import { ThreadProvider } from "@/components/k/thread-context";
 import ThreadMessages from "@/components/k/thread-messages";
 import ReplyDock from "@/components/k/reply-dock";
@@ -88,9 +88,15 @@ export default async function KThreadPage({
 				<div className="k-scroll min-h-0 flex-1 overflow-y-auto" data-k-thread-scroll>
 					<div className="w-full px-5 pb-10 pt-6 md:px-8">
 						<div className="mb-4">
-							<h1 className="text-[21px] font-semibold leading-snug tracking-[-0.015em] text-k-ink">
-								{first.subject || "(sans objet)"}
-							</h1>
+							{/* Objet, et a droite sur la meme ligne les societes rattachees au fil */}
+							<div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+								<h1 className="min-w-0 flex-1 basis-[320px] text-[21px] font-semibold leading-snug tracking-[-0.015em] text-k-ink">
+									{first.subject || "(sans objet)"}
+								</h1>
+								<Suspense fallback={null}>
+									<KThreadClients threadId={threadId} identityPublicId={identityPublicId} workspacePublicId={workspacePublicId} />
+								</Suspense>
+							</div>
 							<div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-k-ink-3">
 								<span>
 									{messages.length} message{messages.length > 1 ? "s" : ""}
@@ -102,8 +108,6 @@ export default async function KThreadPage({
 								<MailUnsubscriber mailSubscription={byMessageId.get(first.id) ?? null} message={first} />
 							</div>
 						</div>
-
-						<ThreadClientsBar threadId={threadId} identityPublicId={identityPublicId} workspacePublicId={workspacePublicId} />
 
 						<ThreadMessages expanded={order.map((i) => expanded[i])}>
 							{order.map((threadIndex) => messages[threadIndex]).map((message) => {

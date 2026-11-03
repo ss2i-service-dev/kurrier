@@ -156,6 +156,15 @@ function setRead(threadIds: string[], value: boolean | null) {
 // Derniers compteurs recus du serveur (fournis par la barre laterale).
 let serverCounts = new Map<string, number>();
 
+// Fils remis en non lu a la main pendant cette session : l'ouverture automatique
+// (lecteur deja affiche, rechargement du panneau apres actualisation) ne doit pas
+// les remarquer lus. Seule une action explicite (clic sur la ligne, « Marquer
+// comme lu ») les relit.
+const manualUnread = new Set<string>();
+export function isManuallyUnread(threadId: string) {
+	return manualUnread.has(String(threadId));
+}
+
 /** Fil deja marque lu a l'ecran (au clic dans la liste) : pas de second marquage. */
 export function isMarkedRead(threadId: string) {
 	return state.read.get(String(threadId)) === true;
@@ -217,6 +226,7 @@ export const mailActions = {
 	/** unread : nombre de fils reellement non lus parmi la liste (compteur du dossier). */
 	read(threadIds: string | string[], mailboxId: string, smtp: boolean, unread = 0) {
 		const list = ids(threadIds);
+		list.forEach((id) => manualUnread.delete(String(id)));
 		const before = list.map((id) => state.read.get(id));
 		return run(
 			() => {
@@ -234,6 +244,7 @@ export const mailActions = {
 	/** read : nombre de fils lus parmi la liste, qui redeviennent non lus. */
 	unread(threadIds: string | string[], mailboxId: string, smtp: boolean, read = 0) {
 		const list = ids(threadIds);
+		list.forEach((id) => manualUnread.add(String(id)));
 		const before = list.map((id) => state.read.get(id));
 		return run(
 			() => {

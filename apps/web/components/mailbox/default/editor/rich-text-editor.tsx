@@ -102,6 +102,10 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 			return saved === "thread" ? "thread" : "last";
 		});
 		const isReply = editorMode === "reply" || editorMode === "replyAll";
+		// Transfert : le message transfere s'affiche et se modifie comme une citation
+		// (portee : message entier, jamais supprime).
+		const isForward = editorMode === "forward";
+		const hasQuote = isReply || isForward;
 		// Citation modifiable (quoteMode auto / custom / none, quoteHtml si custom) ; brouillon
 		// repris : mode et HTML enregistres.
 		const [quoteMode, setQuoteMode] = useState<QuoteMode>(() =>
@@ -127,10 +131,11 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 			});
 		};
 		const quoteEditor =
-			isReply && state.message ? (
+			hasQuote && state.message ? (
 				<ReplyQuoteEditor
 					message={state.message}
-					quoteScope={quoteScope}
+					forward={isForward}
+					quoteScope={isForward ? "thread" : quoteScope}
 					timeZone={state.publicConfig?.MAIL_TIMEZONE}
 					rfcStyle={Boolean(state.rfcStyle)}
 					mode={quoteMode}
@@ -176,8 +181,8 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 					</>
 				) : null}
 				<input type="hidden" name="quoteScope" value={isReply ? quoteScope : ""} readOnly />
-				<input type="hidden" name="quoteMode" value={isReply && state.message ? quoteMode : ""} readOnly />
-				<input type="hidden" name="quoteHtml" value={isReply && quoteMode === "custom" ? quoteHtml : ""} readOnly />
+				<input type="hidden" name="quoteMode" value={hasQuote && state.message ? quoteMode : ""} readOnly />
+				<input type="hidden" name="quoteHtml" value={hasQuote && quoteMode === "custom" ? quoteHtml : ""} readOnly />
 			</div>
 		);
 	},

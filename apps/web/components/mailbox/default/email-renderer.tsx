@@ -5,7 +5,10 @@ import { leaveThreadToList } from "@/lib/leave-thread";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
 import slugify from "@sindresorhus/slugify";
-import { Archive, Ban, ClipboardCopy, ClipboardList, Code, Download, EllipsisVertical, Forward, Mail, Reply, ReplyAll, Trash2 } from "lucide-react";
+import { Archive, Ban, Building2, CalendarPlus, ClipboardCopy, ClipboardList, Code, Download, EllipsisVertical, Forward, Mail, Reply, ReplyAll, Trash2 } from "lucide-react";
+import { LinkClientPicker } from "@/components/mailbox/default/client-link-ui";
+import { AddToAgenda } from "@/components/mailbox/default/add-to-agenda";
+import { useIsProIdentity } from "@/lib/client-link";
 import { copyMailToClipboard } from "@/lib/mail-copy";
 import { Temporal } from "@js-temporal/polyfill";
 import dynamic from "next/dynamic";
@@ -199,6 +202,7 @@ function EmailRenderer({
 		undefined,
 	);
 	const params = useParams();
+	const isProIdentity = useIsProIdentity(String(params.identityPublicId ?? ""));
 	const fetchSentMailbox = async () => {
 		const { activeMailbox } = await fetchMailbox(
 			String(params.identityPublicId),
@@ -444,6 +448,32 @@ function EmailRenderer({
 								<ClipboardList size={18} />
 							</ActionIcon>
 						</Tooltip>
+						{/* ss2i : « Rattacher a un client » (OI 10270) et « Ajouter a l'agenda » (OI 10280) avec les
+						    autres actions du message, a droite (Samuel, 04/11), plus dans la barre des clients. */}
+						{isProIdentity && (
+							<LinkClientPicker
+								identityPublicId={String(params.identityPublicId)}
+								threadIds={() => [String(threadId)]}
+								trigger={(open) => (
+									<Tooltip label="Link to a client (and archive)" withArrow>
+										<ActionIcon variant={"subtle"} color={"gray"} aria-label="Link to a client" onClick={open}>
+											<Building2 size={18} />
+										</ActionIcon>
+									</Tooltip>
+								)}
+							/>
+						)}
+						<AddToAgenda
+							identityPublicId={String(params.identityPublicId)}
+							threadId={String(threadId)}
+							trigger={(open) => (
+								<Tooltip label="Ajouter à l'agenda" withArrow>
+									<ActionIcon variant={"subtle"} color={"gray"} aria-label="Ajouter à l'agenda" onClick={open}>
+										<CalendarPlus size={18} />
+									</ActionIcon>
+								</Tooltip>
+							)}
+						/>
 						<Tooltip label="Archive (a)" withArrow>
 							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Archive" onClick={archiveMessage}>
 								<Archive size={18} />

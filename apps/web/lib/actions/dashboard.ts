@@ -47,7 +47,7 @@ import { z } from "zod";
 import slugify from "@sindresorhus/slugify";
 import {getWorkspaceId, getWorkspaceRole, rlsClient} from "@/lib/actions/clients";
 import { v4 as uuidv4 } from "uuid";
-import { backfillMailboxes, clearImapClients } from "@/lib/actions/mailbox";
+import { backfillMailboxes, clearImapClients } from "@/lib/mail-jobs";
 import { kvGet } from "@common";
 import { nanoid } from "nanoid";
 import { getRedis } from "@/lib/actions/get-redis";

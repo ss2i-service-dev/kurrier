@@ -9,6 +9,7 @@ import {s3} from "@/lib/create-s3-client";
 import {messages} from "@db";
 import {eq} from "drizzle-orm";
 import {rlsClient} from "@/lib/actions/clients";
+import {assertOwnedS3Key, assertSignedIn, isSafeKeySegment, safeExtension} from "@/lib/authz";
 
 export async function createAttachmentUploadUrl(input: {
     fileName: string;
@@ -17,11 +18,10 @@ export async function createAttachmentUploadUrl(input: {
 }) {
     const user = await isSignedIn();
     if (!user) throw new Error("Unauthorized");
+    if (!isSafeKeySegment(input.messageId)) throw new Error("Invalid message id");
     const { S3_BUCKET } = getServerEnv();
 
-    const ext = input.fileName.includes(".")
-        ? input.fileName.split(".").pop()
-        : "";
+    const ext = safeExtension(String(input.fileName ?? ""));
 
     const key = `private/${user.id}/${input.messageId}/${crypto.randomUUID()}${
         ext ? `.${ext}` : ""
@@ -47,10 +47,13 @@ export async function createAttachmentUploadUrl(input: {
 export async function createAttachmentDownloadUrl(path: string) {
     const user = await isSignedIn();
     if (!user) throw new Error("Unauthorized");
+    // ss2i (controle d'acces) : une piece jointe de l'utilisateur ou d'un message de son
+    // workspace seulement ; avant, n'importe quelle cle du bucket.
+    const key = await assertOwnedS3Key(path, user.id);
     const { S3_BUCKET } = getServerEnv();
     const command = new GetObjectCommand({
         Bucket: S3_BUCKET!,
-        Key: path,
+        Key: key,
     });
 
     const url = await getSignedUrl(s3, command, {
@@ -92,6 +95,21 @@ export async function uploadContactProfileAction(params: {
     thumbPath: string;
 }) {
     const { mainFile, thumbFile, mainPath, thumbPath } = params;
+
+    // ss2i (controle d'acces) : utilisateur connecte, images seulement, et cles sous son
+    // propre dossier de contacts (meme forme que les formulaires de contact et la synchro
+    // DAV : private/<userId>/contacts/<publicId>/<nom>.<ext>) ; avant, ecriture a n'importe
+    // quelle cle du bucket, sans connexion.
+    const user = await assertSignedIn();
+    const contactKey = new RegExp(
+        `^private/${user.id}/contacts/[A-Za-z0-9_-]{1,64}/[A-Za-z0-9_-]{1,64}\\.[A-Za-z0-9]{1,12}$`,
+    );
+    if (!contactKey.test(String(mainPath)) || !contactKey.test(String(thumbPath))) {
+        throw new Error("Invalid contact image path");
+    }
+    if (!String(mainFile?.type).startsWith("image/") || !String(thumbFile?.type).startsWith("image/")) {
+        throw new Error("Contact image must be an image");
+    }
 
     const mainBuffer = Buffer.from(await mainFile.arrayBuffer());
     const thumbBuffer = Buffer.from(await thumbFile.arrayBuffer());

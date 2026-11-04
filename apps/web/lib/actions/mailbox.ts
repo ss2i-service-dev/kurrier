@@ -1,7 +1,7 @@
 "use server";
 
 import { cache } from "react";
-import {getWorkspaceId, getWorkspacePublicId, rlsClient} from "@/lib/actions/clients";
+import {getWorkspacePublicId, rlsClient} from "@/lib/actions/clients";
 import {
 	db,
 	DraftMessageInsertSchema,
@@ -55,6 +55,7 @@ import {
 	assertOwnedS3Key,
 	assertSignedIn,
 	assertThreadsInMailbox,
+	isUuid,
 } from "@/lib/authz";
 
 import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
@@ -760,11 +761,15 @@ export const markAsRead = cache(
 		markSmtp: boolean,
 		refresh = true,
 	) => {
-		const ids = (Array.isArray(threadIds) ? threadIds : [threadIds])
+		const requestedIds = (Array.isArray(threadIds) ? threadIds : [threadIds])
 			.map(String)
 			.filter(Boolean);
 
-		if (!ids.length || !mailboxId) return;
+		if (!requestedIds.length || !mailboxId) return;
+
+		// ss2i (controle d'acces) : dossier visible et fils de ce dossier seulement.
+		const { threadIds: ids } = await assertThreadsInMailbox(mailboxId, requestedIds);
+		if (!ids.length) return;
 
 		const now = new Date();
 		const rls = await rlsClient();
@@ -838,11 +843,15 @@ export const markAsUnread = async (
 	markSmtp: boolean,
 	refresh: boolean,
 ) => {
-	const ids = (Array.isArray(threadIds) ? threadIds : [threadIds])
+	const requestedIds = (Array.isArray(threadIds) ? threadIds : [threadIds])
 		.map(String)
 		.filter(Boolean);
 
-	if (!ids.length || !mailboxId) return;
+	if (!requestedIds.length || !mailboxId) return;
+
+	// ss2i (controle d'acces) : dossier visible et fils de ce dossier seulement.
+	const { threadIds: ids } = await assertThreadsInMailbox(mailboxId, requestedIds);
+	if (!ids.length) return;
 
 	const now = new Date();
 	const rls = await rlsClient();
@@ -930,6 +939,20 @@ export const markAsUnread = async (
 	}
 };
 
+// ss2i (controle d'acces) : message (deplacement au grain du message) present dans le dossier.
+async function messageInMailbox(messageId: string, mailboxId: string) {
+	if (!isUuid(messageId)) return false;
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({ id: messages.id })
+			.from(messages)
+			.where(and(eq(messages.id, String(messageId)), eq(messages.mailboxId, mailboxId)))
+			.limit(1),
+	);
+	return !!row;
+}
+
 // ss2i : deplacements et suppressions sont faits par le worker. Revalider aussitot le job
 // poste redessinait la liste AVANT la mise a jour en base : le toast disait « moved to
 // Trash » et le fil restait affiche. On attend donc que les fils aient quitte le dossier
@@ -963,23 +986,25 @@ export const moveToTrash = async (
 	refresh: boolean,
 	messageId?: string,
 ) => {
-	const ids = (Array.isArray(threadIds) ? threadIds : [threadIds])
+	const requestedIds = (Array.isArray(threadIds) ? threadIds : [threadIds])
 		.map(String)
 		.filter(Boolean);
 
-	if (!ids.length || !mailboxId) return;
+	if (!requestedIds.length || !mailboxId) return;
+
+	// ss2i (controle d'acces) : dossier visible et fils de ce dossier seulement ; un message
+	// precis (messageId) doit etre dans ce dossier, sinon le worker n'aurait rien deplace.
+	const { mailbox: source, threadIds: ids } = await assertThreadsInMailbox(mailboxId, requestedIds);
 
 	// ss2i : depuis la corbeille, « supprimer » ne peut pas etre un deplacement vers la
 	// corbeille (le job ne faisait rien et l'interface annoncait « moved to Trash ») :
 	// c'est une suppression definitive, comme le bouton de l'en-tete de liste.
-	const [source] = await db
-		.select({ kind: mailboxes.kind })
-		.from(mailboxes)
-		.where(eq(mailboxes.id, mailboxId))
-		.limit(1);
-	if (source?.kind === "trash") {
-		await deleteForever(ids, mailboxId, moveImap, refresh);
+	if (source.kind === "trash") {
+		await deleteForever(ids, source.id, moveImap, refresh);
 		return "deleted" as const;
+	}
+	if (!ids.length || (messageId && !(await messageInMailbox(messageId, source.id)))) {
+		return "trashed" as const;
 	}
 
 	const { smtpQueue, searchIngestQueue } = await getRedis();
@@ -989,7 +1014,7 @@ export const moveToTrash = async (
 	// au compte-gouttes.
 	await smtpQueue.add(
 		"mail:move",
-		{ threadId: ids[0], threadIds: ids, mailboxId, op: "trash", messageId, moveImap },
+		{ threadId: ids[0], threadIds: ids, mailboxId: source.id, op: "trash", messageId, moveImap },
 		{
 			attempts: 3,
 			backoff: { type: "exponential", delay: 1500 },
@@ -1031,17 +1056,14 @@ export const archiveThread = async (
 	moveImap: boolean,
 	refresh: boolean,
 ) => {
-	const ids = (Array.isArray(threadIds) ? threadIds : [threadIds])
+	const requestedIds = (Array.isArray(threadIds) ? threadIds : [threadIds])
 		.map(String)
 		.filter(Boolean);
-	if (!ids.length || !mailboxId) return;
+	if (!requestedIds.length || !mailboxId) return;
 
-	const [src] = await db
-		.select()
-		.from(mailboxes)
-		.where(eq(mailboxes.id, mailboxId))
-		.limit(1);
-	if (!src) return;
+	// ss2i (controle d'acces) : dossier visible et fils de ce dossier seulement.
+	const { mailbox: src, threadIds: ids } = await assertThreadsInMailbox(mailboxId, requestedIds);
+	if (!ids.length) return;
 	if (src.kind === "archive") return;
 
 	const findArchive = async () => {
@@ -1095,7 +1117,7 @@ export const archiveThread = async (
 	// au compte-gouttes.
 	await smtpQueue.add(
 		"mail:move",
-		{ threadId: ids[0], threadIds: ids, mailboxId, op: "archive", moveImap },
+		{ threadId: ids[0], threadIds: ids, mailboxId: src.id, op: "archive", moveImap },
 		{
 			attempts: 3,
 			backoff: { type: "exponential", delay: 1500 },
@@ -1127,12 +1149,18 @@ export const archiveThread = async (
 };
 
 export const toggleStar = async (
-	threadId: string,
-	mailboxId: string,
+	requestedThreadId: string,
+	requestedMailboxId: string,
 	starred: boolean,
 	starImap: boolean,
 ) => {
-	if (!threadId || !mailboxId) return;
+	if (!requestedThreadId || !requestedMailboxId) return;
+	// ss2i (controle d'acces) : dossier visible et fil de ce dossier seulement.
+	const {
+		mailbox: { id: mailboxId },
+		threadIds: [threadId],
+	} = await assertThreadsInMailbox(requestedMailboxId, [requestedThreadId]);
+	if (!threadId) return;
 	const { smtpQueue, searchIngestQueue } = await getRedis();
 
 	if (starImap) {
@@ -1448,17 +1476,32 @@ export async function addNewMailboxFolder(
 	formData: FormData,
 ): Promise<FormState> {
 	const decodedForm = decode(formData);
-	const isImapOp = String(decodedForm.imapOp).trim().length > 0;
-	const user = await isSignedIn();
+	// ss2i (controle d'acces) : identite visible (RLS) ; dossier parent de cette identite.
+	// Le mode IMAP suit l'identite relue (le formulaire envoyait son smtpAccountId).
+	const user = await assertSignedIn();
+	const identity = await assertIdentityAccess({ id: String(decodedForm.identityId ?? "") });
+	const isImapOp = !!identity.smtpAccountId;
+	const requestedParentId =
+		decodedForm.parentId && decodedForm.parentId !== "none"
+			? String(decodedForm.parentId)
+			: null;
+	let verifiedParentId: string | null = null;
+	if (requestedParentId) {
+		const parent = await assertMailboxAccess(requestedParentId).catch(() => null);
+		if (!parent || parent.identityId !== identity.id) {
+			return { success: false, error: "Invalid parent folder" } as any;
+		}
+		verifiedParentId = parent.id;
+	}
 	if (isImapOp) {
 		const { smtpQueue, smtpEvents } = await getRedis();
 		const job = await smtpQueue.add(
 			"mailbox:add-new",
 			{
 				name: decodedForm.name,
-				parentId: decodedForm.parentId,
-				identityId: decodedForm.identityId,
-				ownerId: user?.id,
+				parentId: verifiedParentId,
+				identityId: identity.id,
+				ownerId: user.id,
 				kind: "custom",
 				slug: slugify(String(decodedForm.name)),
 			},
@@ -1477,26 +1520,10 @@ export async function addNewMailboxFolder(
 		if (!name)
 			return { success: false, error: "Folder name is required" } as any;
 
-		const ownerId = String(user?.id ?? "");
-		const identityId = String(decodedForm.identityId);
-		const parentId =
-			decodedForm.parentId && decodedForm.parentId !== "none"
-				? String(decodedForm.parentId)
-				: null;
-
-		if (parentId) {
-			const [parent] = await db
-				.select({ id: mailboxes.id, identityId: mailboxes.identityId })
-				.from(mailboxes)
-				.where(eq(mailboxes.id, parentId))
-				.limit(1);
-
-			if (!parent || parent.identityId !== identityId) {
-				return { success: false, error: "Invalid parent folder" } as any;
-			}
-		}
-
-		const workspaceId = await getWorkspaceId();
+		const ownerId = user.id;
+		const identityId = identity.id;
+		const parentId = verifiedParentId;
+		const workspaceId = identity.workspaceId;
 		await db
 			.insert(mailboxes)
 			.values({
@@ -1529,46 +1556,39 @@ export async function deleteMailboxFolder({
 	identityId: string;
 	mailboxId: string;
 }): Promise<FormState> {
-	const user = await isSignedIn();
+	// ss2i (controle d'acces) : utilisateur connecte, dossier visible (RLS), et identite de
+	// l'URL qui est bien celle du dossier ; avant, n'importe quel mailboxId etait supprime.
+	const user = await assertSignedIn();
+	const mailbox = await assertMailboxAccess(mailboxId).catch(() => null);
+	if (!mailbox) return { success: false, error: "Folder not found" } as any;
+	const ident = await assertIdentityAccess({ publicId: String(identityId ?? "") }).catch(() => null);
+	if (!ident || ident.id !== mailbox.identityId) {
+		return { success: false, error: "Folder not found" } as any;
+	}
 
 	if (!imapOp) {
-		const [mailbox] = await db
-			.select()
-			.from(mailboxes)
-			.where(eq(mailboxes.id, mailboxId))
-			.limit(1);
-
-		if (!mailbox) return { success: false, error: "Folder not found" } as any;
 		if (mailbox.isDefault)
 			return { success: false, error: "Cannot delete a default folder" } as any;
 
 		// Delete any subfolders first
-		await db.delete(mailboxes).where(eq(mailboxes.parentId, mailboxId));
+		await db.delete(mailboxes).where(eq(mailboxes.parentId, mailbox.id));
 
 		// Delete this mailbox and any sync info
-		await db.delete(mailboxSync).where(eq(mailboxSync.mailboxId, mailboxId));
-		await db.delete(mailboxes).where(eq(mailboxes.id, mailboxId));
+		await db.delete(mailboxSync).where(eq(mailboxSync.mailboxId, mailbox.id));
+		await db.delete(mailboxes).where(eq(mailboxes.id, mailbox.id));
 
 		revalidatePath("/dashboard/mail");
 		return { success: true };
 	}
-
-	const [ident] = await db
-		.select({ id: identities.id })
-		.from(identities)
-		.where(eq(identities.publicId, identityId))
-		.limit(1);
-
-	if (!ident) throw new Error("Identity not found");
 
 	const { smtpQueue, smtpEvents } = await getRedis();
 
 	const job = await smtpQueue.add(
 		"mailbox:delete-folder",
 		{
-			mailboxId,
+			mailboxId: mailbox.id,
 			identityId: ident.id,
-			ownerId: user?.id,
+			ownerId: user.id,
 		},
 		{
 			attempts: 3,
@@ -1580,7 +1600,7 @@ export async function deleteMailboxFolder({
 
 	await job.waitUntilFinished(smtpEvents);
 	// ss2i : l'amont oubliait le segment /w/<id>/, d'ou une 404 apres chaque suppression.
-	redirect(`/w/${await getWorkspacePublicId()}/dashboard/mail/${identityId}/inbox`);
+	redirect(`/w/${await getWorkspacePublicId()}/dashboard/mail/${ident.publicId}/inbox`);
 	return { success: true };
 }
 
@@ -1592,17 +1612,27 @@ export const moveToFolder = async (
 	refresh: boolean,
 	messageId?: string,
 ) => {
-	const ids = (Array.isArray(threadIds) ? threadIds : [threadIds])
+	const requestedIds = (Array.isArray(threadIds) ? threadIds : [threadIds])
 		.map(String)
 		.filter(Boolean);
 
 	if (
-		!ids.length ||
+		!requestedIds.length ||
 		!fromMailboxId ||
 		!toMailboxId ||
 		fromMailboxId === toMailboxId
 	)
 		return;
+
+	// ss2i (controle d'acces) : dossiers source et destination visibles, de la meme identite
+	// (le worker ne cherchait la destination que dans l'identite de la source), fils et
+	// message de la source seulement.
+	const { mailbox: from, threadIds: ids } = await assertThreadsInMailbox(fromMailboxId, requestedIds);
+	const to = await assertMailboxAccess(toMailboxId);
+	if (!ids.length || to.identityId !== from.identityId) return;
+	if (messageId && !(await messageInMailbox(messageId, from.id))) return;
+	fromMailboxId = from.id;
+	toMailboxId = to.id;
 
 	const { smtpQueue, searchIngestQueue } = await getRedis();
 

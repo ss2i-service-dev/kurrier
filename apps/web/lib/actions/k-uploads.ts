@@ -4,6 +4,7 @@ import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getServerEnv } from "@schema";
 import { isSignedIn } from "@/lib/actions/auth";
+import { isSafeKeySegment, safeExtension } from "@/lib/authz";
 
 // ss2i (nouvelle interface) : URL d'envoi d'une piece jointe, comme
 // createAttachmentUploadUrl (uploads-actions.ts), mais avec un client S3 qui
@@ -28,7 +29,9 @@ const s3 = new S3Client({
 export async function kCreateAttachmentUploadUrl(input: { fileName: string; contentType: string; messageId: string }) {
 	const user = await isSignedIn();
 	if (!user) throw new Error("Unauthorized");
-	const ext = input.fileName.includes(".") ? input.fileName.split(".").pop() : "";
+	// ss2i (controle d'acces) : rien dans la cle ne doit sortir de private/<userId>/.
+	if (!isSafeKeySegment(input.messageId)) throw new Error("Invalid message id");
+	const ext = safeExtension(String(input.fileName ?? ""));
 	const key = `private/${user.id}/${input.messageId}/${crypto.randomUUID()}${ext ? `.${ext}` : ""}`;
 	const command = new PutObjectCommand({
 		Bucket: S3_BUCKET!,

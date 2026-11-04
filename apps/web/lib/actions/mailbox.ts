@@ -1307,12 +1307,30 @@ export async function deleteForever(
 	opts?: { emptyAll?: boolean },
 ) {
 	const { emptyAll = false } = opts ?? {};
+
+	// ss2i : controle d'acces repris de l'amont (kurrier-org d533d672, CWE-306) :
+	// utilisateur connecte, boite visible par lui (RLS), fils de cette boite seulement.
+	const user = await isSignedIn();
+	if (!user?.id) throw new Error("Unauthorized");
+	if (!mailboxId) throw new Error("Mailbox is required");
+
+	const rls = await rlsClient();
+	const [allowedMailbox] = await rls((tx) =>
+		tx
+			.select({ id: mailboxes.id })
+			.from(mailboxes)
+			.innerJoin(identities, eq(mailboxes.identityId, identities.id))
+			.where(eq(mailboxes.id, mailboxId))
+			.limit(1),
+	);
+	if (!allowedMailbox) throw new Error("Mailbox not found or access denied");
+
 	const { smtpQueue, searchIngestQueue } = await getRedis();
 
 	if (emptyAll) {
 		await smtpQueue.add(
 			"mail:delete-permanent",
-			{ mailboxId, emptyAll: true, imapDelete },
+			{ mailboxId: allowedMailbox.id, emptyAll: true, imapDelete },
 			{
 				attempts: 3,
 				backoff: { type: "exponential", delay: 1500 },
@@ -1324,11 +1342,27 @@ export async function deleteForever(
 		return;
 	}
 
-	const ids = (Array.isArray(threadIds) ? threadIds : [threadIds])
+	const requestedIds = (Array.isArray(threadIds) ? threadIds : [threadIds])
 		.filter(Boolean)
 		.map(String);
 
-	if (!ids.length || !mailboxId) return;
+	if (!requestedIds.length) return;
+
+	const allowedThreads = await rls((tx) =>
+		tx
+			.select({ threadId: mailboxThreads.threadId })
+			.from(mailboxThreads)
+			.where(
+				and(
+					eq(mailboxThreads.mailboxId, allowedMailbox.id),
+					inArray(mailboxThreads.threadId, requestedIds),
+				),
+			),
+	);
+	const ids = allowedThreads.map((row) => String(row.threadId));
+	if (ids.length !== requestedIds.length) {
+		throw new Error("One or more threads were not found or access was denied");
+	}
 
 	// ss2i : un seul job pour toute la selection, deleteMail (worker) accepte un tableau.
 	await smtpQueue.add(

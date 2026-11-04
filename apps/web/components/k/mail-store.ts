@@ -155,7 +155,11 @@ const ids = (x: string | string[]) => (Array.isArray(x) ? x : [x]);
 
 function setRead(threadIds: string[], value: boolean | null) {
 	const read = new Map(state.read);
-	threadIds.forEach((id) => (value === null ? read.delete(id) : read.set(id, value)));
+	threadIds.forEach((id) => {
+		readBaseline.delete(String(id));
+		if (value === null) read.delete(id);
+		else read.set(id, value);
+	});
 	set({ read });
 }
 
@@ -169,6 +173,22 @@ let serverCounts = new Map<string, number>();
 const manualUnread = new Set<string>();
 export function isManuallyUnread(threadId: string) {
 	return manualUnread.has(String(threadId));
+}
+
+// Fil lu ou ouvert a l'ecran : date de son dernier message a ce moment-la. Un
+// message qui arrive ensuite (fil ouvert : il est aussitot marque lu au serveur
+// par son affichage) reprend le liseré des non lus, comme indicateur visuel,
+// jusqu'a la prochaine ouverture du fil depuis la liste (mailActions.read).
+const readBaseline = new Map<string, string>();
+export function arrivedSinceRead(threadId: string, lastActivityAt: unknown, track: boolean): boolean {
+	const id = String(threadId);
+	const now = String(lastActivityAt ?? "");
+	const base = readBaseline.get(id);
+	if (base === undefined) {
+		if (track) readBaseline.set(id, now);
+		return false;
+	}
+	return base !== now;
 }
 
 /** Fil deja marque lu a l'ecran (au clic dans la liste) : pas de second marquage. */

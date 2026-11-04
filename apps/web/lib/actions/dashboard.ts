@@ -31,7 +31,8 @@ import {
 	SmtpAccountFormSchema,
 	SYSTEM_MAILBOXES,
 } from "@schema";
-import { currentSession, isSignedIn } from "@/lib/actions/auth";
+import { isSignedIn } from "@/lib/actions/auth";
+import { currentSession } from "@/lib/auth-session";
 import {and, count, eq, sql, gte, desc, inArray, sum, countDistinct} from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { decode } from "decode-formdata";
@@ -53,9 +54,8 @@ import { backfillMailboxes, clearImapClients } from "@/lib/mail-jobs";
 import { kvGet } from "@common";
 import { nanoid } from "nanoid";
 import { getRedis } from "@/lib/actions/get-redis";
-import {
-	checkDefaultWorkspaceIdentity, fetchWorkspace
-} from "@/lib/actions/workspace";
+import { fetchWorkspace } from "@/lib/actions/workspace";
+import { checkDefaultWorkspaceIdentity } from "@/lib/workspace-defaults";
 import {workspaceIdentityMembers} from "@db";
 import {s3} from "@/lib/create-s3-client";
 import {CreateBucketCommand} from "@aws-sdk/client-s3";
@@ -381,7 +381,8 @@ async function providerAccountById(providerId: string) {
 	return account;
 }
 
-export async function initializeDomainIdentity(
+// ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
+async function initializeDomainIdentity(
 	data: Record<string, unknown>,
 ): Promise<FormState<{ identity: DomainIdentity }>> {
 	return handleAction(async () => {
@@ -1245,9 +1246,9 @@ export type FetchUserAPIKeysResult = Awaited<
 
 
 export const regenerateDavPassword = async () => {
-	const { davEvents, davQueue } = await getRedis();
 	const user = await assertSignedIn();
 	const workspaceId = await assertWorkspace();
+	const { davEvents, davQueue } = await getRedis();
 	const job = await davQueue.add("dav:update-password", { userId: user.id, workspaceId });
 	await job.waitUntilFinished(davEvents);
 	revalidatePath("/w/[workspaceId]/dashboard/platform/sync-services");

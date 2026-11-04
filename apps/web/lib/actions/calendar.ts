@@ -1,5 +1,6 @@
 "use server";
 import {getWorkspaceId, rlsClient} from "@/lib/actions/clients";
+import { assertOwnedS3Key, assertSignedIn } from "@/lib/authz";
 import {
 	addressBooks,
 	CalendarEventAttendeeEntity,
@@ -149,7 +150,8 @@ type SyncEventAttendeesArgs = {
 
 
 
-export async function syncEventAttendees({
+// ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
+async function syncEventAttendees({
 											 tx,
 											 eventId,
 											 organizerEmail,
@@ -449,7 +451,8 @@ export async function getRangeForCalendarView(
 	return { from, to };
 }
 
-export async function eventsBySlot(
+// ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
+async function eventsBySlot(
 	tz: string,
 	events: CalendarEventEntity[],
 ): Promise<Map<SlotKey, EventSlotFragment[]>> {
@@ -499,7 +502,8 @@ export async function eventsBySlot(
 	return map;
 }
 
-export async function eventsByDay(
+// ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
+async function eventsByDay(
 	tz: string,
 	events: CalendarEventEntity[],
 ): Promise<Map<string, EventSlotFragment[]>> {
@@ -933,7 +937,8 @@ function fromRRuleLocal(rruleDate: Date, tz: string): Date {
 	return zoned.toDate();
 }
 
-export async function expandEventForRange(
+// ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
+async function expandEventForRange(
 	event: CalendarEventEntity,
 	rangeStart: Date,
 	rangeEnd: Date,
@@ -1060,9 +1065,13 @@ export async function fetchEventPreviewItems(
 		return { calendarEvent: null, attendees: null, identity: null };
 	}
 
+	// ss2i (controle d'acces) : la piece jointe vient de l'appelant ; seule une cle de
+	// l'utilisateur ou d'un message de son workspace est lue (avant : tout objet du bucket).
+	const user = await assertSignedIn();
+	const key = await assertOwnedS3Key(String(messageAttachment.path), user.id);
 	const command = new GetObjectCommand({
 		Bucket: S3_BUCKET,
-		Key: String(messageAttachment.path),
+		Key: key,
 	});
 	const response = await s3.send(command);
 	const rawICS = response.Body

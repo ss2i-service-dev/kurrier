@@ -1,4 +1,5 @@
-import {currentSession, isSignedIn} from "@/lib/actions/auth";
+import {isSignedIn} from "@/lib/actions/auth";
+import {currentSession} from "@/lib/auth-session";
 import {createDrizzleClientInstance, workspaceMembers, workspaces} from "@db";
 import {cookies} from "next/headers";
 import {and, eq, or} from "drizzle-orm";

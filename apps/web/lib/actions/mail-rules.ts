@@ -95,7 +95,8 @@ function validateRulePayload(p: {
     return errors;
 }
 
-export async function buildRulePayloadFromFormData(formData: FormData) {
+// ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
+async function buildRulePayloadFromFormData(formData: FormData) {
     const from = asString(formData.get("from"));
     const to = asString(formData.get("to"));
     const subject = asString(formData.get("subject"));
@@ -172,7 +173,8 @@ export async function buildRulePayloadFromFormData(formData: FormData) {
     return { ...payload, _errors: Object.keys(errors).length ? errors : null };
 }
 
-export async function createMailRule(payload: {
+// ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
+async function createMailRule(payload: {
     identityId: string;
     name: string;
     priority: number;

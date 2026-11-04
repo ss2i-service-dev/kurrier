@@ -55,7 +55,8 @@ export async function fetchKUnreadPage(identityPublicId: string, mailboxSlug: st
  * la liste affichait un trombone pour une simple signature. Ne comptent pas :
  * les pieces marquees inline et les images referencees dans le corps (cid).
  */
-export async function fetchKRealAttachmentThreads(threadIds: string[]): Promise<string[]> {
+// ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
+async function fetchKRealAttachmentThreads(threadIds: string[]): Promise<string[]> {
 	const ids = Array.from(new Set(threadIds.map(String))).filter((id) => /^[0-9a-f-]{36}$/i.test(id)).slice(0, 300);
 	if (!ids.length) return [];
 	const rls = await rlsClient();

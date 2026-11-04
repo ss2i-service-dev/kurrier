@@ -4,6 +4,8 @@ import { rlsClient } from "@/lib/actions/clients";
 import { isSignedIn } from "@/lib/actions/auth";
 import { getRedis } from "@/lib/actions/get-redis";
 import { assertPublicHttpsUrl } from "@/lib/safe-public-url";
+import { publicHttpRequest } from "@common/safe-http";
+import { assertMessageAccess } from "@/lib/authz";
 import { identities, mailboxes, mailSubscriptions, messages } from "@db";
 import { handleAction, type FormState } from "@schema";
 import {
@@ -41,16 +43,16 @@ async function oneClickPost(rawUrl: string) {
 	let url = (await assertPublicHttpsUrl(rawUrl)).toString();
 	let method = "POST";
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-		const res = await fetch(url, {
+		// ss2i (controle d'acces) : adresse publique reverifiee a la connexion (rebinding DNS).
+		const res = await publicHttpRequest(url, {
 			method,
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
 			body: method === "POST" ? "List-Unsubscribe=One-Click" : undefined,
-			redirect: "manual",
-			signal: AbortSignal.timeout(POST_TIMEOUT_MS),
+			timeoutMs: POST_TIMEOUT_MS,
 		});
 		if (res.status >= 200 && res.status < 300) return;
 		if ([301, 302, 303, 307, 308].includes(res.status)) {
-			const loc = res.headers.get("location");
+			const loc = res.location;
 			if (!loc) throw new Error(`Unsubscribe server answered ${res.status} without a location`);
 			url = (await assertPublicHttpsUrl(new URL(loc, url).toString())).toString();
 			// 301, 302, 303 : le navigateur rejoue en GET ; 307, 308 conservent le POST.
@@ -139,9 +141,10 @@ export async function unsubscribeFromMail(input: {
 		);
 		if (!sub) return { success: false, error: "Subscription not found" };
 
-		const [msg] = await rls((tx) =>
-			tx.select({ from: messages.from }).from(messages).where(eq(messages.id, input.messageId)).limit(1),
-		);
+		// ss2i (controle d'acces) : le message d'ou part la desinscription est un message que
+		// l'utilisateur voit (son identite d'envoi pour un mailto).
+		const msg = await assertMessageAccess(String(input.messageId ?? "")).catch(() => null);
+		if (!msg) return { success: false, error: "Message not found" };
 		const fromAddress = String((msg?.from as any)?.value?.[0]?.address ?? "").trim().toLowerCase();
 		let domain = emailDomain(fromAddress);
 		if (!domain && sub.unsubscribeHttpUrl) {

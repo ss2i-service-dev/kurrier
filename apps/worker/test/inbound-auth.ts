@@ -1,6 +1,9 @@
 // Webhooks entrants (lib/inbound-auth.ts) : refus sans secret configure, refus d'une
-// signature fausse, acceptation d'une signature juste. Sans base ni reseau :
+// signature fausse, acceptation d'une signature juste. Aucune requete en base ni sur le
+// reseau, mais le module charge @db : variables de mcp-test-env.ts, comme les autres tests :
+//   MCP_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/kurrier_test \
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/inbound-auth.ts
+import "./mcp-test-env";
 import { createHmac, generateKeyPairSync, sign } from "node:crypto";
 import { snsStringToSign, verifyMailgun, verifyPostmark, verifySendgrid, verifySns } from "../lib/inbound-auth";
 

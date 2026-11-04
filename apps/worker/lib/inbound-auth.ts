@@ -1,4 +1,6 @@
 import { createHmac, createPublicKey, timingSafeEqual, verify as cryptoVerify } from "node:crypto";
+import { db, identities, providers } from "@db";
+import { and, eq } from "drizzle-orm";
 import {
 	createError,
 	getQuery,
@@ -163,4 +165,26 @@ export async function verifySns(msg: Record<string, any>) {
 		ok = false;
 	}
 	if (!ok) throw forbidden("ses: bad signature");
+}
+
+// Identite destinataire d'un webhook entrant verifie. La signature prouve que le message
+// vient du compte du fournisseur configure, pas a quel workspace il est destine : l'adresse
+// seule ne suffit pas (une meme adresse peut exister dans deux workspaces). L'identite doit
+// donc utiliser un fournisseur de ce type, et etre la seule ; sinon le message est refuse.
+export async function inboundIdentityFor(
+	address: string | null,
+	providerType: "mailgun" | "postmark" | "sendgrid",
+) {
+	if (!address) return null;
+	const rows = await db
+		.select({ identity: identities })
+		.from(identities)
+		.innerJoin(providers, eq(identities.providerId, providers.id))
+		.where(and(eq(identities.value, address), eq(providers.type, providerType)))
+		.limit(2);
+	if (rows.length > 1) {
+		console.warn(`[inbound-hook] ${providerType}: ${address} matches several identities: refused`);
+		return null;
+	}
+	return rows[0]?.identity ?? null;
 }

@@ -1,5 +1,6 @@
 import { db, mailboxes, MessageEntity, webhooks } from "@db";
 import { and, eq, sql } from "drizzle-orm";
+import { publicHttpRequest } from "@common/safe-http";
 
 export const processWebhook = async ({
 	message,
@@ -32,8 +33,13 @@ export const processWebhook = async ({
 
 	for (const hook of hooks) {
 		try {
-			await fetch(hook.url, {
+			// ss2i (controle d'acces) : adresse publique seulement, reverifiee a la connexion
+			// (pas de webhook vers le reseau interne, rebinding DNS compris) ; pas de redirection.
+			await publicHttpRequest(hook.url, {
 				method: "POST",
+				allowHttp: true,
+				timeoutMs: 10_000,
+				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					event: "message.received",
 					data: {

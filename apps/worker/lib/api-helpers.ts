@@ -110,6 +110,13 @@ export async function validateApiKeyToken(token: string) {
 			statusMessage: "API key has been revoked",
 		});
 	}
+	// ss2i : une cle expiree est refusee partout (l'MCP le verifiait seul).
+	if (key.expiresAt && new Date(key.expiresAt).getTime() < Date.now()) {
+		throw createError({
+			statusCode: 401,
+			statusMessage: "API key has expired",
+		});
+	}
 
 	const [secretMeta] = await db
 		.select()
@@ -124,8 +131,17 @@ export async function validateApiKeyToken(token: string) {
 		});
 	}
 
+	// ss2i : la valeur stockee est {"rawKey": ...} (addApiKey). L'ancienne comparaison avec
+	// String(vault), soit "[object Object]", refusait toute cle : l'API et l'MCP par cle API
+	// ne marchaient pas. Correction reprise de l'amont (kurrier-org 99b1c239).
 	const actualSecret = await getSecretAdmin(secretMeta.id);
-	if (!actualSecret?.vault || !safeEqual(String(actualSecret.vault), token)) {
+	let rawKey = "";
+	try {
+		rawKey = String(JSON.parse(String(actualSecret?.vault?.decrypted_secret ?? "{}"))?.rawKey ?? "");
+	} catch {
+		rawKey = "";
+	}
+	if (!rawKey || !safeEqual(rawKey, token)) {
 		throw createError({
 			statusCode: 401,
 			statusMessage: "Invalid API key",
@@ -134,7 +150,7 @@ export async function validateApiKeyToken(token: string) {
 
 	return {
 		apiKey: key,
-		secret: actualSecret.vault,
+		secret: rawKey,
 		ownerId: key.ownerId,
 	};
 }

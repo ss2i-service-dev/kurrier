@@ -47,6 +47,7 @@ import { z } from "zod";
 import slugify from "@sindresorhus/slugify";
 import {getWorkspaceRole, rlsClient} from "@/lib/actions/clients";
 import {assertIdentityAccess, assertSignedIn, assertWorkspace, isUuid} from "@/lib/authz";
+import {assertPublicUrl} from "@common/safe-http";
 import { v4 as uuidv4 } from "uuid";
 import { backfillMailboxes, clearImapClients } from "@/lib/mail-jobs";
 import { kvGet } from "@common";
@@ -637,10 +638,14 @@ export async function addNewEmailIdentity(
 		const userId = String((await isSignedIn())?.id);
 
 		if (data.smtpAccountId) {
-			// ss2i (controle d'acces) : compte SMTP visible (RLS) ; workspace et proprietaire
-			// sont ceux du serveur (le formulaire etale apres eux pouvait les remplacer).
+			// ss2i (controle d'acces) : compte SMTP visible (RLS) et a l'utilisateur (le worker
+			// ne dechiffre que les secrets du proprietaire de l'identite) ; workspace et
+			// proprietaire sont ceux du serveur (le formulaire etale apres eux les remplacait).
 			const [smtpAccount] = await rls((tx) =>
-				tx.select({ id: smtpAccounts.id }).from(smtpAccounts).where(eq(smtpAccounts.id, String(data.smtpAccountId))),
+				tx
+					.select({ id: smtpAccounts.id })
+					.from(smtpAccounts)
+					.where(and(eq(smtpAccounts.id, String(data.smtpAccountId)), eq(smtpAccounts.ownerId, userId))),
 			);
 			if (!smtpAccount) throw new Error("SMTP account not found");
 			const identityData = IdentityInsertSchema.parse({
@@ -672,6 +677,12 @@ export async function addNewEmailIdentity(
 					.where(eq(identities.id, String(data.domainIdentityId))),
 			);
 
+			// ss2i (controle d'acces) : domaine et fournisseur visibles (RLS), fournisseur de
+			// l'utilisateur, avant tout appel au fournisseur.
+			if (!domainIdentity) throw new Error("Domain identity not found");
+			const provider = isUuid(data.providerId) ? await getProviderById(String(data.providerId)) : null;
+			if (!provider || provider.ownerId !== userId) throw new Error("Provider not found");
+
 			const id = uuidv4();
 			const initRes = await initializeEmailIdentity(data, id);
 			if (!initRes.success || !initRes.data) {
@@ -682,7 +693,6 @@ export async function addNewEmailIdentity(
 			data.metaData = response;
 			data.id = id;
 			data.sharedWithWorkspace = Boolean(sharedWithWorkspace);
-			if (!domainIdentity) throw new Error("Domain identity not found");
 			const identityData = IdentityInsertSchema.parse({
 				...data,
 				workspaceId,
@@ -1327,8 +1337,13 @@ export async function addWebhook(
 		if (!identity) {
 			return { success: false, error: "Choose an identity for this webhook." };
 		}
+		// Adresse publique seulement (le worker la reverifie a chaque envoi).
+		const url = await assertPublicUrl(String(data.url ?? ""), { allowHttp: true }).catch(() => null);
+		if (!url) {
+			return { success: false, error: "Webhook URL must be a public http(s) address." };
+		}
 		const insertPayload = {
-			url: data.url,
+			url: url.toString(),
 			identityId: identity.id,
 			events: [data.scope],
 		};

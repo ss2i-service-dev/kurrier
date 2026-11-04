@@ -15,7 +15,8 @@ import {
     createSessionForUser,
     createUserWithWorkspace,
     getWorkspaceRedirectUrl,
-} from "@/lib/actions/auth";
+} from "@/lib/auth-session";
+import { getPublicEnv } from "@schema";
 
 export async function GET(request: NextRequest) {
     const cookieStore = await cookies();
@@ -50,10 +51,19 @@ export async function GET(request: NextRequest) {
     if (!email || !providerUserId) {
         return NextResponse.redirect(new URL("/auth/login", request.url));
     }
+    // ss2i (controle d'acces) : l'adresse sert a retrouver le compte local ; une adresse
+    // non verifiee par Google ouvrirait le compte de son vrai titulaire.
+    if (claims?.email_verified !== true) {
+        return NextResponse.redirect(new URL("/auth/login", request.url));
+    }
 
     let [user] = await db.select().from(users).where(eq(users.email, email));
 
     if (!user) {
+        // ss2i : inscription fermee (DISABLE_SIGNUP) : pas de compte cree par Google non plus.
+        if (getPublicEnv().DISABLE_SIGNUP) {
+            return NextResponse.redirect(new URL("/auth/login", request.url));
+        }
         const passwordHash = await argon2.hash(crypto.randomUUID());
 
         const createdUser = await createUserWithWorkspace({

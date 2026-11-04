@@ -45,7 +45,8 @@ import {
 import { parseSecret } from "@/lib/utils";
 import { z } from "zod";
 import slugify from "@sindresorhus/slugify";
-import {getWorkspaceId, getWorkspaceRole, rlsClient} from "@/lib/actions/clients";
+import {getWorkspaceRole, rlsClient} from "@/lib/actions/clients";
+import {assertIdentityAccess, assertSignedIn, assertWorkspace, isUuid} from "@/lib/authz";
 import { v4 as uuidv4 } from "uuid";
 import { backfillMailboxes, clearImapClients } from "@/lib/mail-jobs";
 import { kvGet } from "@common";
@@ -78,7 +79,7 @@ export async function upsertProviderAccount(
 	return handleAction(async () => {
 		const session = await currentSession();
 		const data = decode(formData);
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 		const parsed = ProviderAccountFormSchema.parse(data);
 
 		const rls = await rlsClient();
@@ -126,7 +127,7 @@ export async function upsertSMTPAccount(
 		const parsed = SmtpAccountFormSchema.parse(data);
 		const cleanedOptional = parsed.optional;
 		const cleanedRequired = parsed.required;
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 
 		const smtpConfig: Record<string, unknown> = {
 			ulid: parsed.ulid,
@@ -204,7 +205,9 @@ export async function fetchDecryptedSecrets({
 }) {
 	const rls = await rlsClient();
 	const session = await currentSession();
-	// const workspaceId = await getWorkspaceId();
+	// ss2i (controle d'acces) : workspace du cookie verifie (appartenance) avant tout appel
+	// au coffre, qui ne fait que poser l'identifiant recu dans le contexte RLS.
+	const workspaceId = await assertWorkspace();
 
 	const rows = await rls((tx) => {
 		let q = tx
@@ -238,7 +241,6 @@ export async function fetchDecryptedSecrets({
 	return Promise.all(
 		rows.map(async (r) => {
 			const metaId = String(r.metaId);
-			const workspaceId = await getWorkspaceId();
 			const { vault } = await getSecret(session, metaId, workspaceId);
 
 			const payload = {
@@ -294,16 +296,20 @@ export const verifySmtpAccount = async (
 	smtpSecret: FetchDecryptedSecretsResultRow,
 ): Promise<FormState<VerifyResult>> => {
 	return handleAction(async () => {
-		const parsedVaultValues = smtpSecret.parsedSecret;
+		// ss2i (controle d'acces) : le compte est relu par RLS ; ses identifiants et son secret
+		// sont ceux de la base, jamais ceux envoyes par le client (avant : n'importe quel
+		// secret ecrase, connexion a n'importe quel serveur).
+		const account = await smtpAccountById(String(smtpSecret?.linkRow?.accountId ?? ""));
+		const parsedVaultValues = account.parsedSecret;
 		const session = await currentSession();
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 
 		const mailer = createMailer("smtp", parsedVaultValues);
-		const res = await mailer.verify(String(smtpSecret?.linkRow?.accountId));
+		const res = await mailer.verify(String(account.linkRow?.accountId));
 		parsedVaultValues.sendVerified = res?.meta?.send;
 		parsedVaultValues.receiveVerified = res?.meta?.receive;
 
-		await updateSecret(session, workspaceId, smtpSecret.metaId, {
+		await updateSecret(session, workspaceId, account.metaId, {
 			value: JSON.stringify(parsedVaultValues),
 		});
 		revalidatePath(DASHBOARD_PATH);
@@ -330,6 +336,49 @@ export const getIdentityById = async (identityId: string) => {
 	);
 	return identity;
 };
+
+// ss2i (controle d'acces) : identite (avec son compte SMTP ou son fournisseur) et secrets
+// relus par RLS a partir du seul identifiant envoye par le client ; les actions ci-dessous
+// recevaient l'objet entier du client et s'en servaient tel quel.
+async function identityWithAccounts(identityId: string) {
+	if (!isUuid(identityId)) throw new Error("Identity not found or access denied");
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select()
+			.from(identities)
+			.leftJoin(smtpAccounts, eq(identities.smtpAccountId, smtpAccounts.id))
+			.leftJoin(providers, eq(identities.providerId, providers.id))
+			.where(eq(identities.id, identityId))
+			.limit(1),
+	);
+	if (!row) throw new Error("Identity not found or access denied");
+	return row;
+}
+
+async function smtpAccountById(accountId: string) {
+	if (!isUuid(accountId)) throw new Error("SMTP account not found");
+	const [account] = await fetchDecryptedSecrets({
+		linkTable: smtpAccountSecrets,
+		foreignCol: smtpAccountSecrets.accountId,
+		secretIdCol: smtpAccountSecrets.secretId,
+		parentId: accountId,
+	});
+	if (!account) throw new Error("SMTP account not found");
+	return account;
+}
+
+async function providerAccountById(providerId: string) {
+	if (!isUuid(providerId)) throw new Error("Provider not found");
+	const [account] = await fetchDecryptedSecrets({
+		linkTable: providerSecrets,
+		foreignCol: providerSecrets.providerId,
+		secretIdCol: providerSecrets.secretId,
+		parentId: providerId,
+	});
+	if (!account?.provider) throw new Error("Provider not found");
+	return account;
+}
 
 export async function initializeDomainIdentity(
 	data: Record<string, unknown>,
@@ -417,6 +466,9 @@ export async function verifyDomainIdentity(
 	providerAccount: FetchDecryptedSecretsResult[number] | undefined,
 ): Promise<FormState<DomainIdentity>> {
 	return handleAction(async () => {
+		// ss2i (controle d'acces) : identite et compte du fournisseur relus par RLS.
+		userDomainIdentity = await identityWithAccounts(String(userDomainIdentity?.identities?.id ?? ""));
+		providerAccount = await providerAccountById(String(userDomainIdentity.identities.providerId ?? ""));
 		// const decrypted = parseSecret(providerAccount);
 		const decrypted = providerAccount?.parsedSecret;
 		const mailer = createMailer(
@@ -492,7 +544,9 @@ const initializeEmailIdentity = async (
 	});
 };
 
-export const initializeMailboxes = async (emailIdentity: IdentityEntity, userId: string, workspaceId: string) => {
+// ss2i (controle d'acces) : interne a addNewEmailIdentity, plus exportee (un export de ce
+// fichier "use server" est une action appelable avec n'importe quelle identite).
+const initializeMailboxes = async (emailIdentity: IdentityEntity, userId: string, workspaceId: string) => {
 	if (emailIdentity.kind !== "email") return;
 
 	if (emailIdentity.smtpAccountId) {
@@ -579,14 +633,21 @@ export async function addNewEmailIdentity(
 			}
 		}
 
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 		const userId = String((await isSignedIn())?.id);
 
 		if (data.smtpAccountId) {
+			// ss2i (controle d'acces) : compte SMTP visible (RLS) ; workspace et proprietaire
+			// sont ceux du serveur (le formulaire etale apres eux pouvait les remplacer).
+			const [smtpAccount] = await rls((tx) =>
+				tx.select({ id: smtpAccounts.id }).from(smtpAccounts).where(eq(smtpAccounts.id, String(data.smtpAccountId))),
+			);
+			if (!smtpAccount) throw new Error("SMTP account not found");
 			const identityData = IdentityInsertSchema.parse({
+				...data,
+				smtpAccountId: smtpAccount.id,
 				workspaceId,
 				ownerId: userId,
-				...data
 			});
 			identityData.sharedWithWorkspace = Boolean(sharedWithWorkspace)
 			identityData.metaData = {
@@ -621,10 +682,11 @@ export async function addNewEmailIdentity(
 			data.metaData = response;
 			data.id = id;
 			data.sharedWithWorkspace = Boolean(sharedWithWorkspace);
+			if (!domainIdentity) throw new Error("Domain identity not found");
 			const identityData = IdentityInsertSchema.parse({
+				...data,
 				workspaceId,
 				ownerId: userId,
-				...data
 			});
 			const [emailIdentity] = await db.insert(identities).values(identityData as IdentityCreate).returning()
 
@@ -659,6 +721,14 @@ export const testSendingEmail = async (
 	decryptedSecrets: Record<any, unknown>,
 ) => {
 	return handleAction(async () => {
+		// ss2i (controle d'acces) : identite et identifiants relus par RLS ; avant, l'action
+		// envoyait sans connexion avec le serveur et les identifiants fournis par le client.
+		userIdentity = await identityWithAccounts(String(userIdentity?.identities?.id ?? ""));
+		if (userIdentity.smtp_accounts) {
+			decryptedSecrets = (await smtpAccountById(userIdentity.smtp_accounts.id)).parsedSecret;
+		} else if (userIdentity.providers) {
+			decryptedSecrets = (await providerAccountById(userIdentity.providers.id)).parsedSecret;
+		}
 		if (userIdentity?.smtp_accounts) {
 			const mailer = createMailer("smtp", decryptedSecrets);
 			await mailer.sendTestEmail(userIdentity.identities.value, {
@@ -684,7 +754,7 @@ export const testSendingEmail = async (
 };
 
 export const fetchUserIdentities = async () => {
-	const workspaceId = await getWorkspaceId();
+	const workspaceId = await assertWorkspace();
 	return db.select()
 		.from(identities)
 		.leftJoin(smtpAccounts, eq(identities.smtpAccountId, smtpAccounts.id))
@@ -699,6 +769,9 @@ export const deleteDomainIdentity = async (
 	providerAccount: FetchDecryptedSecretsResult[number] | undefined,
 ): Promise<FormState> => {
 	return handleAction(async () => {
+		// ss2i (controle d'acces) : identite et compte du fournisseur relus par RLS.
+		userDomainIdentity = await identityWithAccounts(String(userDomainIdentity?.identities?.id ?? ""));
+		providerAccount = await providerAccountById(String(userDomainIdentity.identities.providerId ?? ""));
 		const rls = await rlsClient();
 		const emailsUsingThisDomain = await rls((tx) =>
 			tx
@@ -743,6 +816,10 @@ export const deleteEmailIdentity = async (
 	userIdentity: FetchUserIdentitiesResult[number],
 ) => {
 	return handleAction(async () => {
+		// ss2i (controle d'acces) : identite relue par RLS a partir de son seul identifiant ;
+		// avant, un objet fabrique par le client (sans connexion) faisait supprimer n'importe
+		// quelle identite par le worker, avec ses dossiers et messages en cascade.
+		userIdentity = await identityWithAccounts(String(userIdentity?.identities?.id ?? ""));
 		if (!userIdentity.smtp_accounts) {
 			const [secret] = await fetchDecryptedSecrets({
 				linkTable: providerSecrets,
@@ -776,8 +853,12 @@ export const verifyProviderAccount = async (
 	providerSecret: FetchDecryptedSecretsResultRow,
 ) => {
 	return handleAction(async () => {
+		// ss2i (controle d'acces) : fournisseur et secret relus par RLS (workspace verifie) ;
+		// avant, le secret designe par le client etait ecrase avec ses valeurs.
+		providerSecret = await providerAccountById(String(providerSecret?.linkRow?.providerId ?? ""));
+		providerType = providerSecret.provider!.type as Providers;
 		let res = { ok: false, message: "Not implemented" } as VerifyResult;
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 		if (providerType === "ses") {
 			const mailer = createMailer("ses", providerSecret.parsedSecret);
 			const { WEB_URL } = getPublicEnv();
@@ -1062,7 +1143,7 @@ export async function addApiKey(
 	return handleAction(async () => {
 		const session = await currentSession();
 		const data = decode(formData);
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 
 		const { ulid, name, scope } = data as {
 			ulid: string;
@@ -1119,7 +1200,7 @@ export async function addApiKey(
 export const fetchUserAPIKeys = async () => {
 	const rls = await rlsClient();
 	const session = await currentSession();
-	const workspaceId = await getWorkspaceId();
+	const workspaceId = await assertWorkspace();
 
 	const apiKeyRows = await rls((tx) =>
 		tx
@@ -1155,9 +1236,9 @@ export type FetchUserAPIKeysResult = Awaited<
 
 export const regenerateDavPassword = async () => {
 	const { davEvents, davQueue } = await getRedis();
-	const user = await isSignedIn();
-	const workspaceId = await getWorkspaceId();
-	const job = await davQueue.add("dav:update-password", { userId: user?.id, workspaceId });
+	const user = await assertSignedIn();
+	const workspaceId = await assertWorkspace();
+	const job = await davQueue.add("dav:update-password", { userId: user.id, workspaceId });
 	await job.waitUntilFinished(davEvents);
 	revalidatePath("/w/[workspaceId]/dashboard/platform/sync-services");
 	return job.returnvalue;
@@ -1240,9 +1321,15 @@ export async function addWebhook(
 ): Promise<FormState> {
 	return handleAction(async () => {
 		const data = decode(formData);
+		// ss2i (controle d'acces) : un webhook est rattache a une identite visible ; sans
+		// identite, le worker l'appelait pour tout le courrier entrant de toutes les boites.
+		const identity = await assertIdentityAccess({ id: String(data.identityId ?? "") }).catch(() => null);
+		if (!identity) {
+			return { success: false, error: "Choose an identity for this webhook." };
+		}
 		const insertPayload = {
 			url: data.url,
-			identityId: data.identityId ?? null,
+			identityId: identity.id,
 			events: [data.scope],
 		};
 
@@ -1284,7 +1371,7 @@ export const fetchUserDavAccountForWorkspace = async () => {
 	const rls = await rlsClient();
 	const session = await currentSession();
 	const user = await isSignedIn();
-	const workspaceId = await getWorkspaceId();
+	const workspaceId = await assertWorkspace();
 
 	const [row] = await rls((tx) =>
 		tx

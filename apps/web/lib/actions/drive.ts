@@ -228,9 +228,33 @@ function getVolumePrefix(volume: DriveVolumeEntity) {
 	return `drive/workspaces/${volume.workspaceId}/${volume.code}/`;
 }
 
+// ss2i (controle d'acces) : le contexte vient du client ; le volume (seau, prefixe du
+// workspace) est relu par RLS a partir de son seul id, et le chemin ne peut pas remonter
+// hors du prefixe du volume. Avant, le volume envoye par le client choisissait seau et
+// prefixe (liste et URL d'envoi dans n'importe quel workspace).
+async function verifiedVolume(ctx: DriveRouteContext) {
+	const volumeId = String(ctx?.driveVolume?.id ?? "");
+	if (!volumeId) return null;
+	const rls = await rlsClient();
+	const [vol] = await rls((tx) =>
+		tx.select().from(driveVolumes).where(eq(driveVolumes.id, volumeId)).limit(1),
+	);
+	if (!vol) throw new Error("Volume not found");
+	return vol;
+}
+
+const assertSafeDrivePath = (...parts: string[]) => {
+	for (const p of parts) {
+		if (String(p ?? "").split("/").some((seg) => seg === "." || seg === "..") || String(p ?? "").includes("\\")) {
+			throw new Error("Invalid path");
+		}
+	}
+};
+
 export async function fetchCloudListPath(ctx: DriveRouteContext) {
-	const volume = ctx.driveVolume;
+	const volume = await verifiedVolume(ctx);
 	if (!volume) return [];
+	assertSafeDrivePath(String(ctx.withinPath || "/"));
 
 	const volumeId = volume.id;
 	const bucket = String(volume.metaData?.bucket || "");
@@ -350,7 +374,7 @@ export async function getCloudUploadUrl(
 		contentType?: string | null;
 	},
 ) {
-	const volume = ctx.driveVolume;
+	const volume = await verifiedVolume(ctx);
 	if (!volume) throw new Error("Missing driveVolume");
 
 	const user = await isSignedIn();
@@ -363,6 +387,7 @@ export async function getCloudUploadUrl(
 	const withinPath = String(ctx.withinPath || "/");
 	const filename = String(input.filename || "").trim();
 	if (!filename) throw new Error("Missing filename");
+	assertSafeDrivePath(withinPath, filename);
 
 	const volumePrefix = getVolumePrefix(volume);
 	const fullPath = joinPaths(withinPath, filename);

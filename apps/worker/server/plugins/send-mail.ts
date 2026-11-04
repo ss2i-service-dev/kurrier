@@ -51,6 +51,7 @@ import {s3} from "../../lib/create-s3-client";
 import { upsertContactsFromOutgoing } from "../../lib/outgoing-contacts";
 import { ingestRecipientStats } from "../../lib/recipient-stats";
 import { deleteDraft } from "../../lib/drafts/draft-service";
+import { allowedAttachmentKeys, originalUsableBy } from "../../lib/send-guards";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 // import MailComposer from "nodemailer/lib/mail-composer";
 const connection = new IORedis({
@@ -283,6 +284,11 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 			const attachmentBlobs = await fetchAttachmentBlobs(
 				decodedForm.attachments as string,
+				{
+					workspaceId: mailbox.mailbox.workspaceId,
+					identityOwnerId: mailbox.identity.ownerId,
+					senderUserId: String(decodedForm.senderUserId ?? "") || null,
+				},
 			);
 
 			const data: MailComposeInput = {
@@ -302,6 +308,15 @@ export default defineNitroPlugin(async (nitroApp) => {
 				decodedForm.originalMessageId
 			) {
 				origRow = await getOriginalMessage(decodedForm);
+				// ss2i (controle d'acces) : un message d'origine d'un autre workspace est ignore
+				// (ni citation, ni rattachement au fil, ni In-Reply-To) ; une reponse sans
+				// message d'origine est refusee plus bas, comme un message introuvable.
+				if (origRow?.message && !originalUsableBy(origRow.message, mailbox.mailbox)) {
+					console.warn(
+						`[send-mail] original message ${origRow.message.id} is not in workspace ${mailbox.mailbox.workspaceId}: ignored`,
+					);
+					origRow = null;
+				}
 			}
 
 			const signatureHtml =
@@ -605,6 +620,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 	async function fetchAttachmentBlobs(
 		attachmentsString: string,
+		owner: Parameters<typeof allowedAttachmentKeys>[1],
 	): Promise<AttachmentDownload[]> {
 		let attachments: unknown = [];
 		try {
@@ -617,6 +633,20 @@ export default defineNitroPlugin(async (nitroApp) => {
 		const candidates = list.filter((a: any) => a && a.path);
 
 		if (candidates.length === 0) return [];
+
+		// ss2i (controle d'acces) : seulement des cles de l'expediteur ou des pieces jointes de
+		// son workspace ; une autre cle fait echouer l'envoi (avant : n'importe quel objet du
+		// bucket partait en piece jointe).
+		const allowed = await allowedAttachmentKeys(
+			candidates.map((a: any) => String(a.path)),
+			owner,
+		);
+		const refused = candidates.filter((a: any) => !allowed.has(String(a.path)));
+		if (refused.length) {
+			throw new Error(
+				`Attachment not allowed: ${refused.map((a: any) => String(a.filenameOriginal ?? a.path)).join(", ")}`,
+			);
+		}
 
 		try {
 			const downloads = await Promise.all(

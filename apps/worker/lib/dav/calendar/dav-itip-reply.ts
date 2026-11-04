@@ -88,12 +88,16 @@ export const davItipReply = async (opts: {
 		return;
 	}
 
+	// ss2i (controle d'acces) : identite du proprietaire de l'evenement ET de son workspace ;
+	// le participant est deja celui de l'evenement. L'action web ne transmet plus que des ids
+	// relus par RLS, ceci protege les autres chemins.
 	const [identity] = await db
 		.select()
 		.from(identities)
 		.where(
 			and(
 				eq(identities.ownerId, event.ownerId),
+				eq(identities.workspaceId, event.workspaceId),
 				sql`lower(${identities.value}) = ${responderEmail}`,
 			),
 		);

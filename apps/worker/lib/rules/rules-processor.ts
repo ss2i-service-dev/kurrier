@@ -1,4 +1,4 @@
-import { db, identities, mailboxes, messages, mailRules, mailRuleActions, threads, mailboxThreadLabels } from "@db";
+import { db, identities, labels, mailboxes, messages, mailRules, mailRuleActions, threads, mailboxThreadLabels } from "@db";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { MailRuleMatchV1, mailRulesFieldsList, mailRulesOpsList } from "@schema";
 import { markAsRead } from "./rule-items/mark-read";
@@ -225,10 +225,18 @@ export const processRules = async ({ messageId }: { messageId: string }) => {
         })
     ) return;
 
+    // ss2i (controle d'acces) : regles de l'identite dans son propre workspace seulement
+    // (une regle creee depuis un autre workspace sur cette identite est ignoree).
     const rules = await db
         .select()
         .from(mailRules)
-        .where(and(eq(mailRules.identityId, identity.id), eq(mailRules.enabled, true)))
+        .where(
+            and(
+                eq(mailRules.identityId, identity.id),
+                eq(mailRules.workspaceId, identity.workspaceId),
+                eq(mailRules.enabled, true),
+            ),
+        )
         .orderBy(asc(mailRules.priority));
 
     if (!rules.length) return;
@@ -275,6 +283,13 @@ export const processRules = async ({ messageId }: { messageId: string }) => {
                 case "add_label": {
                     const labelId = (act.params as any)?.labelId as string | undefined;
                     if (!labelId) break;
+                    // ss2i (controle d'acces) : etiquette du workspace de l'identite seulement.
+                    const [label] = await db
+                        .select({ id: labels.id })
+                        .from(labels)
+                        .where(and(eq(labels.id, labelId), eq(labels.workspaceId, identity.workspaceId)))
+                        .limit(1);
+                    if (!label) break;
                     await db.insert(mailboxThreadLabels).values({
                         threadId: thread.id,
                         mailboxId: mailbox.id,

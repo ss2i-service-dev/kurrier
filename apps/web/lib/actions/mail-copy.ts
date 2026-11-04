@@ -21,10 +21,21 @@ export type CopyMessage = {
 	attachments: string[];
 };
 
-const addrs = (v: any): CopyAddress[] =>
-	v && Array.isArray(v.value)
-		? v.value.map((a: any) => ({ name: a?.name ?? null, address: a?.address ?? null }))
-		: [];
+// Adresses d'un champ from/to/cc : objet mailparser ({ value: [...] }) pour les messages
+// recus, simple chaine (« a@b, "Nom" <c@d> ») pour ceux envoyes depuis kurrier.
+const addrs = (v: any): CopyAddress[] => {
+	if (!v) return [];
+	if (Array.isArray(v.value))
+		return v.value.map((a: any) => ({ name: a?.name || null, address: a?.address || null }));
+	const raw: string = typeof v === "string" ? v : typeof v.text === "string" ? v.text : "";
+	return (raw.match(/(?:"[^"]*"|[^,])+/g) ?? [])
+		.map((part) => part.trim())
+		.filter(Boolean)
+		.map((part) => {
+			const m = part.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+			return m ? { name: m[1].trim() || null, address: m[2].trim() } : { name: null, address: part };
+		});
+};
 
 export async function fetchMessagesForCopy(opts: {
 	threadId?: string;

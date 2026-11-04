@@ -4,6 +4,7 @@ import {
 	apiError,
 	validateApiKey, validateIdentityOwnership,
 } from "../../../../../lib/api-helpers";
+import { assertPublicUrl } from "@common/safe-http";
 import { db, WebhookCreateSchema, WebhookInsertEntity, webhooks } from "@db";
 
 export default defineEventHandler(async (event) => {
@@ -39,10 +40,15 @@ export default defineEventHandler(async (event) => {
 		identityId: data.identityId,
 		ownerId,
 	});
+	// Adresse publique seulement (reverifiee a chaque envoi, lib/webhooks/message.received.ts).
+	const url = await assertPublicUrl(String(data.url), { allowHttp: true }).catch(() => null);
+	if (!url) {
+		return apiError(400, "INVALID_URL", "Field `url` must be a public http(s) address");
+	}
 	const insertPayload = {
 		ownerId,
 		workspaceId: identity.workspaceId,
-		url: data.url,
+		url: url.toString(),
 		description: data.description ?? null,
 		enabled: data.enabled ?? true,
 		identityId: identity.id,

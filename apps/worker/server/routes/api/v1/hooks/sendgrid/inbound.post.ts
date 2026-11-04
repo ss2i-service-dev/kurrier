@@ -1,10 +1,10 @@
 import { defineEventHandler, readMultipartFormData } from "h3";
-import { db, identities, mailboxes } from "@db";
+import { db, mailboxes } from "@db";
 import { ParsedMail, simpleParser } from "mailparser";
 import { eq } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { parseAndStoreEmail } from "../../../../../../lib/message-payload-parser";
-import { verifySendgrid } from "../../../../../../lib/inbound-auth";
+import { verifySendgrid, inboundIdentityFor } from "../../../../../../lib/inbound-auth";
 
 export function getToEmails(parsed: ParsedMail): string[] {
 	if (!parsed.to) return [];
@@ -31,10 +31,8 @@ export default defineEventHandler(async (event) => {
 
 		const toAddress = getToEmails(parsed)[0] ?? null;
 
-		const [identity] = await db
-			.select()
-			.from(identities)
-			.where(eq(identities.value, toAddress));
+		// ss2i (controle d'acces) : identite de ce fournisseur, et une seule.
+		const identity = await inboundIdentityFor(toAddress, "sendgrid");
 
 		if (!identity) {
 			console.log("No identity found for toAddress", toAddress);

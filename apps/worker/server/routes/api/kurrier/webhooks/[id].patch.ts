@@ -4,6 +4,7 @@ import {
 	apiError,
 	validateApiKey, validateIdentityOwnership,
 } from "../../../../../lib/api-helpers";
+import { assertPublicUrl } from "@common/safe-http";
 import { db, WebhookInsertEntity, webhooks, WebhookUpdateSchema } from "@db";
 import {and, eq} from "drizzle-orm";
 
@@ -35,6 +36,11 @@ export default defineEventHandler(async (event) => {
 	// ss2i (controle d'acces) : proprietaire, workspace et id ne se modifient pas ; une
 	// nouvelle identite doit appartenir a la cle API (le webhook prend son workspace).
 	const { id: _id, ownerId: _ownerId, workspaceId: _workspaceId, ...patch } = parsed.data as Record<string, any>;
+	if ("url" in patch) {
+		const url = await assertPublicUrl(String(patch.url ?? ""), { allowHttp: true }).catch(() => null);
+		if (!url) return apiError(400, "INVALID_URL", "Field `url` must be a public http(s) address");
+		patch.url = url.toString();
+	}
 	if ("identityId" in patch) {
 		if (!patch.identityId) {
 			return apiError(400, "MISSING_IDENTITY", "Field `identityId` cannot be empty");

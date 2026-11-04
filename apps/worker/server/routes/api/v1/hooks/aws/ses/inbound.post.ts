@@ -2,6 +2,7 @@ import { defineEventHandler, readRawBody } from "h3";
 import {
 	db,
 	decryptAdminSecrets,
+	identities,
 	mailboxes,
 	providers,
 	providerSecrets,
@@ -9,7 +10,7 @@ import {
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 
 import { simpleParser } from "mailparser";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { parseAndStoreEmail } from "../../../../../../../lib/message-payload-parser";
 import { forbidden, verifySns } from "../../../../../../../lib/inbound-auth";
 
@@ -48,6 +49,23 @@ export default defineEventHandler(async (event) => {
 			// const size: number = rec.s3?.object?.size ?? 0;
 
 			const [, ownerId, providerId, identityId, emlId] = key.split("/");
+			// ss2i (controle d'acces) : la cle S3 designe proprietaire, fournisseur et identite ;
+			// ils doivent aller ensemble (identite de ce fournisseur et de ce proprietaire).
+			const [identity] = await db
+				.select({ id: identities.id })
+				.from(identities)
+				.where(
+					and(
+						eq(identities.id, String(identityId ?? "")),
+						eq(identities.providerId, String(providerId ?? "")),
+						eq(identities.ownerId, String(ownerId ?? "")),
+					),
+				)
+				.limit(1);
+			if (!identity) {
+				console.warn(`[Webhook] SES: key ${key} does not match an identity of its provider: ignored`);
+				return { ok: true };
+			}
 			const [secrets] = await decryptAdminSecrets({
 				linkTable: providerSecrets,
 				foreignCol: providerSecrets.providerId,

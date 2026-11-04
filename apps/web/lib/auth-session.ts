@@ -196,6 +196,19 @@ export async function getWorkspaceRedirectUrl(user: typeof users.$inferSelect, l
 // Cookies du workspace actif. L'appelant fournit l'utilisateur deja authentifie et a
 // verifie qu'il appartient a ce workspace (getWorkspaceRedirectUrl : son propre workspace ;
 // switchWorkSpace : appartenance controlee).
+// ss2i : les cookies du workspace etaient des cookies de session (sans duree) alors que le
+// cookie « session » vit 30 jours. A la fermeture de Chrome ils disparaissaient, la session
+// restait valide et chaque page tombait en « No workspace selected », F5 compris (Samuel le
+// 04/11 : « quand tu reload, ca te recharge la meme erreur en boucle »). Meme duree que la
+// session ; le proxy les repose de toute facon si l'URL porte un autre workspace.
+const WORKSPACE_COOKIE_OPTIONS = {
+	httpOnly: true,
+	secure: process.env.NODE_ENV === "production",
+	sameSite: "lax" as const,
+	path: "/",
+	maxAge: 60 * 60 * 24 * 30,
+};
+
 export const updateWorkSpaceContext = async (workspacePublicId: string, id: string, user: Pick<UserEntity, "id">) => {
 	const cookieStore = await cookies()
 	let role: WorkspaceRolesListType = "member"
@@ -209,21 +222,18 @@ export const updateWorkSpaceContext = async (workspacePublicId: string, id: stri
 	cookieStore.set({
 		name: 'workspaceId',
 		value: id,
-		httpOnly: true,
-		path: '/',
+		...WORKSPACE_COOKIE_OPTIONS,
 	})
 	cookieStore.set({
 		name: 'workspacePublicId',
 		value: workspacePublicId,
-		httpOnly: true,
-		path: '/',
+		...WORKSPACE_COOKIE_OPTIONS,
 	})
 	if (role){
 		cookieStore.set({
 			name: 'workspaceRole',
 			value: String(role),
-			httpOnly: true,
-			path: '/',
+			...WORKSPACE_COOKIE_OPTIONS,
 		})
 	}
 };

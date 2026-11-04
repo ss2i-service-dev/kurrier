@@ -30,7 +30,36 @@ export type AgendaEvent = {
 	location?: string;
 	notes?: string;
 	sourceQuote: string;
+	/** Choisi a l'etape de confirmation ; absent = aucun rappel. */
+	reminder?: AgendaReminder;
 };
+
+// Rappel demande a la confirmation, « Aucun rappel » par defaut (Samuel, 04/11). Journee
+// entiere : minutes avant le debut a 00:00 heure de Paris (la veille a 8 h = 16 h avant = 960).
+// Un changement d'heure entre le rappel et l'evenement le decale d'une heure.
+export type AgendaReminder = "none" | "day-before-8h" | "2-days-8h" | "week-8h" | "15m" | "1h" | "day-before";
+
+export const ALL_DAY_REMINDERS: { value: AgendaReminder; label: string; minutes: number | null }[] = [
+	{ value: "none", label: "Aucun rappel", minutes: null },
+	{ value: "day-before-8h", label: "La veille à 8 h", minutes: 24 * 60 - 8 * 60 },
+	{ value: "2-days-8h", label: "2 jours avant à 8 h", minutes: 2 * 24 * 60 - 8 * 60 },
+	{ value: "week-8h", label: "Une semaine avant à 8 h", minutes: 7 * 24 * 60 - 8 * 60 },
+];
+
+export const TIMED_REMINDERS: { value: AgendaReminder; label: string; minutes: number | null }[] = [
+	{ value: "none", label: "Aucun rappel", minutes: null },
+	{ value: "15m", label: "15 minutes avant", minutes: 15 },
+	{ value: "1h", label: "1 heure avant", minutes: 60 },
+	{ value: "day-before", label: "La veille", minutes: 24 * 60 },
+];
+
+export const remindersFor = (allDay: boolean) => (allDay ? ALL_DAY_REMINDERS : TIMED_REMINDERS);
+
+/** Minutes avant le debut, null pour « aucun » ; undefined si le choix ne vaut pas pour ce type. */
+export function reminderMinutes(reminder: AgendaReminder | undefined, allDay: boolean): number | null | undefined {
+	const opt = remindersFor(allDay).find((o) => o.value === (reminder ?? "none"));
+	return opt ? opt.minutes : undefined;
+}
 
 export type AgendaMessage = {
 	from: string;
@@ -89,6 +118,37 @@ export function frenchDate(iso: string | null | undefined, withTime = true): str
 	if (!withTime) return day;
 	const time = new Intl.DateTimeFormat("fr-FR", { timeZone: AGENDA_TIMEZONE, hour: "2-digit", minute: "2-digit" }).format(t);
 	return `${day} à ${time}`;
+}
+
+const JOURS = ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"];
+const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+
+// « lundi 7 », « 1er », mois et annee a part (le recapitulatif les factorise).
+const jour = (t: Date) => `${JOURS[t.getUTCDay()]} ${t.getUTCDate() === 1 ? "1er" : t.getUTCDate()}`;
+const moisAn = (t: Date) => `${MOIS[t.getUTCMonth()]} ${t.getUTCFullYear()}`;
+const heure = (v: string) => {
+	const h = Number(v.slice(11, 13));
+	const m = v.slice(14, 16);
+	return m === "00" ? `${h} h` : `${h} h ${m}`;
+};
+
+/**
+ * Quand, en clair, pour le recapitulatif avant creation : « lundi 7 décembre 2026, journée
+ * entière », « du lundi 7 au vendredi 11 décembre 2026 », « mardi 8 décembre 2026, de 14 h à
+ * 15 h 30 ». Evenement deja normalise.
+ */
+export function agendaWhen(e: AgendaEvent): string {
+	const s = e.allDay ? parseDate(e.start) : parseDateTime(e.start);
+	const f = e.allDay ? parseDate(e.end) : parseDateTime(e.end);
+	if (!s || !f) return `${e.start} - ${e.end}`;
+	const sameDay = fmtDate(s) === fmtDate(f);
+	if (e.allDay) {
+		if (sameDay) return `${jour(s)} ${moisAn(s)}, journée entière`;
+		const from = moisAn(s) === moisAn(f) ? jour(s) : s.getUTCFullYear() === f.getUTCFullYear() ? `${jour(s)} ${MOIS[s.getUTCMonth()]}` : `${jour(s)} ${moisAn(s)}`;
+		return `du ${from} au ${jour(f)} ${moisAn(f)}, journée entière`;
+	}
+	if (sameDay) return `${jour(s)} ${moisAn(s)}, de ${heure(e.start)} à ${heure(e.end)}`;
+	return `du ${jour(s)} ${moisAn(s)} à ${heure(e.start)} au ${jour(f)} ${moisAn(f)} à ${heure(e.end)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,21 +257,23 @@ export function normalizeAgendaEvent(raw: unknown): { event: AgendaEvent } | { e
 	const location = clip(r.location, 255) || undefined;
 	const notes = clip(r.notes, 4000) || undefined;
 	const sourceQuote = clip(r.sourceQuote, 500);
+	const reminder = ((typeof r.reminder === "string" && r.reminder) || "none") as AgendaReminder;
 
 	const startDt = parseDateTime(startRaw);
 	const startD = parseDate(startRaw);
 	const allDay = r.allDay === true || (!startDt && !!startD);
+	if (reminderMinutes(reminder, allDay) === undefined) return { error: "Rappel invalide pour ce type d'événement" };
 	if (allDay) {
 		const s = startD ?? (startDt ? parseDate(fmtDate(startDt)) : null);
 		if (!s) return { error: `Date de début invalide : ${startRaw || "(vide)"}` };
 		const e = parseDate(endRaw) ?? (parseDateTime(endRaw) ? parseDate(endRaw.slice(0, 10)) : null) ?? s;
 		if (e < s) return { error: "La fin précède le début" };
-		return { event: { title, allDay: true, start: fmtDate(s), end: fmtDate(e), location, notes, sourceQuote } };
+		return { event: { title, allDay: true, start: fmtDate(s), end: fmtDate(e), location, notes, sourceQuote, reminder } };
 	}
 	if (!startDt) return { error: `Date ou heure de début invalide : ${startRaw || "(vide)"}` };
 	const e = parseDateTime(endRaw) ?? new Date(startDt.getTime() + 3_600_000);
 	if (e <= startDt) return { error: "La fin doit suivre le début" };
-	return { event: { title, allDay: false, start: fmtDateTime(startDt), end: fmtDateTime(e), location, notes, sourceQuote } };
+	return { event: { title, allDay: false, start: fmtDateTime(startDt), end: fmtDateTime(e), location, notes, sourceQuote, reminder } };
 }
 
 /** Propositions du LLM ({ events: [...] }) : les invalides sont ecartees. */
@@ -307,8 +369,8 @@ const escapeHtml = (s: string) =>
 
 /**
  * Corps de POST /users/{adresse}/events. Journee entiere : debut a 00:00, fin au lendemain du
- * dernier jour a 00:00 (convention Graph), disponibilite « libre ». Rappel : celui de Graph
- * par defaut. Corps : notes puis lien vers le fil dans courrier.
+ * dernier jour a 00:00 (convention Graph), disponibilite « libre ». Rappel : celui choisi a la
+ * confirmation (isReminderOn false pour « aucun »). Corps : notes puis lien vers le fil.
  */
 export function graphEventBody(e: AgendaEvent, opts: { threadUrl?: string; threadSubject?: string | null } = {}) {
 	const html: string[] = [];
@@ -325,6 +387,10 @@ export function graphEventBody(e: AgendaEvent, opts: { threadUrl?: string; threa
 		body: { contentType: "HTML", content: html.join("\n") },
 	};
 	if (e.allDay) body.showAs = "free";
+	// Rappel choisi a la confirmation, « aucun » par defaut : jamais celui de Graph (15 min).
+	const minutes = reminderMinutes(e.reminder, e.allDay) ?? null;
+	body.isReminderOn = minutes !== null;
+	if (minutes !== null) body.reminderMinutesBeforeStart = minutes;
 	if (e.location) body.location = { displayName: e.location };
 	return body;
 }

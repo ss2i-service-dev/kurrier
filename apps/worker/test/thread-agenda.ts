@@ -1,5 +1,6 @@
 // « Ajouter a l'agenda » depuis un fil (packages/common/src/thread-agenda.ts, OI 10280) :
-// corps Graph (journee entiere : fin au lendemain 00:00), validation des propositions et
+// corps Graph (journee entiere : fin au lendemain 00:00, rappel choisi), minutes des rappels,
+// recapitulatif en clair, validation des propositions et
 // des saisies, texte du fil envoye au LLM, requete a l'API Anthropic et erreurs Graph sur
 // des fetch simules. Aucune base, aucun reseau. Avec ANTHROPIC_API_KEY dans l'environnement,
 // un essai reel sur le fil de reference « Stage d'observation » du 04/11/2026 en plus.
@@ -8,15 +9,19 @@
 import assert from "node:assert/strict";
 import {
 	AGENDA_MODEL,
+	ALL_DAY_REMINDERS,
 	AgendaError,
 	type AgendaMessage,
 	agendaTranscript,
+	agendaWhen,
 	createGraphEvent,
 	extractAgendaEvents,
 	graphEventBody,
 	normalizeAgendaEvent,
 	parseAgendaEvents,
 	parseMailboxList,
+	reminderMinutes,
+	TIMED_REMINDERS,
 } from "../../../packages/common/src/thread-agenda";
 
 let failures = 0;
@@ -70,9 +75,59 @@ async function main() {
 		assert.deepEqual(b.end, { dateTime: "2026-12-12T00:00:00", timeZone: "Europe/Paris" });
 		assert.equal(b.showAs, "free");
 		assert.equal("location" in b, false);
-		// rappel par defaut de Graph : rien d'impose
-		assert.equal("isReminderOn" in b, false);
+		// « Aucun rappel » par defaut, jamais celui de Graph (15 min)
+		assert.equal(b.isReminderOn, false);
 		assert.equal("reminderMinutesBeforeStart" in b, false);
+	});
+
+	await test("rappels : minutes avant le debut (journee entiere : depuis 00:00 heure de Paris)", () => {
+		assert.equal(reminderMinutes("none", true), null);
+		assert.equal(reminderMinutes(undefined, true), null);
+		assert.equal(reminderMinutes("day-before-8h", true), 960);
+		assert.equal(reminderMinutes("2-days-8h", true), 2400);
+		assert.equal(reminderMinutes("week-8h", true), 9600);
+		assert.equal(reminderMinutes("none", false), null);
+		assert.equal(reminderMinutes("15m", false), 15);
+		assert.equal(reminderMinutes("1h", false), 60);
+		assert.equal(reminderMinutes("day-before", false), 1440);
+		// un choix d'horaire ne vaut pas pour une journee entiere, et inversement
+		assert.equal(reminderMinutes("15m", true), undefined);
+		assert.equal(reminderMinutes("week-8h", false), undefined);
+		assert.deepEqual(ALL_DAY_REMINDERS.map((o) => o.label), ["Aucun rappel", "La veille à 8 h", "2 jours avant à 8 h", "Une semaine avant à 8 h"]);
+		assert.deepEqual(TIMED_REMINDERS.map((o) => o.label), ["Aucun rappel", "15 minutes avant", "1 heure avant", "La veille"]);
+	});
+
+	await test("corps Graph : rappel choisi (isReminderOn + reminderMinutesBeforeStart)", () => {
+		const veille: any = graphEventBody(ok({ title: "x", allDay: true, start: "2026-12-07", end: "2026-12-11", sourceQuote: "", reminder: "day-before-8h" }));
+		assert.equal(veille.isReminderOn, true);
+		assert.equal(veille.reminderMinutesBeforeStart, 960);
+		const semaine: any = graphEventBody(ok({ title: "x", allDay: true, start: "2026-12-07", end: "", sourceQuote: "", reminder: "week-8h" }));
+		assert.equal(semaine.reminderMinutesBeforeStart, 9600);
+		const heure: any = graphEventBody(ok({ title: "x", allDay: false, start: "2026-12-08T14:00", end: "", sourceQuote: "", reminder: "1h" }));
+		assert.equal(heure.isReminderOn, true);
+		assert.equal(heure.reminderMinutesBeforeStart, 60);
+		const aucun: any = graphEventBody(ok({ title: "x", allDay: false, start: "2026-12-08T14:00", end: "", sourceQuote: "", reminder: "none" }));
+		assert.equal(aucun.isReminderOn, false);
+		assert.equal("reminderMinutesBeforeStart" in aucun, false);
+	});
+
+	await test("validation : rappel d'un autre type refuse, rappel garde sinon", () => {
+		assert.ok("error" in normalizeAgendaEvent({ title: "x", allDay: true, start: "2026-12-07", end: "", reminder: "15m" }));
+		assert.ok("error" in normalizeAgendaEvent({ title: "x", allDay: false, start: "2026-12-07T10:00", end: "", reminder: "day-before-8h" }));
+		assert.ok("error" in normalizeAgendaEvent({ title: "x", allDay: true, start: "2026-12-07", end: "", reminder: "n'importe" }));
+		assert.equal(ok({ title: "x", allDay: true, start: "2026-12-07", end: "", sourceQuote: "" }).reminder, "none");
+		assert.equal(ok({ title: "x", allDay: true, start: "2026-12-07", end: "", sourceQuote: "", reminder: "2-days-8h" }).reminder, "2-days-8h");
+	});
+
+	await test("recapitulatif : dates en clair", () => {
+		const w = (raw: object) => agendaWhen(ok({ title: "x", sourceQuote: "", ...raw }));
+		assert.equal(w({ allDay: true, start: "2026-12-07", end: "2026-12-11" }), "du lundi 7 au vendredi 11 décembre 2026, journée entière");
+		assert.equal(w({ allDay: true, start: "2026-12-07", end: "" }), "lundi 7 décembre 2026, journée entière");
+		assert.equal(w({ allDay: true, start: "2026-11-30", end: "2026-12-02" }), "du lundi 30 novembre au mercredi 2 décembre 2026, journée entière");
+		assert.equal(w({ allDay: true, start: "2026-12-31", end: "2027-01-01" }), "du jeudi 31 décembre 2026 au vendredi 1er janvier 2027, journée entière");
+		assert.equal(w({ allDay: false, start: "2026-12-08T14:00", end: "2026-12-08T15:30" }), "mardi 8 décembre 2026, de 14 h à 15 h 30");
+		assert.equal(w({ allDay: false, start: "2026-12-01T09:00", end: "" }), "mardi 1er décembre 2026, de 9 h à 10 h");
+		assert.equal(w({ allDay: false, start: "2026-12-08T22:00", end: "2026-12-09T02:00" }), "du mardi 8 décembre 2026 à 22 h au mercredi 9 décembre 2026 à 2 h");
 	});
 
 	await test("journee entiere d'un seul jour (fin vide) et passage d'annee", () => {

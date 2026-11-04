@@ -1,17 +1,7 @@
-import React from "react";
+import { redirect } from "next/navigation";
 
-function Page() {
-	return (
-		<>
-			<div
-				className={
-					"flex flex-1 flex-col items-center justify-center p-4 text-center"
-				}
-			>
-				Select a mailbox to view the emails.
-			</div>
-		</>
-	);
+// ss2i : .../dashboard/mail sans identite affichait « Select a mailbox » : on rejoint la
+// boite de reception de l'identite par defaut, comme la racine.
+export default function Page() {
+	redirect("/api/auth/resume");
 }
-
-export default Page;

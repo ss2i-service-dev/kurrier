@@ -59,10 +59,31 @@ export async function proxy(request: NextRequest) {
 		return response;
 	}
 
+	// ss2i : session valide mais cookies du workspace absents (fermeture de Chrome : ils
+	// etaient sans duree) ou d'un autre workspace que celui de l'URL. Toutes les requetes
+	// SQL levaient « No workspace selected » et chaque F5 rechargeait la meme erreur
+	// (Samuel, 04/11). La route de reprise les repose puis revient sur cette URL. GET
+	// seulement : une action serveur (POST) ne se redirige pas.
+	const workspaceInUrl = WORKSPACE_IN_URL.exec(request.nextUrl.pathname)?.[1];
+	if (
+		workspaceInUrl &&
+		request.method === "GET" &&
+		!request.headers.get("next-action") &&
+		(!request.cookies.get("workspaceId")?.value ||
+			request.cookies.get("workspacePublicId")?.value !== workspaceInUrl)
+	) {
+		const url = request.nextUrl.clone();
+		url.pathname = "/api/auth/resume";
+		url.search = "";
+		url.searchParams.set("next", request.nextUrl.pathname + request.nextUrl.search);
+		return NextResponse.redirect(url);
+	}
+
 	return await updateSession(request);
 }
 
 const PROTECTED = /^\/(en|ko)\/w(?:\/|$)/;
+const WORKSPACE_IN_URL = /^\/(?:en|ko)\/w\/([^/]+)/;
 
 async function hasValidSession(request: NextRequest) {
 	const token = request.cookies.get("session")?.value;

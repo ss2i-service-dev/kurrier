@@ -27,7 +27,7 @@ type Props = {
 	labelsByThreadId: FetchMailboxThreadLabelsResult;
 };
 
-import { DraftSendBadge, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
+import { DraftSendBadge, DraftTimesLabel, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
 export default function WebmailListItemMobile({
 	mailboxThreadItem,
 	activeMailbox,
@@ -209,6 +209,12 @@ export default function WebmailListItemMobile({
 					)}
 					{mailboxThreadItem.hasAttachments && (
 						<Paperclip className="ml-1 h-4 w-4 text-muted-foreground hidden sm:inline" />
+					)}
+					{activeMailbox.kind === "drafts" && (
+						<DraftTimesLabel
+							times={mailboxThreadItem.draftTimes}
+							className="ml-auto pl-2 text-xs font-normal text-muted-foreground"
+						/>
 					)}
 				</div>
 			</div>

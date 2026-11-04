@@ -43,3 +43,20 @@ export const draftSendStateOf = (
 	sendError: meta?.sendError ?? null,
 });
 
+export type DraftTimes = { createdAt: string | null; savedAt: string | null };
+
+// ss2i : heures de creation et de derniere edition d'un brouillon. Les brouillons anterieurs
+// a meta.draft.createdAt, ou venus d'un autre client par IMAP, prennent la creation de la ligne.
+export function draftTimesOf(row: {
+	metaData: Record<string, any> | null;
+	createdAt?: Date | string | null;
+	updatedAt?: Date | string | null;
+	date?: Date | string | null;
+}): DraftTimes {
+	const meta = (row.metaData as any)?.draft ?? null;
+	const iso = (v: Date | string | null | undefined) =>
+		v == null ? null : v instanceof Date ? v.toISOString() : String(v);
+	const createdAt = meta?.createdAt ?? iso(row.createdAt) ?? iso(row.date);
+	const savedAt = meta?.savedAt ?? iso(row.updatedAt) ?? iso(row.date) ?? createdAt;
+	return { createdAt, savedAt };
+}

@@ -19,7 +19,7 @@ import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 import ThreadLabelHoverButtons from "@/components/dashboard/labels/thread-label-hover-buttons";
 import SnoozeMail from "@/components/k/snooze";
 import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
-import { DraftSendBadge, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
+import { DraftSendBadge, DraftTimesLabel, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
 import KAvatar from "@/components/k/avatar";
 import KIconButton from "@/components/k/icon-button";
 import { correspondents, listDate } from "@/components/k/format";
@@ -235,6 +235,7 @@ export default function KThreadRow({
 					<span className={`truncate text-[13px] ${isUnread ? "font-medium text-k-ink" : "text-k-ink-2"}`}>
 						{item.subject || "(sans objet)"}
 					</span>
+					{isDrafts && <DraftTimesLabel times={item.draftTimes} className="ml-auto text-[11.5px] text-k-ink-3" />}
 					{!showSnippet && starButton}
 				</div>
 

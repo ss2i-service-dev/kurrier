@@ -40,8 +40,8 @@ export type DraftFormPayload = {
 };
 
 export type SaveDraftResult =
-	| { draftMessageId: string; savedAt: string; error?: undefined }
-	| { error: string; draftMessageId?: undefined; savedAt?: undefined };
+	| { draftMessageId: string; savedAt: string; createdAt?: string; error?: undefined }
+	| { error: string; draftMessageId?: undefined; savedAt?: undefined; createdAt?: undefined };
 
 // L'identite par son identifiant public, a travers RLS : c'est le controle d'acces.
 async function identityFor(identityPublicId: string) {
@@ -100,7 +100,11 @@ export async function saveDraft(
 			draftSyncJobOptions(saved.id),
 		);
 
-		return { draftMessageId: saved.id, savedAt: saved.savedAt.toISOString() };
+		return {
+			draftMessageId: saved.id,
+			savedAt: saved.savedAt.toISOString(),
+			createdAt: saved.createdAt,
+		};
 	} catch (err: any) {
 		return { error: err?.message ?? "Draft could not be saved." };
 	}

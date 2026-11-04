@@ -36,7 +36,7 @@ import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 import ThreadLabelHoverButtons from "@/components/dashboard/labels/thread-label-hover-buttons";
 import SnoozeMail from "@/components/mailbox/default/snooze-mail";
 import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
-import { DraftSendBadge, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
+import { DraftSendBadge, DraftTimesLabel, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
 
 export default function WebmailListItem({
 	mailboxThreadItem,
@@ -341,6 +341,12 @@ export default function WebmailListItem({
 					)}
 					{mailboxThreadItem.hasAttachments && (
 						<Paperclip className="ml-1 hidden h-4 w-4 text-muted-foreground md:inline" />
+					)}
+					{isDrafts && (
+						<DraftTimesLabel
+							times={mailboxThreadItem.draftTimes}
+							className="ml-auto pl-2 text-xs font-normal text-muted-foreground"
+						/>
 					)}
 				</div>
 

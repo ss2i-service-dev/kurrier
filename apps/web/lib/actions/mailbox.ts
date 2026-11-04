@@ -44,10 +44,18 @@ import { isSignedIn } from "@/lib/actions/auth";
 import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
-import { extractListUnsubscribe, subscriptionKeyOf, draftSendStateOf, setDraftSendState, type DraftSendState } from "@common";
+import { extractListUnsubscribe, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import dayjs from "dayjs";
 import {fetchWorkspace} from "@/lib/actions/workspace";
+import {
+	assertIdentityAccess,
+	assertMailboxAccess,
+	assertMessageAccess,
+	assertOwnedS3Key,
+	assertSignedIn,
+	assertThreadsInMailbox,
+} from "@/lib/authz";
 
 import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -374,7 +382,48 @@ export async function sendMail(
 	decodedForm.identityId = identity.id;
 	// L'utilisateur qui envoie : c'est son carnet d'adresses que le worker alimente.
 	const sender = await isSignedIn();
-	decodedForm.senderUserId = sender?.id ?? null;
+	if (!sender?.id) return { success: false, error: "Unauthorized" };
+	decodedForm.senderUserId = sender.id;
+
+	// ss2i (controle d'acces) : ce que le formulaire designe ne part au worker qu'une fois
+	// relu. Message d'origine : visible par l'utilisateur, sinon une reponse est refusee et un
+	// transfert part sans citation ni rattachement (comme le faisait deja le worker pour un
+	// message introuvable). Pieces jointes : deposees par l'utilisateur ou pieces d'un message
+	// du workspace. Brouillon : visible par lui. Champs reserves a l'API et aux mails
+	// automatiques : retires.
+	delete decodedForm.apiMessageId;
+	delete decodedForm.autoMail;
+	if (decodedForm.originalMessageId) {
+		const orig = await assertMessageAccess(String(decodedForm.originalMessageId)).catch(() => null);
+		if (orig) {
+			decodedForm.originalMessageId = orig.id;
+		} else if (decodedForm.mode === "reply") {
+			return { success: false, error: "Original message not found." };
+		} else {
+			delete decodedForm.originalMessageId;
+		}
+	}
+	let attachmentList: unknown = [];
+	try {
+		attachmentList = decodedForm.attachments ? JSON.parse(String(decodedForm.attachments)) : [];
+	} catch {
+		attachmentList = [];
+	}
+	for (const a of Array.isArray(attachmentList) ? attachmentList : []) {
+		if (!a?.path) continue;
+		const ok = await assertOwnedS3Key(String(a.path), sender.id).catch(() => null);
+		if (!ok) {
+			return {
+				success: false,
+				error: `Attachment not allowed: ${String(a.filenameOriginal ?? a.path)}. Nothing was sent.`,
+			};
+		}
+	}
+	if (decodedForm.draftMessageId) {
+		const draftId = await ownedDraftId(String(decodedForm.draftMessageId));
+		if (draftId) decodedForm.draftMessageId = draftId;
+		else delete decodedForm.draftMessageId;
+	}
 
 	if (toArray(decodedForm.to as any).length === 0) {
 		return {
@@ -514,11 +563,22 @@ async function markDraftPending(
 	}
 }
 
+// ss2i (controle d'acces) : un envoi en attente n'est touche que si son identite d'envoi est
+// visible de l'utilisateur (RLS) ; sinon tout se passe comme si le job n'existait pas.
+async function ownedPendingSend(pendingSendId: string) {
+	if (!pendingSendId) return null;
+	const { sendMailQueue } = await getRedis();
+	const job = await sendMailQueue.getJob(String(pendingSendId));
+	if (!job) return null;
+	const identityId = String((job.data as any)?.identityId ?? "");
+	const visible = await assertIdentityAccess({ id: identityId }).catch(() => null);
+	return visible ? job : null;
+}
+
 // ss2i : « Undo » d'un envoi encore en attente. Rend le formulaire si le job a bien ete
 // retire ; s'il est deja parti (ou en cours d'envoi), on ne peut plus rien faire.
 export async function cancelPendingSend(pendingSendId: string) {
-	const { sendMailQueue } = await getRedis();
-	const job = await sendMailQueue.getJob(pendingSendId);
+	const job = await ownedPendingSend(pendingSendId);
 	if (!job) return { cancelled: false as const };
 	try {
 		if ((await job.getState()) !== "delayed") return { cancelled: false as const };
@@ -537,8 +597,7 @@ export async function cancelPendingSend(pendingSendId: string) {
 
 // ss2i : « Send now » : le job en attente part tout de suite.
 export async function sendPendingNow(pendingSendId: string) {
-	const { sendMailQueue } = await getRedis();
-	const job = await sendMailQueue.getJob(pendingSendId);
+	const job = await ownedPendingSend(pendingSendId);
 	if (!job) return;
 	try {
 		if ((await job.getState()) === "delayed") await job.promote();
@@ -556,8 +615,8 @@ export async function sendPendingNow(pendingSendId: string) {
 // pour afficher une erreur eventuelle. Jamais pendant le delai : les actions serveur
 // d'un onglet passent une par une, attendre ici bloquerait toutes les autres.
 export async function waitPendingSend(pendingSendId: string): Promise<FormState> {
-	const { sendMailQueue, sendMailEvents } = await getRedis();
-	const job = await sendMailQueue.getJob(pendingSendId);
+	const { sendMailEvents } = await getRedis();
+	const job = await ownedPendingSend(pendingSendId);
 	if (!job) return {};
 	try {
 		return (await job.waitUntilFinished(sendMailEvents, 120_000)) ?? {};
@@ -566,7 +625,8 @@ export async function waitPendingSend(pendingSendId: string): Promise<FormState>
 	}
 }
 
-export const deltaFetch = async ({ identityId }: { identityId: string }) => {
+export const deltaFetch = async ({ identityId: requestedId }: { identityId: string }) => {
+	const { id: identityId } = await assertIdentityAccess({ id: requestedId });
 	const { smtpQueue, smtpEvents } = await getRedis();
 	const job = await smtpQueue.add(
 		"delta-fetch",
@@ -596,12 +656,25 @@ export const initSearch = async (
 		return { items: [], totalThreads: 0, totalMessages: 0 };
 	}
 
+	// ss2i (controle d'acces) : identite et workspace du filtre relus par RLS, jamais ceux du
+	// client (il pouvait chercher dans n'importe quelle boite). Le dossier reste celui de la
+	// page ; un slug (encodeURIComponent ou slugify) ne contient jamais ces caracteres, qui
+	// permettraient de sortir de la valeur du filtre Typesense.
+	const identity = await assertIdentityAccess({ publicId: identityPublicId });
+	const workspace = await fetchWorkspace();
+	if (!workspace || workspace.id !== identity.workspaceId) {
+		throw new Error("Identity not found or access denied");
+	}
+	if (/["`\\&|]/.test(String(mailboxSlug ?? ""))) {
+		return { items: [], totalThreads: 0, totalMessages: 0 };
+	}
+
 	const client = getTypeSenseClient();
 
 	const filters = [
-		`workspacePublicId:=${JSON.stringify(workspacePublicId)}`,
-		`identityPublicId:=${JSON.stringify(identityPublicId)}`,
-		`mailboxSlug:=${JSON.stringify(mailboxSlug)}`,
+		`workspacePublicId:=${JSON.stringify(workspace.publicId)}`,
+		`identityPublicId:=${JSON.stringify(identity.publicId)}`,
+		`mailboxSlug:=${JSON.stringify(String(mailboxSlug ?? ""))}`,
 	];
 
 	if (hasAttachment) filters.push("hasAttachment:=1");
@@ -652,47 +725,6 @@ export const initSearch = async (
 
 
 
-
-export const backfillMailboxes = async (identityId: string, workspaceId: string) => {
-	const { smtpQueue, smtpEvents } = await getRedis();
-	const job = await smtpQueue.add(
-		"imap:backfill-discover",
-		{ identityId, workspaceId },
-		{
-			jobId: `imap-backfill-discover-${identityId}`,
-			attempts: 3,
-			backoff: {
-				type: "exponential",
-				delay: 1000,
-			},
-		},
-	);
-	await job.waitUntilFinished(smtpEvents);
-	backfillAccount(identityId, workspaceId);
-};
-
-export const backfillAccount = async (identityId: string, workspaceId: string) => {
-	const { smtpQueue } = await getRedis();
-	await smtpQueue.add(
-		"imap:backfill-account",
-		{identityId},
-		{
-			removeOnComplete: true,
-			removeOnFail: false,
-			jobId: `imap-backfill-account-${identityId}`,
-		},
-	);
-	await smtpQueue.add(
-		"imap:start-idle",
-		{ identityId },
-		{
-			removeOnComplete: true,
-			removeOnFail: false,
-			attempts: 3,
-			backoff: { type: "exponential", delay: 1500 },
-		},
-	);
-};
 
 export const fetchWebMailThreadDetail = cache(async (threadId: string) => {
 	const rls = await rlsClient();
@@ -1225,8 +1257,14 @@ export const fetchMailboxThreads = async (
 
 	// ss2i : etat d'envoi des brouillons de la page (envoi en cours, echec), lu dans
 	// meta.draft des lignes du dossier ; seuls les fils concernes portent `draftSend`.
+	// Chaque fil qui contient un brouillon porte aussi `draftTimes` (creation et derniere
+	// edition), affiche dans le dossier Drafts (son slug suit le nom du dossier IMAP).
 	const threadRows = rows.map(
-		(r) => r.thread as typeof r.thread & { draftSend?: DraftSendState },
+		(r) =>
+			r.thread as typeof r.thread & {
+				draftSend?: DraftSendState;
+				draftTimes?: DraftTimes;
+			},
 	);
 	{
 		const ids = threadRows.map((t) => String(t.threadId));
@@ -1236,13 +1274,15 @@ export const fetchMailboxThreads = async (
 					.select({
 						threadId: messages.threadId,
 						meta: sql<any>`${messages.metaData} -> 'draft'`,
+						createdAt: messages.createdAt,
+						updatedAt: messages.updatedAt,
+						date: messages.date,
 					})
 					.from(messages)
 					.where(
 						and(
 							eq(messages.draft, true),
 							inArray(messages.threadId, ids),
-							sql`jsonb_exists_any(${messages.metaData} -> 'draft', array['pendingSend', 'sendError'])`,
 						),
 					),
 			);
@@ -1251,7 +1291,12 @@ export const fetchMailboxThreads = async (
 				if (!t) continue;
 				const state = draftSendStateOf(d.meta);
 				// Un envoi en cours prime sur une ancienne erreur du meme fil.
-				if (!t.draftSend || state.pendingSend) t.draftSend = state;
+				if ((state.pendingSend || state.sendError) && (!t.draftSend || state.pendingSend))
+					t.draftSend = state;
+				const times = draftTimesOf({ ...d, metaData: { draft: d.meta } });
+				// Plusieurs brouillons dans un fil : le plus recemment edite.
+				if (!t.draftTimes || String(times.savedAt) > String(t.draftTimes.savedAt))
+					t.draftTimes = times;
 			}
 		}
 	}
@@ -1606,19 +1651,6 @@ export const moveToFolder = async (
 	}
 };
 
-export const clearImapClients = async (identityId: string) => {
-	const { smtpQueue } = await getRedis();
-	await smtpQueue.add(
-		"imap:stop-idle",
-		{ identityId },
-		{
-			removeOnComplete: true,
-			removeOnFail: false,
-			attempts: 3,
-			backoff: { type: "exponential", delay: 1500 },
-		},
-	);
-};
 
 
 export const fetchScheduledDraftCounts = async () => {

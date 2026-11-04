@@ -125,17 +125,20 @@ export async function linkThreadsWithUndo({
 	threadIds,
 	companyId,
 	refresh,
+	archive = true,
 }: {
 	identityPublicId: string;
 	threadIds: string[];
 	companyId: number;
 	refresh: () => void;
+	// ss2i : mettre un fil dans un client l'archive (sortie de l'Inbox), sauf demande contraire.
+	archive?: boolean;
 }) {
 	const fr = nouvelle();
 	const position = fr ? "bottom-center" : "bottom-left";
 	if (!threadIds.length) return false;
 	setLinked(identityPublicId, threadIds, true);
-	const res = await linkThreadsToClient(identityPublicId, threadIds, companyId).catch((e: any) => ({
+	const res = await linkThreadsToClient(identityPublicId, threadIds, companyId, { archive }).catch((e: any) => ({
 		success: false as const,
 		error: String(e?.message ?? e),
 	}));
@@ -148,15 +151,15 @@ export async function linkThreadsWithUndo({
 	const n = res.linked;
 	toast.success(
 		fr
-			? `${n > 1 ? `${n} fils rattachés` : "Rattaché"} à ${res.name}`
-			: `${n > 1 ? `${n} conversations linked` : "Linked"} to ${res.name}`,
+			? `${n > 1 ? `${n} fils rattachés` : "Rattaché"} à ${res.name}${res.archived.length ? " et archivé" + (res.archived.length > 1 ? "s" : "") : ""}`
+			: `${n > 1 ? `${n} conversations linked` : "Linked"} to ${res.name}${res.archived.length ? " and archived" : ""}`,
 		{
 			position,
 			duration: 8000,
 			action: {
 				label: fr ? "Annuler" : "Undo",
 				onClick: () => {
-					void undoLinkThreadsToClient(identityPublicId, res.companyId, res.previous).then((u) => {
+					void undoLinkThreadsToClient(identityPublicId, res.companyId, res.previous, res.archived).then((u) => {
 						if (!u.success) {
 							toast.error(fr ? "Annulation impossible" : "Could not undo", { position });
 							return;

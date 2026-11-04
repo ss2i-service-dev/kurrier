@@ -16,6 +16,7 @@ import { attachThreadsToCompany, crmSearchCompanies, orphanThreadsPage, type Pre
 import { rlsClient } from "@/lib/actions/clients";
 import { isSignedIn } from "@/lib/actions/auth";
 import { isUuid } from "@/lib/authz";
+import { archiveThread, moveToFolder } from "@/lib/actions/mailbox";
 
 // ss2i : section « Clients » des boites pro : dossiers virtuels par societe de la CRM,
 // alimentes par le worker (table thread_clients). Les identites visibles sont resolues
@@ -282,14 +283,27 @@ async function visibleThreadsOfIdentity(identityId: string, threadIds: unknown):
 }
 
 export type LinkClientResult =
-	| { success: true; companyId: number; name: string; linked: number; previous: PreviousClientLink[] }
+	| { success: true; companyId: number; name: string; linked: number; previous: PreviousClientLink[]; archived: string[] }
 	| { success: false; error: string };
+
+// ss2i : boite de reception et dossier Archive de l'identite (lecture RLS).
+async function inboxAndArchive(identityId: string) {
+	const rls = await rlsClient();
+	const rows = await rls((tx) =>
+		tx
+			.select({ id: mailboxes.id, kind: mailboxes.kind, metaData: mailboxes.metaData })
+			.from(mailboxes)
+			.where(and(eq(mailboxes.identityId, identityId), inArray(mailboxes.kind, ["inbox", "archive"]))),
+	);
+	return { inbox: rows.find((r) => r.kind === "inbox"), archive: rows.find((r) => r.kind === "archive") };
+}
 
 /** Rattache des fils a un client a la main ; un fil detache de ce client est reactive. */
 export async function linkThreadsToClient(
 	identityPublicId: string,
 	threadIds: string[],
 	companyId: number,
+	opts?: { archive?: boolean },
 ): Promise<LinkClientResult> {
 	const user = await isSignedIn();
 	if (!user) return { success: false, error: "Not authenticated" };
@@ -303,11 +317,41 @@ export async function linkThreadsToClient(
 	const ids = await visibleThreadsOfIdentity(ident.id, threadIds);
 	if (!ids.length) return { success: false, error: "Conversation not found in this mailbox" };
 	const previous = await attachThreadsToCompany(ident, ids, companyId);
-	return { success: true, companyId, name: company.name, linked: ids.length, previous };
+	// ss2i : Samuel, 04/11 : « si on le met dans le client c'est qu'on veut l'archiver ». Les fils
+	// encore dans l'Inbox en sortent (archivage habituel, IMAP compris) ; ils restent visibles
+	// dans le dossier client (patch 0081). L'annulation les y remet (undoLinkThreadsToClient).
+	let archived: string[] = [];
+	if (opts?.archive) {
+		const { inbox } = await inboxAndArchive(ident.id);
+		if (inbox) {
+			const rls = await rlsClient();
+			const inInbox = await rls((tx) =>
+				tx
+					.select({ threadId: mailboxThreads.threadId })
+					.from(mailboxThreads)
+					.where(and(eq(mailboxThreads.mailboxId, inbox.id), inArray(mailboxThreads.threadId, ids))),
+			);
+			archived = inInbox.map((r) => String(r.threadId));
+			if (archived.length) {
+				try {
+					await archiveThread(archived, inbox.id, !!(inbox.metaData as any)?.imap, false);
+				} catch (e) {
+					console.error("[linkThreadsToClient] archivage impossible", e);
+					archived = [];
+				}
+			}
+		}
+	}
+	return { success: true, companyId, name: company.name, linked: ids.length, previous, archived };
 }
 
 /** Annule un rattachement manuel (bouton Annuler du toast) : etat d'avant, fil par fil. */
-export async function undoLinkThreadsToClient(identityPublicId: string, companyId: number, previous: PreviousClientLink[]) {
+export async function undoLinkThreadsToClient(
+	identityPublicId: string,
+	companyId: number,
+	previous: PreviousClientLink[],
+	archived?: string[],
+) {
 	const user = await isSignedIn();
 	if (!user) return { success: false, error: "Not authenticated" };
 	const ident = await visibleProIdentity(identityPublicId);
@@ -321,6 +365,14 @@ export async function undoLinkThreadsToClient(identityPublicId: string, companyI
 	);
 	const visible = new Set(await visibleThreadsOfIdentity(ident.id, valid.map((p) => p.threadId)));
 	await restoreThreadLinks(ident, companyId, valid.filter((p) => visible.has(p.threadId)));
+	// ss2i : les fils archives par le rattachement reviennent dans l'Inbox.
+	const back = (Array.isArray(archived) ? archived : []).filter(isUuid);
+	if (back.length) {
+		const { inbox, archive } = await inboxAndArchive(ident.id);
+		if (inbox && archive) {
+			await moveToFolder(back, archive.id, inbox.id, !!(archive.metaData as any)?.imap, false);
+		}
+	}
 	return { success: true };
 }
 

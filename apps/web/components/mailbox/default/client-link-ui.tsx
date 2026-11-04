@@ -50,11 +50,13 @@ export function ThreadDragHandle({
 			onClick={(e) => e.stopPropagation()}
 			title={k("Drag onto a client (Clients section) to link it", "Glisser sur un client (section Clients) pour le rattacher")}
 			aria-label={k("Drag to link to a client", "Glisser pour rattacher à un client")}
-			className={`flex cursor-grab items-center justify-center select-none active:cursor-grabbing ${
+			// ss2i : zone de prise agrandie (Samuel, 04/11 : « les deux petits points, ils sont vraiment
+			// tout petits »), meme emplacement : 28 px de haut, 20 px de large, icone 18 px.
+			className={`flex min-h-7 min-w-5 cursor-grab items-center justify-center rounded select-none active:cursor-grabbing hover:bg-black/5 dark:hover:bg-white/10 ${
 				nouvelle ? "text-k-ink-3 hover:text-k-ink" : "text-muted-foreground hover:text-foreground"
 			} ${className}`}
 		>
-			<IconGripVertical size={14} aria-hidden />
+			<IconGripVertical size={18} stroke={2.25} aria-hidden />
 		</span>
 	);
 }

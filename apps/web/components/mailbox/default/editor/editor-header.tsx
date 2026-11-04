@@ -7,7 +7,6 @@ import {
 	Group,
 	Text,
 	Input,
-	FocusTrap
 } from "@mantine/core";
 import { Forward, Reply, ReplyAll } from "lucide-react";
 import { replyRecipients } from "@/lib/reply-recipients";
@@ -171,7 +170,13 @@ function EditorHeader({
 
 	const isMobile = useMediaQuery("(max-width: 768px)");
 
-	const [subjectFocus, setSubjectFocus] = useState<boolean>(false);
+	// ss2i : verrou de saisie. Plus de FocusTrap (Mantine) sur l'objet : active des
+	// qu'un destinataire changeait, il ramenait le focus sur l'objet pendant qu'on
+	// ecrivait dans le corps. Entree ou Tab dans l'objet menent au corps du message.
+	const focusBody = (from: HTMLElement) => {
+		const body = from.closest("form")?.querySelector<HTMLElement>('.ProseMirror[contenteditable="true"]');
+		body?.focus();
+	};
 
 	const params = useParams() as {
 		identityPublicId?: string;
@@ -203,9 +208,7 @@ function EditorHeader({
 				name={n}
 				autoFocus={focusOf(n)}
 				defaultValues={values}
-				onChange={(value) => {
-					if (value.length > 0) setSubjectFocus(true);
-				}}
+				onChange={() => {}}
 			/>
 		);
 		const ghostSelect = { variant: "unstyled" as const, size: "xs" as const, comboboxProps: { withinPortal: true, position: "bottom-start" as const, offset: 6, zIndex: 3000 } };
@@ -265,7 +268,7 @@ function EditorHeader({
 
 				<div className={row}>
 					<span className={label}>Objet</span>
-					<FocusTrap active={subjectFocus}>
+					<>
 						<input
 							name="subject"
 							value={subject}
@@ -273,14 +276,13 @@ function EditorHeader({
 							onKeyDown={(e) => {
 								if (e.key === "Enter" || e.key === "Tab") {
 									e.preventDefault();
-									setSubjectFocus(false);
-									focusOnSubject && focusOnSubject();
+									focusBody(e.currentTarget);
 								}
 							}}
 							placeholder="Objet du message"
 							className="h-10 min-w-0 flex-1 bg-transparent text-[14px] font-medium text-k-ink outline-none placeholder:font-normal placeholder:text-k-ink-3"
 						/>
-					</FocusTrap>
+					</>
 				</div>
 
 				{fromOptions.length > 1 ? (
@@ -353,11 +355,7 @@ function EditorHeader({
 						name={"to"}
 						autoFocus={focusOf("to")}
 						defaultValues={toValues}
-						onChange={(value) => {
-							if (value.length > 0) {
-								setSubjectFocus(true);
-							}
-						}}
+						onChange={() => {}}
 					/>
 </RecipientDropZone>
 <div className="flex items-center justify-end gap-4 text-primary text-sm">
@@ -390,11 +388,7 @@ Cc
 						name={"cc"}
 						autoFocus={focusOf("cc")}
 						defaultValues={ccValues}
-						onChange={(value) => {
-							if (value.length > 0) {
-								setSubjectFocus(true);
-							}
-						}}
+						onChange={() => {}}
 					/>
 </RecipientDropZone> )} {bccActive && (
 				<RecipientDropZone name="bcc" className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]">
@@ -405,11 +399,7 @@ Cc
 						name={"bcc"}
 						autoFocus={focusOf("bcc")}
 						defaultValues={bccValues}
-						onChange={(value) => {
-							if (value.length > 0) {
-								setSubjectFocus(true);
-							}
-						}}
+						onChange={() => {}}
 					/>
 </RecipientDropZone> )}
 <div className="border-b px-3 py-2 grid items-center gap-2 sm:grid-cols-[72px,1fr]"> <span className="text-[13px] text-muted-foreground sm:text-right leading-6"> {t("Subject", "Objet")}
@@ -493,11 +483,7 @@ Cc
 								name={"to"}
 						autoFocus={focusOf("to")}
 								defaultValues={toValues}
-								onChange={(value) => {
-									if (value.length > 0) {
-										setSubjectFocus(true);
-									}
-								}}
+								onChange={() => {}}
 							/> </RecipientDropZone> {ccActive && (
 							<RecipientDropZone name="cc" className="grid grid-cols-[2.5rem_1fr] items-start gap-2 py-1 border-t border-border/60"> <span className="text-sm font-medium text-muted-foreground text-right leading-7">Cc</span>
 								<EmailHeaderContacts
@@ -505,22 +491,14 @@ Cc
 									name={"cc"}
 						autoFocus={focusOf("cc")}
 									defaultValues={ccValues}
-									onChange={(value) => {
-										if (value.length > 0) {
-											setSubjectFocus(true);
-										}
-									}}
+									onChange={() => {}}
 								/> </RecipientDropZone> )} {bccActive && (
 							<RecipientDropZone name="bcc" className="grid grid-cols-[2.5rem_1fr] items-start gap-2 py-1 border-t border-border/60"> <span className="text-sm font-medium text-muted-foreground text-right leading-7">{t("Bcc", "Cci")}</span>
 								<EmailHeaderContacts
 									name={"bcc"}
 						autoFocus={focusOf("bcc")}
 									defaultValues={bccValues}
-									onChange={(value) => {
-										if (value.length > 0) {
-											setSubjectFocus(true);
-										}
-									}}
+									onChange={() => {}}
 								/> </RecipientDropZone> )} </div> <div className="flex gap-2 items-center text-sm text-neutral-500">
 						{!ccActive && (
 							<RecipientDropZone name="cc" as="span"><ActionIcon onClick={() => { setCcActive(true); setFocusField("cc"); }} variant="transparent"> Cc </ActionIcon></RecipientDropZone>
@@ -533,7 +511,7 @@ Cc
 			</div>
 			<div className={"border-b flex justify-start items-center px-2 gap-2"}>
 				<span className="text-sm text-muted-foreground">{t("Subject", "Objet")}</span>
-				<FocusTrap active={subjectFocus}>
+				<>
 					<Input
 						variant={"unstyled"}
 						className={"w-full"}
@@ -541,14 +519,13 @@ Cc
 						onKeyDown={(e) => {
 							if (e.key === "Enter" || e.key === "Tab") {
 								e.preventDefault();
-								setSubjectFocus(false);
-								focusOnSubject && focusOnSubject();
+								focusBody(e.currentTarget);
 							}
 						}}
 						value={subject}
 						onChange={(e) => setSubject(e.currentTarget.value)}
 					/>
-				</FocusTrap>
+				</>
 			</div>
 			<div className={"border-b flex justify-start items-center px-2 gap-2"}>
 				<span className="text-sm text-muted-foreground">{t("From", "De")}</span>

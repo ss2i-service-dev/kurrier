@@ -2,6 +2,7 @@
 
 import { FormState, handleAction, LabelScope } from "@schema";
 import {getWorkspaceId, rlsClient} from "@/lib/actions/clients";
+import { assertIdentityAccess, assertWorkspace } from "@/lib/authz";
 import {
 	contactLabels, db, identities,
 	LabelCreate,
@@ -55,7 +56,9 @@ export const fetchLabelsByIdentityPublicId = async ({
 export const fetchLabels = async (scope?: LabelScope) => {
 
 	const selectedScope = scope || "thread";
-	const workspaceId = await getWorkspaceId();
+	// ss2i (controle d'acces) : workspace du cookie verifie (appartenance) ; la requete passe
+	// par le client admin, un cookie forge listait les etiquettes d'un autre workspace.
+	const workspaceId = await assertWorkspace();
 
 	const globalLabels = await db
 		.select()
@@ -170,7 +173,9 @@ export async function addNewLabel(
 		}
 		const payload = LabelInsertSchema.parse(payloadData);
 		if(decodedForm.scope === "thread") {
-			const [identity] = await db.select().from(identities).where(eq(identities.publicId, decodedForm.identityPublicId));
+			// ss2i (controle d'acces) : identite visible (RLS) ; avant, n'importe quelle identite
+			// de n'importe quel workspace par son publicId (client admin).
+			const identity = await assertIdentityAccess({ publicId: String(decodedForm.identityPublicId ?? "") }).catch(() => null);
 			if(!identity) {
 				return { success: false, error: "Invalid identity" };
 			}
@@ -481,7 +486,8 @@ export const updateLabel = async ({
 	}
 };
 
-export async function getOrCreateSystemLabel({
+// ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
+async function getOrCreateSystemLabel({
 												 name,
 												 scope,
 												 colorBg,

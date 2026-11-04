@@ -6,7 +6,7 @@
 // corps du message (inline) ne sont pas repetees.
 import React, { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronLeft, ChevronRight, ExternalLink, Eye, Paperclip, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, ExternalLink, Eye, Paperclip, X } from "lucide-react";
 import { getKind } from "@/components/mailbox/default/editor/editor-attachment-item";
 import type { MessageAttachmentWithUrl } from "@/components/mailbox/default/email-renderer";
 import { formatBytes } from "@/components/k/format";
@@ -186,6 +186,15 @@ export function Viewer({
 				>
 					<ExternalLink size={15} /> Ouvrir dans un onglet
 				</a>
+				{current.downloadUrl && (
+					<a
+						href={current.downloadUrl}
+						download={name}
+						className="flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] text-white/85 transition-colors hover:bg-white/15 hover:text-white"
+					>
+						<Download size={15} /> Télécharger
+					</a>
+				)}
 				<button type="button" onClick={onClose} className={btn} aria-label="Fermer (Échap)" title="Fermer (Échap)">
 					<X size={18} />
 				</button>

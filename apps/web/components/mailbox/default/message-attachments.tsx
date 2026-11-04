@@ -82,27 +82,41 @@ export default function MessageAttachments({
 						const name = a.filenameOriginal || k("attachment", "pièce jointe");
 						const size = formatBytes(a.sizeBytes);
 						return (
-							<a
+							// ss2i : le nom ouvre la piece jointe dans un onglet, la fleche la
+							// telecharge (URL signee en Content-Disposition attachment).
+							<div
 								key={a.id}
-								href={a.signedUrl || "#"}
-								target="_blank"
-								rel="noreferrer noopener"
-								title={name}
 								className={
 									nouvelle
-										? "group inline-flex max-w-xs items-center gap-2 rounded-k-sm border border-k-line bg-k-surface px-2.5 py-1.5 text-[13px] text-k-ink transition-colors hover:border-k-line-strong hover:bg-k-hover"
-										: "group inline-flex max-w-xs items-center gap-2 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-sm hover:border-neutral-300 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950 dark:hover:bg-neutral-900"
+										? "group inline-flex max-w-xs items-center rounded-k-sm border border-k-line bg-k-surface text-[13px] text-k-ink transition-colors hover:border-k-line-strong hover:bg-k-hover"
+										: "group inline-flex max-w-xs items-center rounded-lg border border-neutral-200 bg-white text-sm hover:border-neutral-300 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950 dark:hover:bg-neutral-900"
 								}
 							>
-								<span className="shrink-0 text-neutral-500">
-									<KindIcon kind={kind} />
-								</span>
-								<span className="min-w-0 truncate group-hover:underline">{name}</span>
-								{size && (
-									<span className="shrink-0 text-xs text-muted-foreground">{size}</span>
-								)}
-								<Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100" />
-							</a>
+								<a
+									href={a.signedUrl || "#"}
+									target="_blank"
+									rel="noreferrer noopener"
+									title={k(`Open ${name}`, `Ouvrir ${name}`)}
+									className="inline-flex min-w-0 items-center gap-2 py-1.5 pl-2.5 pr-1"
+								>
+									<span className="shrink-0 text-neutral-500">
+										<KindIcon kind={kind} />
+									</span>
+									<span className="min-w-0 truncate hover:underline">{name}</span>
+									{size && (
+										<span className="shrink-0 text-xs text-muted-foreground">{size}</span>
+									)}
+								</a>
+								<a
+									href={a.downloadUrl || a.signedUrl || "#"}
+									download={name}
+									title={k(`Download ${name}`, `Télécharger ${name}`)}
+									aria-label={k(`Download ${name}`, `Télécharger ${name}`)}
+									className="mr-1 shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+								>
+									<Download className="h-3.5 w-3.5" />
+								</a>
+							</div>
 						);
 					})}
 				</div>

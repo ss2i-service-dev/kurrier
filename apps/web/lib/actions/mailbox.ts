@@ -311,6 +311,14 @@ export const fetchMessageAttachments = cache(async (messageId: string) => {
 	return { attachments: attachmentsList };
 });
 
+// ss2i : Content-Disposition attachment avec nom ASCII de repli et nom UTF-8 (RFC 6266).
+function attachmentDisposition(filename: string | null | undefined) {
+	const name = (filename || "piece-jointe").replace(/[\r\n"\\]/g, "_");
+	const ascii = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7e]/g, "_");
+	const utf8 = encodeURIComponent(name).replace(/['()*!]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+	return `attachment; filename="${ascii}"; filename*=UTF-8''${utf8}`;
+}
+
 export async function getSignedUrlsForMessage(messageId: string) {
 	const { S3_BUCKET } = getServerEnv();
 	const rls = await rlsClient();
@@ -328,10 +336,23 @@ export async function getSignedUrlsForMessage(messageId: string) {
 			});
 
 			const url = await getSignedUrl(s3, command, { expiresIn: 300 });
+			// ss2i : seconde URL pour la fleche de telechargement. L'URL S3 est d'une autre
+			// origine, l'attribut download de <a> y est ignore : seul un Content-Disposition
+			// attachment force l'enregistrement dans Telechargements au lieu de l'ouverture.
+			const downloadUrl = await getSignedUrl(
+				s3,
+				new GetObjectCommand({
+					Bucket: S3_BUCKET!,
+					Key: attachment.path!,
+					ResponseContentDisposition: attachmentDisposition(attachment.filenameOriginal),
+				}),
+				{ expiresIn: 300 },
+			);
 
 			return {
 				...attachment,
 				signedUrl: url,
+				downloadUrl,
 			};
 		}),
 	);

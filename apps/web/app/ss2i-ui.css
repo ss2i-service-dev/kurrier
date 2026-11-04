@@ -559,6 +559,27 @@
 	contain-intrinsic-size: auto 68px;
 }
 
+/* Separation entre les mails de la liste (comme Outlook) : filet fin en bas de
+   chaque ligne, dans la ligne (content-visibility rogne ce qui deborde).
+   Masque sous et au-dessus d'une ligne surlignee (survol, ouverte, cochee) pour
+   ne pas couper son fond arrondi, et apres la derniere ligne d'une section. */
+[data-ui="ss2i"] .k-row::after {
+	content: "";
+	position: absolute;
+	left: 12px;
+	right: 12px;
+	bottom: 0;
+	height: 1px;
+	background: var(--k-line);
+	pointer-events: none;
+	transition: opacity 0.12s;
+}
+[data-ui="ss2i"] .k-row:not(:has(+ .k-row))::after,
+[data-ui="ss2i"] .k-row:is(:hover, [aria-current="true"], [data-selected="true"])::after,
+[data-ui="ss2i"] .k-row:has(+ .k-row:is(:hover, [aria-current="true"], [data-selected="true"]))::after {
+	opacity: 0;
+}
+
 /* Apercu de signature dans l'editeur (Outlook) : rendu proche du mail envoye. */
 [data-ui="ss2i"] .k-signature-body p { margin: 0; }
 [data-ui="ss2i"] .k-signature-body img { max-width: 100%; height: auto; display: inline-block; }

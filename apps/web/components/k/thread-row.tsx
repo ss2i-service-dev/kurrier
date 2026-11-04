@@ -162,6 +162,7 @@ export default function KThreadRow({
 			role="listitem"
 			data-thread-id={item.threadId}
 			aria-current={isActive ? "true" : undefined}
+			data-selected={isSelected ? "true" : undefined}
 			onClick={openThread}
 			onMouseEnter={arm}
 			onFocus={arm}
@@ -173,7 +174,7 @@ export default function KThreadRow({
 		>
 			<span
 				aria-hidden
-				className={`absolute left-[3px] top-[19px] h-1.5 w-1.5 rounded-full bg-k-accent transition-opacity ${isUnread ? "opacity-100" : "opacity-0"}`}
+				className={`absolute bottom-2 left-0 top-2 w-[3px] rounded-full bg-k-accent transition-opacity ${isUnread ? "opacity-100" : "opacity-0"}`}
 			/>
 
 			{/* Avatar / case a cocher : toute la zone est cliquable */}

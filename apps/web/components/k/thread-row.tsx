@@ -24,7 +24,7 @@ import KAvatar from "@/components/k/avatar";
 import KIconButton from "@/components/k/icon-button";
 import { correspondents, listDate } from "@/components/k/format";
 import { kHref } from "@/components/k/href";
-import { closeCompose, mailActions, setActiveThread, useMailStore } from "@/components/k/mail-store";
+import { arrivedSinceRead, closeCompose, mailActions, setActiveThread, useMailStore } from "@/components/k/mail-store";
 
 type Props = {
 	item: FetchMailboxThreadsResult[number];
@@ -63,7 +63,11 @@ export default function KThreadRow({
 	const isTrash = activeMailbox.kind === "trash";
 	const isDrafts = activeMailbox.kind === "drafts";
 	const sending = isDrafts && isSendingDraft(item.draftSend);
-	const isUnread = !isTrash && (readOverride === undefined ? item.unreadCount > 0 : !readOverride);
+	// Un message est arrive depuis que le fil a ete lu ou ouvert a l'ecran : liseré
+	// des non lus, meme si son affichage l'a deja marque lu.
+	const incoming = activeMailbox.kind !== "sent" && !isDrafts;
+	const arrived = incoming && arrivedSinceRead(item.threadId, item.lastActivityAt, isActive || readOverride === true);
+	const isUnread = !isTrash && (arrived || (readOverride === undefined ? item.unreadCount > 0 : !readOverride));
 	const starred = starOverride ?? item.starred;
 	const smtp = !!mailboxSync;
 	// Actions de survol montees seulement pour la ligne survolee ou focalisee.

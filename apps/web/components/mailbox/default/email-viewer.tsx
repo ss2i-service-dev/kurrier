@@ -11,7 +11,8 @@ import { setRemoteImagesForContact } from "@/lib/actions/contact-images";
 import { toast } from "sonner";
 import { useK } from "@/components/k/ui-context";
 
-const BASE_CSS = `
+// ss2i : partage avec la citation modifiable (reply-quote-editor), meme rendu que le lecteur.
+export const BASE_CSS = `
 :host {
   /* Zone de lecture toujours claire, comme Gmail : les mails HTML fixent leurs
      propres couleurs de texte, un fond sombre les rendrait illisibles. */

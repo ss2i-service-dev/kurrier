@@ -443,8 +443,9 @@
 	box-shadow: none;
 }
 
-/* Message cite ou transfere sous la reponse (nouvelle interface) : discret,
-   meme police que le texte, filet a gauche au lieu d'un cadre pointille. */
+/* Message cite ou transfere sous la reponse (nouvelle interface) : discret, filet a
+   gauche au lieu d'un cadre pointille. Le contenu est dans un Shadow DOM (feuille du
+   lecteur, reply-quote-editor.tsx) : seul le cadre .k-quote-area se style d'ici. */
 [data-ui="ss2i"] .k-editor .k-quote {
 	padding: 10px 18px 14px;
 	color: var(--k-ink-3);
@@ -453,7 +454,7 @@
 	color: var(--k-ink-3);
 	font-size: 12px;
 }
-[data-ui="ss2i"] .k-editor .k-quote [contenteditable] {
+[data-ui="ss2i"] .k-editor .k-quote .k-quote-area {
 	border: 0;
 	border-left: 2px solid var(--k-line-strong);
 	border-radius: 0;
@@ -464,14 +465,8 @@
 	font-size: 13px;
 	max-height: 260px;
 }
-[data-ui="ss2i"] .k-editor .k-quote [contenteditable]:focus {
+[data-ui="ss2i"] .k-editor .k-quote .k-quote-area:focus-within {
 	border-left-color: var(--k-accent);
-}
-[data-ui="ss2i"] .k-editor .k-quote [contenteditable] :is(pre, code, tt) {
-	font-family: inherit;
-	white-space: pre-wrap;
-	background: transparent;
-	font-size: inherit;
 }
 /* Barre du haut de l'editeur (mode de reponse, portee de la citation) */
 [data-ui="ss2i"] .k-editor .k-editor-modes .mantine-Select-input {

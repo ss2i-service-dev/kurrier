@@ -290,9 +290,11 @@ export async function upsertDraftRow(input: DraftInput) {
 				.limit(1)
 		: [];
 
-	const inReplyTo = mode === "reply" && orig ? orig.messageId : null;
+	// ss2i : un transfert est rattache au fil d'origine comme une reponse (send-mail.ts).
+	const threaded = mode === "reply" || mode === "forward";
+	const inReplyTo = threaded && orig ? orig.messageId : null;
 	const references =
-		mode === "reply" && orig
+		threaded && orig
 			? Array.from(
 					new Set(
 						[
@@ -380,7 +382,7 @@ export async function upsertDraftRow(input: DraftInput) {
 		row = updated as DraftRow;
 	} else {
 		const threadId = await db.transaction(async (tx) => {
-			if (mode === "reply" && orig?.threadId) return orig.threadId;
+			if (threaded && orig?.threadId) return orig.threadId;
 			const [t] = await tx
 				.insert(threads)
 				.values({

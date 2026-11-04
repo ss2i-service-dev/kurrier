@@ -340,8 +340,14 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 			let threadIdForMessage: string;
 
+			// ss2i : un transfert reste dans le fil du message transfere (comme une reponse),
+			// sinon il n'apparait nulle part sous le message d'origine ; il porte aussi
+			// In-Reply-To et References, comme Gmail et Thunderbird.
+			const threaded = data.mode === "reply" || data.mode === "forward";
 			if (data.mode === "reply") {
 				if (!origRow?.message) throw new Error("Original message not found");
+				threadIdForMessage = origRow.message.threadId;
+			} else if (data.mode === "forward" && origRow?.message?.threadId) {
 				threadIdForMessage = origRow.message.threadId;
 			} else {
 				threadIdForMessage = await ensureThreadId(
@@ -352,12 +358,12 @@ export default defineNitroPlugin(async (nitroApp) => {
 			}
 
 			const inReplyTo =
-				data.mode === "reply" && origRow?.message
+				threaded && origRow?.message
 					? origRow.message.messageId
 					: null;
 
 			const references =
-				data.mode === "reply" && origRow?.message
+				threaded && origRow?.message
 					? Array.from(
 						new Set(
 							[

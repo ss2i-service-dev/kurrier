@@ -1,6 +1,6 @@
 "use client";
 import React, { useRef, useEffect, useState } from "react";
-import { Archive, Inbox, ListChecks, MailOpen, RotateCw, Trash2 } from "lucide-react";
+import { Archive, Building2, Inbox, ListChecks, MailOpen, RotateCw, Trash2 } from "lucide-react";
 import { findLikelyNotSpam } from "@/lib/actions/spam-triage";
 import { moveWithUndo } from "@/lib/pending-moves";
 import { fetchAllThreadIds, type SelectAllScope } from "@/lib/actions/select-all";
@@ -35,7 +35,8 @@ import { PublicConfig } from "@schema";
 import { useMediaQuery } from "@mantine/hooks";
 import { clsx } from "clsx";
 import MoveToFolder from "@/components/mailbox/default/move-to-folder";
-import { usePathname } from "next/navigation";
+import { LinkClientPicker } from "@/components/mailbox/default/client-link-ui";
+import { useParams, usePathname } from "next/navigation";
 
 function MailListHeader({
 	mailboxThreads,
@@ -77,6 +78,7 @@ function MailListHeader({
 		if (activeMailbox?.id) mailboxIdRef.current = activeMailbox.id;
 	}, [activeMailbox?.identityId, activeMailbox?.id]);
 
+	const routeParams = useParams<{ identityPublicId?: string }>() ?? {};
 	const selectedSize = state?.selectedThreadIds?.size ?? 0;
 	const hasSelected = selectedSize > 0;
 	// ss2i : « tout coche » = chaque fil affiche est dans la selection. Avant, on comparait
@@ -323,6 +325,23 @@ function MailListHeader({
 						<MoveToFolder
 							identityMailboxes={identityMailboxes}
 							activeMailbox={activeMailbox}
+						/>
+						{/* ss2i (OI 10270) : rattacher la selection a un client (identites pro) */}
+						<LinkClientPicker
+							identityPublicId={String(routeParams.identityPublicId ?? "")}
+							threadIds={() => Array.from(state?.selectedThreadIds ?? []).map(String)}
+							onLinked={clearSelection}
+							trigger={(open) => (
+								<button
+									type="button"
+									onClick={open}
+									className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs hover:bg-muted"
+									title="Link to a client"
+								>
+									<Building2 className="h-4 w-4" />
+									Client
+								</button>
+							)}
 						/>
 						{mailboxKind.current === "spam" && inboxId && (
 							<button

@@ -3,7 +3,8 @@
 // arriere-plan et on passe aussitot au fil suivant (ou a la liste).
 import React, { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Archive, ArrowLeft, ChevronDown, ChevronUp, ClipboardList, Mail, Trash2, X } from "lucide-react";
+import { Archive, ArrowLeft, Building2, ChevronDown, ChevronUp, ClipboardList, Mail, Trash2, X } from "lucide-react";
+import { LinkClientPicker } from "@/components/mailbox/default/client-link-ui";
 import { copyMailToClipboard } from "@/lib/mail-copy";
 import KIconButton from "@/components/k/icon-button";
 import SnoozeMail from "@/components/k/snooze";
@@ -23,6 +24,7 @@ export default function ThreadToolbar({
 	markSmtp,
 	hasUnread,
 	pinned: serverPinned = false,
+	identityPublicId,
 }: {
 	threadId: string;
 	activeMailboxId: string;
@@ -30,6 +32,8 @@ export default function ThreadToolbar({
 	markSmtp: boolean;
 	hasUnread: boolean;
 	pinned?: boolean;
+	/** ss2i (OI 10270) : « Rattacher a un client... » (identites pro). */
+	identityPublicId?: string;
 }) {
 	const pinOverride = useMailStore((s) => s.pinned.get(String(threadId)));
 	const pinned = pinOverride ?? serverPinned;
@@ -137,6 +141,17 @@ export default function ThreadToolbar({
 			<KIconButton label="Copier tout le fil (pour un agent IA)" onClick={() => copyMailToClipboard({ threadId: String(threadId) })}>
 				<ClipboardList />
 			</KIconButton>
+			{identityPublicId && (
+				<LinkClientPicker
+					identityPublicId={identityPublicId}
+					threadIds={() => [String(threadId)]}
+					trigger={(open) => (
+						<KIconButton label="Rattacher à un client…" onClick={open}>
+							<Building2 />
+						</KIconButton>
+					)}
+				/>
+			)}
 
 			<div className="ml-auto flex items-center">
 				<KIconButton label="Fil précédent" shortcut={hint.prev} onClick={() => go(-1)}>

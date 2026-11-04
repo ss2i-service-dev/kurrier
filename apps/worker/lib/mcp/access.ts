@@ -464,3 +464,32 @@ export async function clientsForThreads(userId: string, threadIds: string[]) {
 	}
 	return out;
 }
+
+// ss2i : rattachement manuel (outils link_thread_to_client, unlink_thread_from_client). Fils
+// de la liste qui ont une place dans l'identite de l'utilisateur ; les autres sont ignores,
+// comme s'ils n'existaient pas.
+export async function threadsInIdentity(userId: string, identityId: string, threadIds: string[]) {
+	const ids = Array.from(new Set(threadIds.filter(isUuid)));
+	if (!ids.length) return [];
+	const rows = await db
+		.selectDistinct({ threadId: mailboxThreads.threadId })
+		.from(mailboxThreads)
+		.where(
+			and(
+				eq(mailboxThreads.ownerId, userId),
+				eq(mailboxThreads.identityId, identityId),
+				inArray(mailboxThreads.threadId, ids),
+			),
+		);
+	return rows.map((r) => r.threadId);
+}
+
+// Societe connue (crm_companies : deja rattachee a un fil, ou trouvee par search_crm_companies).
+export async function knownCompany(companyId: number) {
+	const [row] = await db
+		.select({ id: crmCompanies.id, name: crmCompanies.name, ebpCustomerId: crmCompanies.ebpCustomerId })
+		.from(crmCompanies)
+		.where(eq(crmCompanies.id, companyId))
+		.limit(1);
+	return row ?? null;
+}

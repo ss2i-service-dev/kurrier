@@ -19,9 +19,10 @@ export default defineNitroConfig({
 		// ss2i : sous-chemin explicite, comme mail-client (sans lui, Nitro resout @common/safe-http
 		// en .../index.ts/safe-http et le build echoue en ENOTDIR).
 		"@common/safe-http": "../../packages/common/src/safe-http.ts",
+		"@common/server-client-link": "../../packages/common/src/server-client-link.ts",
 	},
 	externals: {
-		inline: ["@db", "@schema", "@providers", "@common", "@common/mail-client", "@common/safe-http"],
+		inline: ["@db", "@schema", "@providers", "@common", "@common/mail-client", "@common/safe-http", "@common/server-client-link"],
 	},
 	routeRules: {
 		"/**": {

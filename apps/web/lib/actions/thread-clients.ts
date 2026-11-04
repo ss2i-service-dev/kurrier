@@ -12,8 +12,10 @@ import {
 	parseDomainList,
 } from "@common/crm-match";
 import { PAGE_SIZE } from "@common/mail-client";
+import { attachThreadsToCompany, crmSearchCompanies, orphanThreadsPage, type PreviousClientLink, restoreThreadLinks, searchKnownCrmCompanies, upsertCrmCompanies } from "@common/server-client-link";
 import { rlsClient } from "@/lib/actions/clients";
 import { isSignedIn } from "@/lib/actions/auth";
+import { isUuid } from "@/lib/authz";
 
 // ss2i : section « Clients » des boites pro : dossiers virtuels par societe de la CRM,
 // alimentes par le worker (table thread_clients). Les identites visibles sont resolues
@@ -64,7 +66,13 @@ const visibleProIdentities = cache(async () => {
 	const rls = await rlsClient();
 	const rows = await rls((tx) =>
 		tx
-			.select({ id: identities.id, publicId: identities.publicId, value: identities.value, ownerId: identities.ownerId })
+			.select({
+				id: identities.id,
+				publicId: identities.publicId,
+				value: identities.value,
+				ownerId: identities.ownerId,
+				workspaceId: identities.workspaceId,
+			})
 			.from(identities)
 			.where(eq(identities.kind, "email")),
 	);
@@ -248,4 +256,128 @@ export async function detachThreadClient(threadId: string, identityPublicId: str
 		);
 	if (path) revalidatePath(path);
 	return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// ss2i : rattachement manuel (OI 10270) : glisser-deposer d'un fil sur un client de la barre
+// laterale, « Rattacher a un client... » (fil ouvert, selection), dossier « Sans client ».
+// Ligne thread_clients matched_by = "manual" que crm-link ne retire jamais
+// (packages/common/src/thread-client-link.ts).
+// ---------------------------------------------------------------------------
+
+const MAX_LINK_THREADS = 500;
+
+// Fils de la liste que l'utilisateur voit (RLS) dans l'identite ; les autres sont ignores.
+async function visibleThreadsOfIdentity(identityId: string, threadIds: unknown): Promise<string[]> {
+	const ids = Array.isArray(threadIds) ? Array.from(new Set(threadIds.filter(isUuid))).slice(0, MAX_LINK_THREADS) : [];
+	if (!ids.length) return [];
+	const rls = await rlsClient();
+	const rows = await rls((tx) =>
+		tx
+			.selectDistinct({ threadId: mailboxThreads.threadId })
+			.from(mailboxThreads)
+			.where(and(eq(mailboxThreads.identityId, identityId), inArray(mailboxThreads.threadId, ids))),
+	);
+	return rows.map((r) => r.threadId);
+}
+
+export type LinkClientResult =
+	| { success: true; companyId: number; name: string; linked: number; previous: PreviousClientLink[] }
+	| { success: false; error: string };
+
+/** Rattache des fils a un client a la main ; un fil detache de ce client est reactive. */
+export async function linkThreadsToClient(
+	identityPublicId: string,
+	threadIds: string[],
+	companyId: number,
+): Promise<LinkClientResult> {
+	const user = await isSignedIn();
+	if (!user) return { success: false, error: "Not authenticated" };
+	const ident = await visibleProIdentity(identityPublicId);
+	if (!ident || !Number.isInteger(companyId) || companyId <= 0) return { success: false, error: "Not found" };
+	const [company] = await db
+		.select({ name: crmCompanies.name })
+		.from(crmCompanies)
+		.where(eq(crmCompanies.id, companyId));
+	if (!company) return { success: false, error: "Unknown client" };
+	const ids = await visibleThreadsOfIdentity(ident.id, threadIds);
+	if (!ids.length) return { success: false, error: "Conversation not found in this mailbox" };
+	const previous = await attachThreadsToCompany(ident, ids, companyId);
+	return { success: true, companyId, name: company.name, linked: ids.length, previous };
+}
+
+/** Annule un rattachement manuel (bouton Annuler du toast) : etat d'avant, fil par fil. */
+export async function undoLinkThreadsToClient(identityPublicId: string, companyId: number, previous: PreviousClientLink[]) {
+	const user = await isSignedIn();
+	if (!user) return { success: false, error: "Not authenticated" };
+	const ident = await visibleProIdentity(identityPublicId);
+	if (!ident || !Number.isInteger(companyId) || companyId <= 0) return { success: false, error: "Not found" };
+	const valid = (Array.isArray(previous) ? previous : []).filter(
+		(p) =>
+			!!p &&
+			isUuid(p.threadId) &&
+			(p.state === "absent" || p.state === "detached" || p.state === "linked") &&
+			(p.matchedBy === null || (typeof p.matchedBy === "string" && p.matchedBy.length <= 32)),
+	);
+	const visible = new Set(await visibleThreadsOfIdentity(ident.id, valid.map((p) => p.threadId)));
+	await restoreThreadLinks(ident, companyId, valid.filter((p) => visible.has(p.threadId)));
+	return { success: true };
+}
+
+export type CompanySearchHit = { companyId: number; name: string; ebpCustomerId: string | null; threadCount: number };
+
+/**
+ * Societes pour « Rattacher a un client... » : toute la CRM (nom, adresse ou domaine, voir
+ * crm-api.ts), completee par les societes deja connues ; sans saisie, les clients recents
+ * de l'identite. Les societes trouvees dans la CRM sont inserees ou actualisees dans
+ * crm_companies : le rattachement ne vise qu'une societe de cette table.
+ */
+export async function searchCrmCompanies(identityPublicId: string, query: string): Promise<CompanySearchHit[]> {
+	const user = await isSignedIn();
+	if (!user) return [];
+	const ident = await visibleProIdentity(identityPublicId);
+	if (!ident) return [];
+	const q = String(query ?? "").trim().slice(0, 200);
+	let hits: { id: number; name: string; ebpCustomerId: string | null }[];
+	if (q.length < 2) {
+		hits = await db
+			.select({ id: crmCompanies.id, name: crmCompanies.name, ebpCustomerId: crmCompanies.ebpCustomerId })
+			.from(threadClients)
+			.innerJoin(crmCompanies, eq(crmCompanies.id, threadClients.crmCompanyId))
+			.where(and(eq(threadClients.identityId, ident.id), eq(threadClients.detached, false)))
+			.groupBy(crmCompanies.id, crmCompanies.name, crmCompanies.ebpCustomerId)
+			.orderBy(desc(sql`max(${threadClients.lastActivityAt})`))
+			.limit(12);
+	} else {
+		const fromCrm = await crmSearchCompanies({ crmUrl: env.CRM_URL, token: env.CRM_LORE_TOKEN }, q, 20);
+		await upsertCrmCompanies(fromCrm);
+		const known = await searchKnownCrmCompanies(q, 20);
+		const byId = new Map<number, (typeof known)[number]>();
+		for (const c of [...fromCrm, ...known]) if (!byId.has(c.id)) byId.set(c.id, c);
+		hits = [...byId.values()].slice(0, 20);
+	}
+	if (!hits.length) return [];
+	const counts = await db
+		.select({ companyId: threadClients.crmCompanyId, n: sql<number>`count(*)` })
+		.from(threadClients)
+		.where(
+			and(
+				eq(threadClients.identityId, ident.id),
+				eq(threadClients.detached, false),
+				inArray(threadClients.crmCompanyId, hits.map((h) => h.id)),
+			),
+		)
+		.groupBy(threadClients.crmCompanyId);
+	const countBy = new Map(counts.map((c) => [c.companyId, Number(c.n)]));
+	return hits.map((h) => ({ companyId: h.id, name: h.name, ebpCustomerId: h.ebpCustomerId, threadCount: countBy.get(h.id) ?? 0 }));
+}
+
+/**
+ * Dossier virtuel « Sans client » : fils avec une adresse exterieure humaine et sans client,
+ * hors corbeille et spam, du plus recent au plus ancien, pagine comme un dossier client.
+ */
+export async function fetchOrphanThreads(identityPublicId: string, page: number) {
+	const ident = await visibleProIdentity(identityPublicId);
+	if (!ident) return { threads: [], total: 0 };
+	return orphanThreadsPage(ident.id, Number(page) || 1, PAGE_SIZE);
 }

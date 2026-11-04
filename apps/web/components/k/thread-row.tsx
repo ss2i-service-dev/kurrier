@@ -15,6 +15,7 @@ import { FetchMailboxThreadsResult } from "@/lib/actions/mailbox";
 import { FetchLabelsResult, FetchMailboxThreadLabelsResult } from "@/lib/actions/labels";
 import { IconPin, IconPinnedFilled, IconPinnedOff, IconStar, IconStarFilled } from "@tabler/icons-react";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
+import { ThreadDragHandle } from "@/components/mailbox/default/client-link-ui";
 import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 import ThreadLabelHoverButtons from "@/components/dashboard/labels/thread-label-hover-buttons";
 import SnoozeMail from "@/components/k/snooze";
@@ -180,6 +181,14 @@ export default function KThreadRow({
 			<span
 				aria-hidden
 				className={`absolute bottom-2 left-0 top-2 w-[3px] rounded-full bg-k-accent transition-opacity ${isUnread ? "opacity-100" : "opacity-0"}`}
+			/>
+
+			{/* ss2i (OI 10270) : poignee au survol, sous la pastille non lu : glisser le fil (ou la selection) sur un client */}
+			<ThreadDragHandle
+				identityPublicId={identityPublicId}
+				threadId={item.threadId}
+				subject={item.subject}
+				className="absolute bottom-2 left-0 z-10 h-5 w-3 opacity-0 transition-opacity group-hover:opacity-100"
 			/>
 
 			{/* Avatar / case a cocher : toute la zone est cliquable */}

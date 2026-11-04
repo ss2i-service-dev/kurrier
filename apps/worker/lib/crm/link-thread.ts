@@ -1,17 +1,8 @@
-import { db, crmCompanies, crmEmailMatches, identities, mailboxes, mailboxThreads, messages, threadClients } from "@db";
+import { db, crmCompanies, crmEmailMatches, identities, mailboxes, mailboxThreads, messages, threadClients, threadCrmScans } from "@db";
 import { and, desc, eq, gt, inArray, lt, notInArray, or, sql } from "drizzle-orm";
 import { getServerEnv } from "@schema";
-import {
-	companiesOf,
-	DEFAULT_INTERNAL_DOMAINS,
-	DEFAULT_PRO_DOMAINS,
-	externalAddresses,
-	htmlToPlainLines,
-	isProIdentity,
-	quotedHeaderAddresses,
-	parseDomainList,
-	type EmailMatch,
-} from "@common";
+import { companiesOf, DEFAULT_INTERNAL_DOMAINS, DEFAULT_PRO_DOMAINS, externalAddresses, htmlToPlainLines, isProIdentity, quotedHeaderAddresses, parseDomainList, type EmailMatch } from "@common";
+import { MANUAL_MATCH } from "@common/server-client-link";
 import { crmConfigured, crmMatchEmail } from "./crm-client";
 
 // ss2i : rattachement fil -> societe(s) de la CRM pour les identites pro. Deux entrees :
@@ -131,7 +122,9 @@ export type LinkResult = { skipped: boolean; companies: number[]; externalAddres
  * Recalcule les societes d'un fil pour une identite : adresses exterieures des
  * messages du fil ranges dans les dossiers de l'identite (hors corbeille, spam et
  * brouillons), rapprochement par adresse, lignes thread_clients mises a jour (les
- * lignes detachees a la main sont conservees telles quelles, jamais recreees).
+ * lignes detachees a la main sont conservees telles quelles, jamais recreees ; les lignes
+ * rattachees a la main, matched_by = "manual", ne sont jamais retirees ni requalifiees).
+ * Le nombre d'adresses exterieures va dans thread_crm_scans (dossier « Sans client »).
  */
 export async function linkThread(threadId: string, identityId: string, identity?: typeof identities.$inferSelect): Promise<LinkResult> {
 	const ident = identity ?? (await db.select().from(identities).where(eq(identities.id, identityId)).then((r) => r[0]));
@@ -165,8 +158,15 @@ export async function linkThread(threadId: string, identityId: string, identity?
 	const lastActivityAt = activity?.last ? new Date(activity.last) : new Date();
 
 	await db.transaction(async (tx) => {
+		await tx
+			.insert(threadCrmScans)
+			.values({ threadId, identityId, externalAddresses: emails.length, lastActivityAt, scannedAt: new Date() })
+			.onConflictDoUpdate({
+				target: [threadCrmScans.threadId, threadCrmScans.identityId],
+				set: { externalAddresses: emails.length, lastActivityAt, scannedAt: new Date() },
+			});
 		// Societes qui ne correspondent plus (cache rafraichi, adresses retirees) : lignes
-		// retirees, sauf celles detachees a la main.
+		// retirees, sauf celles detachees ou rattachees a la main.
 		await tx
 			.delete(threadClients)
 			.where(
@@ -174,6 +174,7 @@ export async function linkThread(threadId: string, identityId: string, identity?
 					eq(threadClients.threadId, threadId),
 					eq(threadClients.identityId, identityId),
 					eq(threadClients.detached, false),
+					sql`${threadClients.matchedBy} IS DISTINCT FROM ${MANUAL_MATCH}`,
 					ids.length ? notInArray(threadClients.crmCompanyId, ids) : sql`true`,
 				),
 			);
@@ -195,7 +196,8 @@ export async function linkThread(threadId: string, identityId: string, identity?
 			.onConflictDoUpdate({
 				target: [threadClients.threadId, threadClients.identityId, threadClients.crmCompanyId],
 				set: {
-					matchedBy: sql`excluded.matched_by`,
+					// Un rattachement manuel le reste, meme si les adresses menent aussi a la societe.
+					matchedBy: sql`CASE WHEN ${threadClients.matchedBy} = ${MANUAL_MATCH} THEN ${MANUAL_MATCH} ELSE excluded.matched_by END`,
 					lastActivityAt: sql`excluded.last_activity_at`,
 					identityPublicId: sql`excluded.identity_public_id`,
 					updatedAt: new Date(),
@@ -212,8 +214,9 @@ export async function linkThread(threadId: string, identityId: string, identity?
 /**
  * Version des regles de rattachement : une passe de rattrapage faite avec d'autres
  * regles est refaite. 2 = adresses des en-tetes transferes ou cites dans le corps.
+ * 3 = thread_crm_scans rempli pour tous les fils (dossier « Sans client »).
  */
-export const LINK_RULES_VERSION = 2;
+export const LINK_RULES_VERSION = 3;
 
 export type BackfillState = {
 	rules?: number;

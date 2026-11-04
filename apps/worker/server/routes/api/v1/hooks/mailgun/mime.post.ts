@@ -1,14 +1,17 @@
-import { defineEventHandler, readBody } from "h3";
+import { defineEventHandler } from "h3";
 import { simpleParser } from "mailparser";
 import { db, identities, mailboxes } from "@db";
 import { eq } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { parseAndStoreEmail } from "../../../../../../lib/message-payload-parser";
 import { getToEmails } from "../sendgrid/inbound.post";
+import { readFormFields, verifyMailgun } from "../../../../../../lib/inbound-auth";
 
 export default defineEventHandler(async (event) => {
+	// ss2i (controle d'acces) : signature Mailgun exigee (403 sinon, cf. lib/inbound-auth.ts).
+	const body = await readFormFields(event);
+	verifyMailgun(body);
 	try {
-		const body = await readBody(event);
 		const rawMime = body["body-mime"];
 		const parsed = await simpleParser(rawMime);
 

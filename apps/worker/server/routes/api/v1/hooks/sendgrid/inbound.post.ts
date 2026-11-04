@@ -4,6 +4,7 @@ import { ParsedMail, simpleParser } from "mailparser";
 import { eq } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { parseAndStoreEmail } from "../../../../../../lib/message-payload-parser";
+import { verifySendgrid } from "../../../../../../lib/inbound-auth";
 
 export function getToEmails(parsed: ParsedMail): string[] {
 	if (!parsed.to) return [];
@@ -14,6 +15,9 @@ export function getToEmails(parsed: ParsedMail): string[] {
 }
 
 export default defineEventHandler(async (event) => {
+	// ss2i (controle d'acces) : requete signee par SendGrid exigee (403 sinon, cf.
+	// lib/inbound-auth.ts).
+	await verifySendgrid(event);
 	try {
 		const parts = await readMultipartFormData(event);
 		if (!parts) return { ok: false, error: "No multipart body" };

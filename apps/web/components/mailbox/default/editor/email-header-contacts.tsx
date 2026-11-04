@@ -32,8 +32,11 @@ export default function EmailHeaderContacts({
 	defaultValues,
 	maxTags,
 	onChange,
+	autoFocus = false,
 }: {
 	defaultValues?: string[];
+	/** ss2i : prend le focus a l'ouverture (nouveau message, transfert, champ ajoute a la main). */
+	autoFocus?: boolean;
 	maxTags?: number;
 	onChange?: (value: string[]) => void;
 	name: RecipientField;
@@ -194,8 +197,9 @@ export default function EmailHeaderContacts({
 					</button>
 				</span>
 			))}
-			<FocusTrap active={true}>
+			<FocusTrap active={autoFocus}>
 				<TagsInput
+					data-k-autofocus={autoFocus ? "true" : undefined}
 					value={[]}
 					searchValue={searchValue}
 					onSearchChange={searchContacts}

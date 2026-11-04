@@ -221,6 +221,24 @@ export async function upsertMailboxThreadItem(
 			},
 		});
 
+	// ss2i : une reponse envoyee fait remonter le fil dans les autres dossiers ou il
+	// se trouve (Boite de reception, dossiers personnels), comme dans Gmail ou
+	// Outlook. Sans cela, le message ne compte que pour Envoyes et le fil reste a sa
+	// place dans la liste. Vaut aussi pour une reponse envoyee depuis un autre
+	// client (telephone), relue par la synchronisation IMAP.
+	if (mbx.kind === "sent" && lastActivityAt) {
+		await dbh.execute(sql`
+			update mailbox_threads mt
+			set last_activity_at = ${new Date(lastActivityAt as any).toISOString()}::timestamptz, updated_at = now()
+			from mailboxes m
+			where mt.mailbox_id = m.id
+			  and mt.thread_id = ${msg.threadId}::uuid
+			  and mt.mailbox_id <> ${mbx.id}::uuid
+			  and coalesce(m.kind::text, '') not in ('sent', 'drafts', 'trash', 'spam')
+			  and mt.last_activity_at < ${new Date(lastActivityAt as any).toISOString()}::timestamptz
+		`);
+	}
+
 	return { threadId: msg.threadId, mailboxId: mbx.id };
 }
 

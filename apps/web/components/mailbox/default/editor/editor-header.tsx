@@ -103,6 +103,12 @@ function EditorHeader({
 
 	const [ccActive, setCcActive] = useState(ccValues.length > 0);
 	const [bccActive, setBccActive] = useState(bccValues.length > 0);
+	// ss2i : focus a l'ouverture. Nouveau message ou transfert : le champ « À » ;
+	// reponse : le corps (pris par l'editeur), pas les destinataires deja remplis.
+	// Cc / Cci ajoutes d'un clic prennent le focus.
+	const [focusField, setFocusField] = useState<"cc" | "bcc" | null>(null);
+	const focusOf = (n: "to" | "cc" | "bcc") =>
+		n === "to" ? mode === "compose" || mode === "forward" : focusField === n;
 	useEffect(() => {
 		if (ccValues.length > 0) setCcActive(true);
 	}, [ccValues]);
@@ -195,6 +201,7 @@ function EditorHeader({
 			<EmailHeaderContacts
 				key={`${n}-${mode}`}
 				name={n}
+				autoFocus={focusOf(n)}
 				defaultValues={values}
 				onChange={(value) => {
 					if (value.length > 0) setSubjectFocus(true);
@@ -229,14 +236,14 @@ function EditorHeader({
 					<div className="flex shrink-0 items-center gap-1 text-[12.5px]">
 						{!ccActive && (
 							<RecipientDropZone name="cc" as="span">
-								<button type="button" onClick={() => setCcActive(true)} className="rounded-k-sm px-1.5 py-0.5 text-k-ink-3 hover:bg-k-hover hover:text-k-ink">
+								<button type="button" onClick={() => { setCcActive(true); setFocusField("cc"); }} className="rounded-k-sm px-1.5 py-0.5 text-k-ink-3 hover:bg-k-hover hover:text-k-ink">
 									Cc
 								</button>
 							</RecipientDropZone>
 						)}
 						{!bccActive && (
 							<RecipientDropZone name="bcc" as="span">
-								<button type="button" onClick={() => setBccActive(true)} className="rounded-k-sm px-1.5 py-0.5 text-k-ink-3 hover:bg-k-hover hover:text-k-ink">
+								<button type="button" onClick={() => { setBccActive(true); setFocusField("bcc"); }} className="rounded-k-sm px-1.5 py-0.5 text-k-ink-3 hover:bg-k-hover hover:text-k-ink">
 									Cci
 								</button>
 							</RecipientDropZone>
@@ -344,6 +351,7 @@ function EditorHeader({
 					<EmailHeaderContacts
 						key={`to-${mode}`}
 						name={"to"}
+						autoFocus={focusOf("to")}
 						defaultValues={toValues}
 						onChange={(value) => {
 							if (value.length > 0) {
@@ -354,7 +362,7 @@ function EditorHeader({
 </RecipientDropZone>
 <div className="flex items-center justify-end gap-4 text-primary text-sm">
 					{!ccActive && (
-						<RecipientDropZone name="cc" as="span"><button type="button" onClick={() => setCcActive(true)}
+						<RecipientDropZone name="cc" as="span"><button type="button" onClick={() => { setCcActive(true); setFocusField("cc"); }}
 							className="hover:underline"
 							aria-label={t("Add Cc", "Ajouter Cc")}
 							title={t("Add Cc", "Ajouter Cc")}
@@ -362,7 +370,7 @@ function EditorHeader({
 							Cc </button></RecipientDropZone>
 					)}
 					{!bccActive && (
-						<RecipientDropZone name="bcc" as="span"><button type="button" onClick={() => setBccActive(true)}
+						<RecipientDropZone name="bcc" as="span"><button type="button" onClick={() => { setBccActive(true); setFocusField("bcc"); }}
 							className="hover:underline"
 							aria-label={t("Add Bcc", "Ajouter Cci")}
 							title={t("Add Bcc", "Ajouter Cci")}
@@ -380,6 +388,7 @@ Cc
 					<EmailHeaderContacts
 						key={`cc-${mode}`}
 						name={"cc"}
+						autoFocus={focusOf("cc")}
 						defaultValues={ccValues}
 						onChange={(value) => {
 							if (value.length > 0) {
@@ -394,6 +403,7 @@ Cc
 </span>
 					<EmailHeaderContacts
 						name={"bcc"}
+						autoFocus={focusOf("bcc")}
 						defaultValues={bccValues}
 						onChange={(value) => {
 							if (value.length > 0) {
@@ -481,6 +491,7 @@ Cc
 							<EmailHeaderContacts
 								key={`to-${mode}`}
 								name={"to"}
+						autoFocus={focusOf("to")}
 								defaultValues={toValues}
 								onChange={(value) => {
 									if (value.length > 0) {
@@ -492,6 +503,7 @@ Cc
 								<EmailHeaderContacts
 									key={`cc-${mode}`}
 									name={"cc"}
+						autoFocus={focusOf("cc")}
 									defaultValues={ccValues}
 									onChange={(value) => {
 										if (value.length > 0) {
@@ -502,6 +514,7 @@ Cc
 							<RecipientDropZone name="bcc" className="grid grid-cols-[2.5rem_1fr] items-start gap-2 py-1 border-t border-border/60"> <span className="text-sm font-medium text-muted-foreground text-right leading-7">{t("Bcc", "Cci")}</span>
 								<EmailHeaderContacts
 									name={"bcc"}
+						autoFocus={focusOf("bcc")}
 									defaultValues={bccValues}
 									onChange={(value) => {
 										if (value.length > 0) {
@@ -510,10 +523,10 @@ Cc
 									}}
 								/> </RecipientDropZone> )} </div> <div className="flex gap-2 items-center text-sm text-neutral-500">
 						{!ccActive && (
-							<RecipientDropZone name="cc" as="span"><ActionIcon onClick={() => setCcActive(true)} variant="transparent"> Cc </ActionIcon></RecipientDropZone>
+							<RecipientDropZone name="cc" as="span"><ActionIcon onClick={() => { setCcActive(true); setFocusField("cc"); }} variant="transparent"> Cc </ActionIcon></RecipientDropZone>
 						)}
 						{!bccActive && (
-							<RecipientDropZone name="bcc" as="span"><ActionIcon onClick={() => setBccActive(true)} variant="transparent"> {t("Bcc", "Cci")} </ActionIcon></RecipientDropZone>
+							<RecipientDropZone name="bcc" as="span"><ActionIcon onClick={() => { setBccActive(true); setFocusField("bcc"); }} variant="transparent"> {t("Bcc", "Cci")} </ActionIcon></RecipientDropZone>
 						)}
 					</div>
 				</div>

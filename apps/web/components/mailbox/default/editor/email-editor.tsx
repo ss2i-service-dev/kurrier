@@ -571,7 +571,6 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			<>
 				<div
 					className={"mt-4"}
-					tabIndex={-1}
 					onKeyDown={onKeyDown}
 					onInput={() => backupNow()}
 					onKeyUp={() => backupNow()}

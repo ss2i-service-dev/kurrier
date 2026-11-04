@@ -197,12 +197,138 @@
     return t === "INPUT" || t === "TEXTAREA" || t === "SELECT";
   };
 
+  // ---------------------------------------------------------------------------
+  // VERROU DE SAISIE (Samuel, 04/11/2026). Pendant qu'on ecrit un mail, aucune
+  // touche seule ne doit jamais devenir un raccourci, meme si le focus a quitte la
+  // zone de texte (editeur redessine par un router.refresh, element retire du DOM,
+  // clic dans une marge) : « Si on est en train de taper, il n'y a aucun raccourci
+  // clavier qui est operationnel en dehors des raccourcis avec des combinaisons de
+  // touches CTRL, ALT ». Regle : tant qu'un editeur de mail est ouvert,
+  //  1. les raccourcis sans Ctrl / Alt / Meta sont coupes, ou que soit le focus ;
+  //  2. une frappe qui tombe hors d'un champ est rendue a la derniere zone de saisie
+  //     (meme position du curseur si l'element existe encore, sinon fin du corps) ;
+  //  3. un focus perdu « dans le vide » (body) sans clic de l'utilisateur est rendu
+  //     aussitot a la zone de saisie.
+  // ---------------------------------------------------------------------------
+  const EDITEUR = '.ProseMirror[contenteditable="true"]';
+  const editeursOuverts = () => Array.from(document.querySelectorAll(EDITEUR)).filter(visible);
+  const composeurOuvert = () => editeursOuverts().length > 0;
+  let derniereSaisie = null; // dernier champ de saisie qui a eu le focus
+  let derniereSelection = null; // { el, range } dans un contenteditable
+  let dernierClic = 0;
+  let derniereTab = 0;
+
+  const utilisable = (el) => el && el.isConnected && visible(el) && dansUneSaisie(el);
+  const cibleDeSaisie = () => {
+    if (utilisable(derniereSaisie)) return derniereSaisie;
+    const eds = editeursOuverts();
+    return eds.length ? eds[eds.length - 1] : null;
+  };
+  // Focus perdu « dans le vide » : body, html, ou un conteneur non interactif.
+  const focusDansLeVide = () => {
+    const a = document.activeElement;
+    if (!a || a === document.body || a === document.documentElement) return true;
+    if (dansUneSaisie(a)) return false;
+    return !a.matches('button, a[href], select, summary, [role="button"], [role="menuitem"], [role="option"], [role="tab"], [role="checkbox"], [role="switch"], [role="slider"], input');
+  };
+  // Menus, listes deroulantes, fenetres : leur clavier leur appartient.
+  const dansUnePopup = (el) =>
+    !!(el && el.closest && el.closest('[role="menu"], [role="listbox"], [role="dialog"]:not(:has(.ProseMirror)), [role="tree"], [role="combobox"]'));
+
+  const rendreLeFocus = () => {
+    const cible = cibleDeSaisie();
+    if (!cible) return false;
+    cible.focus({ preventScroll: true });
+    // Curseur remis la ou il etait si l'element est le meme.
+    if (derniereSelection && derniereSelection.el === cible && cible.isContentEditable) {
+      try {
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(derniereSelection.range);
+      } catch (_) {
+        /* range devenu invalide : on garde le focus tel quel */
+      }
+    } else if (cible.isContentEditable && !cible.contains(window.getSelection()?.anchorNode || null)) {
+      // Nouvel element (editeur redessine) : curseur en fin de texte.
+      const r = document.createRange();
+      r.selectNodeContents(cible);
+      r.collapse(false);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    return document.activeElement === cible;
+  };
+
+  window.addEventListener("pointerdown", () => (dernierClic = Date.now()), true);
+  window.addEventListener(
+    "focusin",
+    (e) => {
+      if (dansUneSaisie(e.target)) derniereSaisie = e.target;
+    },
+    true
+  );
+  document.addEventListener("selectionchange", () => {
+    const a = document.activeElement;
+    if (!a || !a.isContentEditable) return;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && a.contains(sel.anchorNode)) {
+      derniereSelection = { el: a.closest('[contenteditable="true"]') || a, range: sel.getRangeAt(0).cloneRange() };
+    }
+  });
+  window.addEventListener(
+    "focusout",
+    (e) => {
+      if (!dansUneSaisie(e.target)) return;
+      // Laisse le navigateur poser le nouveau focus, puis verifie ou il est tombe.
+      setTimeout(() => {
+        if (!document.hasFocus()) return; // autre fenetre, autre onglet
+        if (Date.now() - dernierClic < 600) return; // l'utilisateur a clique ailleurs
+        if (Date.now() - derniereTab < 600) return; // Tab : il change de champ
+        if (!composeurOuvert() || !focusDansLeVide()) return;
+        rendreLeFocus();
+      }, 0);
+    },
+    true
+  );
+
+  // Phase de capture sur window, enregistree au chargement : passe avant tous les
+  // autres ecouteurs clavier de la page (React, fenetres, raccourcis ci-dessous).
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      try {
+        if (e.key === "Tab") derniereTab = Date.now();
+        if (window.__ss2iShortcutsRecording) return;
+        if (e.ctrlKey || e.metaKey || e.altKey) return; // combinaisons : toujours permises
+        if (dansUneSaisie(e.target)) return; // frappe deja au bon endroit
+        if (!composeurOuvert() || dansUnePopup(e.target)) return;
+        const imprimable = e.key && e.key.length === 1;
+        const edition = ["Backspace", "Delete", "Enter"].includes(e.key);
+        // Espace et Entree activent un bouton qui a le focus (Tab jusqu'a Envoyer) :
+        // on ne les detourne que si le focus est dans le vide.
+        if ((e.key === " " || e.key === "Enter") && !focusDansLeVide()) return;
+        if (!imprimable && !edition && e.key !== "Escape") return; // fleches, F1... : rien a voler
+        // Plus aucun ecouteur ne voit cette touche comme un raccourci.
+        e.stopImmediatePropagation();
+        if (e.key === "Escape") return;
+        // Le caractere part dans le champ qui recoit le focus pendant keydown.
+        if (!rendreLeFocus()) e.preventDefault();
+      } catch (err) {
+        console.error("verrou de saisie", err);
+      }
+    },
+    true
+  );
+
   document.addEventListener(
     "keydown",
     (e) => {
       try {
         // Enregistrement d'une touche dans les parametres : on ne reagit pas.
         if (window.__ss2iShortcutsRecording) return;
+        // Un mail est en cours d'ecriture : aucune touche seule n'est un raccourci.
+        if (!avecModificateur(combinaison(e) || "") && composeurOuvert()) return;
         const combo = combinaison(e);
         if (!combo) return;
 

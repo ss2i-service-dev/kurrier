@@ -66,7 +66,14 @@ export default function ComposeMail({
 		const prev = document.body.style.overflow;
 		document.body.style.overflow = "hidden";
 
-		const onEsc = (e: KeyboardEvent) => e.key === "Escape" && handleClose();
+		// ss2i : verrou de saisie (public/ss2i-shortcuts.js). Echap pendant qu'on ecrit
+		// ne ferme pas la fenetre : seulement la liste de suggestions, le cas echeant.
+		const onEsc = (e: KeyboardEvent) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			const el = e.target as HTMLElement | null;
+			if (el?.isContentEditable || (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+			handleClose();
+		};
 		window.addEventListener("keydown", onEsc);
 
 		return () => {

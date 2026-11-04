@@ -20,9 +20,11 @@ export default defineNitroConfig({
 		// en .../index.ts/safe-http et le build echoue en ENOTDIR).
 		"@common/safe-http": "../../packages/common/src/safe-http.ts",
 		"@common/server-client-link": "../../packages/common/src/server-client-link.ts",
+		// ss2i : HTML -> texte de l'MCP, partage avec « Ajouter a l'agenda » du web (OI 10280).
+		"@common/html-text": "../../packages/common/src/html-text.ts",
 	},
 	externals: {
-		inline: ["@db", "@schema", "@providers", "@common", "@common/mail-client", "@common/safe-http", "@common/server-client-link"],
+		inline: ["@db", "@schema", "@providers", "@common", "@common/mail-client", "@common/safe-http", "@common/server-client-link", "@common/html-text"],
 	},
 	routeRules: {
 		"/**": {

@@ -3,11 +3,13 @@ import { Container } from "@/components/common/containers";
 import { fetchThreadClients, isProIdentityPublicId } from "@/lib/actions/thread-clients";
 import ThreadClientChip from "@/components/mailbox/default/thread-client-chip";
 import { LinkThreadToClientButton } from "@/components/mailbox/default/client-link-ui";
+import { AddToAgendaButton } from "@/components/mailbox/default/add-to-agenda";
 
 // ss2i clients : au-dessus d'un fil rattache a un ou plusieurs clients de la CRM, une
 // pastille par client (vers son dossier virtuel), un lien vers la fiche CRM et un
 // bouton de detachement (rattachement par domaine errone). Identite pro : « Rattacher a un
-// client... » (OI 10270), meme pour un fil sans client. Rien pour une identite non pro.
+// client... » (OI 10270), meme pour un fil sans client, et « Ajouter a l'agenda » (OI 10280,
+// boites M365 seulement). Rien pour une identite non pro.
 export default async function ThreadClientsBar({
 	threadId,
 	identityPublicId,
@@ -35,6 +37,7 @@ export default async function ThreadClientsBar({
 					/>
 				))}
 				<LinkThreadToClientButton identityPublicId={identityPublicId} threadId={threadId} />
+				<AddToAgendaButton identityPublicId={identityPublicId} threadId={threadId} />
 			</div>
 		</Container>
 	);

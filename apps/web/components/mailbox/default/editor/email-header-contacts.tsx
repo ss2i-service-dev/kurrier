@@ -7,7 +7,6 @@ import {
 	TagsInput,
 	TagsInputProps,
 	OptionsFilter,
-	FocusTrap,
 	Menu,
 } from "@mantine/core";
 import { useRecipientsDnD } from "@/components/mailbox/default/editor/recipients-dnd";
@@ -197,8 +196,9 @@ export default function EmailHeaderContacts({
 					</button>
 				</span>
 			))}
-			<FocusTrap active={autoFocus}>
+			<>
 				<TagsInput
+					autoFocus={autoFocus}
 					data-k-autofocus={autoFocus ? "true" : undefined}
 					value={[]}
 					searchValue={searchValue}
@@ -239,7 +239,7 @@ export default function EmailHeaderContacts({
 						transitionProps: { transition: "skew-down", duration: 150 },
 					}}
 				/>
-			</FocusTrap>
+			</>
 			{menu && (
 				<Menu opened onChange={(o) => !o && setMenu(null)} withinPortal position="bottom-start" zIndex={3000}>
 					<Menu.Target>

@@ -1,17 +1,16 @@
 "use server";
 
 import { db, users } from "@db";
-import { FormState, getPublicEnv, getServerEnv } from "@schema";
+import { FormState, getPublicEnv } from "@schema";
 import argon2 from "argon2";
 import { decode } from "decode-formdata";
 import { eq } from "drizzle-orm";
-import { jwtVerify, JWTPayload } from "jose";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import * as crypto from "node:crypto";
 // ss2i (controle d'acces) : creation de compte, ouverture de session et redirection vers le
 // workspace vivent dans un module serveur qui n'est pas un module d'actions.
-import { createUserWithWorkspace, signInUserAndRedirect } from "@/lib/auth-session";
+import { createUserWithWorkspace, signInUserAndRedirect, verifyAndDecode } from "@/lib/auth-session";
 
 
 export async function login(
@@ -85,33 +84,6 @@ export async function signup(
 	return { success: true, message: "Welcome!" };
 }
 
-export type TokenClaims = JWTPayload & {
-	sub: string;
-	workspace_id?: string;
-};
-
-export async function verifyAndDecode(
-	token?: string,
-): Promise<TokenClaims | null> {
-	if (!token) return null;
-
-	try {
-		const { JWT_SECRET } = getServerEnv();
-		const { payload } = await jwtVerify<TokenClaims>(
-			token,
-			new TextEncoder().encode(JWT_SECRET),
-		);
-
-		if (!payload.sub) {
-			return null;
-		}
-
-		return payload;
-	} catch {
-		return null;
-	}
-}
-
 export async function isSignedIn() {
 	const cookieStore = await cookies();
 	const token = cookieStore.get("session")?.value;
@@ -139,11 +111,6 @@ export async function isSignedIn() {
 }
 
 export type FetchIsSignedInResult = Awaited<ReturnType<typeof isSignedIn>>;
-
-export const currentSession = async () => {
-	const cookieStore = await cookies();
-	return String(cookieStore.get("session")?.value);
-};
 
 export const signOut = async (redirectUrl?: string) => {
 	const cookieStore = await cookies();

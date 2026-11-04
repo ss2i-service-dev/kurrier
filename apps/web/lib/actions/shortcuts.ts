@@ -7,7 +7,7 @@ import { cookies } from "next/headers";
 import { sql } from "drizzle-orm";
 import { db } from "@db";
 import { getWorkspaceId } from "@/lib/actions/clients";
-import { verifyAndDecode } from "@/lib/actions/auth";
+import { verifyAndDecode } from "@/lib/auth-session";
 import { compactPrefs, DEFAULT_PREFS, sanitizePrefs, type ShortcutPrefs } from "@/components/k/shortcuts-catalog";
 
 async function who() {

@@ -8,7 +8,7 @@ import { cookies } from "next/headers";
 import { and, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db, mailboxThreads } from "@db";
 import { getWorkspaceId, rlsClient } from "@/lib/actions/clients";
-import { verifyAndDecode } from "@/lib/actions/auth";
+import { verifyAndDecode } from "@/lib/auth-session";
 import { fetchMailboxThreadLabels } from "@/lib/actions/labels";
 import { kRealAttachmentsOf } from "@/lib/actions/k-threads";
 

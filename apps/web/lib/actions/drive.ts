@@ -66,7 +66,8 @@ export const fetchVolumes = async () => {
 	);
 };
 
-export const normalizeWithinPathString = async (path: unknown) => {
+// ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
+const normalizeWithinPathString = async (path: unknown) => {
 	const raw = typeof path === "string" ? path : "/";
 	const cleaned = "/" + trimSlashes(decodeURIComponent(raw));
 	return cleaned === "/" ? "/" : cleaned;
@@ -221,6 +222,8 @@ export async function addNewFolder(
 
 
 export const refreshViewAfterUpload = async () => {
+	// ss2i (controle d'acces) : reservee aux utilisateurs connectes.
+	if (!(await isSignedIn())) return;
 	return revalidatePath("/w/[workspaceId]/dashboard/drive");
 };
 

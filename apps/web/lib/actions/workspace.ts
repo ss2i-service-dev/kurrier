@@ -16,6 +16,8 @@ import { createHash } from "node:crypto";
 import {isSignedIn} from "@/lib/actions/auth";
 import {redirect} from "next/navigation";
 import {updateWorkSpaceContext} from "@/lib/auth-session";
+import {setWorkspaceDefaultIdentity} from "@/lib/workspace-defaults";
+import {assertIdentityAccess} from "@/lib/authz";
 
 export const fetchWorkspace = cache(async () => {
     const rls = await rlsClient();
@@ -98,46 +100,16 @@ export type FetchWorkspaceMembersResult = Awaited<
     ReturnType<typeof fetchWorkspaceMembers>
 >;
 
-export const setWorkspaceDefaultIdentity = async (identityId: string) => {
-    const workspace = await fetchWorkspace();
-    if (!workspace) return { success: false };
-
-    const rls = await rlsClient();
-    await rls(async (tx) => {
-        await tx.update(identities).set({ sharedWithWorkspace: true }).where(eq(identities.id, identityId));
-        await tx
-            .update(workspaces)
-            .set({ defaultIdentityId: null });
-        await tx
-            .update(workspaces)
-            .set({ defaultIdentityId: identityId })
-            .where(eq(workspaces.id, workspace.id));
-    });
-
-    return { success: true };
-};
-
-export const checkDefaultWorkspaceIdentity = async () => {
-    const workspaceId = await getWorkspaceId();
-    const userId = String((await isSignedIn())?.id);
-    const userIdentities = await db.select().from(identities).where(and(
-        eq(identities.sharedWithWorkspace, true),
-        eq(identities.ownerId, userId),
-        eq(identities.workspaceId, workspaceId)
-    ))
-
-    if (userIdentities.length === 1) {
-        await setWorkspaceDefaultIdentity(userIdentities[0].id);
-    }
-};
-
 export async function toggleDefaultIdentity(
     _prev: FormState,
     formData: FormData,
 ): Promise<FormState> {
     return handleAction(async () => {
         const decodedForm = decode(formData) as Record<string, unknown>;
-        await setWorkspaceDefaultIdentity(String(decodedForm.identityId));
+        // ss2i (controle d'acces) : identite visible de l'utilisateur (RLS) ; la mise a jour
+        // RLS ne filtrait que le workspace et pouvait partager une identite privee d'un autre.
+        const identity = await assertIdentityAccess({ id: String(decodedForm.identityId ?? "") });
+        await setWorkspaceDefaultIdentity(identity.id);
         revalidatePath("/w/[wPublicId]/dashboard/platform/identities", "page");
         return { success: true };
     });
@@ -164,7 +136,8 @@ function sha256Hex(input: string) {
 }
 
 
-export const refreshView = async (path: string) => {
+// ss2i : sans appelant ; plus exportee (une action qui revalide n'importe quel chemin).
+const refreshView = async (path: string) => {
     return revalidatePath(path);
 };
 

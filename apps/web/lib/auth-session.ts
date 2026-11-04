@@ -20,7 +20,7 @@ import {
 import { getServerEnv } from "@schema";
 import { Queue, QueueEvents } from "bullmq";
 import { and, eq } from "drizzle-orm";
-import { SignJWT } from "jose";
+import { jwtVerify, JWTPayload, SignJWT } from "jose";
 import { isSafeOauthReturn } from "@/lib/mcp-oauth";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -226,4 +226,38 @@ export const updateWorkSpaceContext = async (workspacePublicId: string, id: stri
 			path: '/',
 		})
 	}
+};
+
+// ss2i (controle d'acces) : sortis de lib/actions/auth.ts. En action, currentSession rendait
+// au navigateur le jeton de session que le cookie httpOnly devait lui cacher.
+export type TokenClaims = JWTPayload & {
+	sub: string;
+	workspace_id?: string;
+};
+
+export async function verifyAndDecode(
+	token?: string,
+): Promise<TokenClaims | null> {
+	if (!token) return null;
+
+	try {
+		const { JWT_SECRET } = getServerEnv();
+		const { payload } = await jwtVerify<TokenClaims>(
+			token,
+			new TextEncoder().encode(JWT_SECRET),
+		);
+
+		if (!payload.sub) {
+			return null;
+		}
+
+		return payload;
+	} catch {
+		return null;
+	}
+}
+
+export const currentSession = async () => {
+	const cookieStore = await cookies();
+	return String(cookieStore.get("session")?.value);
 };

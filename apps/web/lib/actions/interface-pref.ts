@@ -4,7 +4,8 @@ import { cache } from "react";
 import { and, eq, sql } from "drizzle-orm";
 import { db, workspaceMembers, workspaces } from "@db";
 import { getWorkspaceId } from "@/lib/actions/clients";
-import { isSignedIn, verifyAndDecode } from "@/lib/actions/auth";
+import { isSignedIn } from "@/lib/actions/auth";
+import { verifyAndDecode } from "@/lib/auth-session";
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 

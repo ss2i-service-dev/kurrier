@@ -170,6 +170,7 @@ export async function unblockSender(id: string): Promise<FormState> {
 
 // Ce que le menu « Block » propose pour un expediteur : le domaine seulement s'il n'est ni
 // grand public ni a l'utilisateur.
-export async function previewBlockOptions(email: string) {
+// ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
+async function previewBlockOptions(email: string) {
 	return blockOptionsFor(email, domainsOf(await ownIdentityValues()));
 }

@@ -3,7 +3,8 @@
 // arriere-plan et on passe aussitot au fil suivant (ou a la liste).
 import React, { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Archive, ArrowLeft, ChevronDown, ChevronUp, Mail, Trash2, X } from "lucide-react";
+import { Archive, ArrowLeft, ChevronDown, ChevronUp, ClipboardList, Mail, Trash2, X } from "lucide-react";
+import { copyMailToClipboard } from "@/lib/mail-copy";
 import KIconButton from "@/components/k/icon-button";
 import SnoozeMail from "@/components/k/snooze";
 import { IconPin, IconPinnedOff } from "@tabler/icons-react";
@@ -132,6 +133,9 @@ export default function ThreadToolbar({
 				className={pinned ? "text-k-accent" : undefined}
 			>
 				{pinned ? <IconPinnedOff /> : <IconPin />}
+			</KIconButton>
+			<KIconButton label="Copier tout le fil (pour un agent IA)" onClick={() => copyMailToClipboard({ threadId: String(threadId) })}>
+				<ClipboardList />
 			</KIconButton>
 
 			<div className="ml-auto flex items-center">

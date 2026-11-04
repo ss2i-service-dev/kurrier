@@ -7,7 +7,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
-import { Ban, ChevronUp, Code, Download, EllipsisVertical, Forward, Paperclip, Reply, ReplyAll } from "lucide-react";
+import { Ban, ChevronUp, ClipboardCopy, ClipboardList, Code, Download, EllipsisVertical, Forward, Paperclip, Reply, ReplyAll } from "lucide-react";
+import { copyMailToClipboard } from "@/lib/mail-copy";
 import { useExpandSignal } from "@/components/k/thread-messages";
 import { Menu, Modal } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
@@ -233,6 +234,9 @@ function KMessage({
 						<KIconButton size="sm" label="Transférer" onClick={() => openReply(message.id, "forward")}>
 							<Forward />
 						</KIconButton>
+						<KIconButton size="sm" label="Copier ce message (pour un agent IA)" onClick={() => copyMailToClipboard({ messageId: message.id })}>
+							<ClipboardCopy />
+						</KIconButton>
 						<Menu shadow="none" width={220} position="bottom-end" radius={12}>
 							<Menu.Target>
 								<KIconButton size="sm" label="Plus">
@@ -250,6 +254,13 @@ function KMessage({
 								)}
 								<Menu.Item leftSection={<Forward size={15} />} onClick={() => openReply(message.id, "forward")}>
 									Transférer
+								</Menu.Item>
+								<Menu.Divider />
+								<Menu.Item leftSection={<ClipboardCopy size={15} />} onClick={() => copyMailToClipboard({ messageId: message.id })}>
+									Copier ce message
+								</Menu.Item>
+								<Menu.Item leftSection={<ClipboardList size={15} />} onClick={() => copyMailToClipboard({ threadId: String(message.threadId) })}>
+									Copier tout le fil
 								</Menu.Item>
 								{senderAddress.includes("@") && !fromMe && (
 									<>

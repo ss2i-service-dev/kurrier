@@ -5,7 +5,8 @@ import { leaveThreadToList } from "@/lib/leave-thread";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
 import slugify from "@sindresorhus/slugify";
-import { Archive, Ban, Code, Download, EllipsisVertical, Forward, Mail, Reply, ReplyAll, Trash2 } from "lucide-react";
+import { Archive, Ban, ClipboardCopy, ClipboardList, Code, Download, EllipsisVertical, Forward, Mail, Reply, ReplyAll, Trash2 } from "lucide-react";
+import { copyMailToClipboard } from "@/lib/mail-copy";
 import { Temporal } from "@js-temporal/polyfill";
 import dynamic from "next/dynamic";
 import { ActionIcon, Button, Menu, Modal, Tooltip } from "@mantine/core";
@@ -431,6 +432,16 @@ function EmailRenderer({
 								<ReplyAll size={18} />
 							</ActionIcon>
 						</Tooltip>
+						<Tooltip label="Copy this message (for an AI agent)" withArrow>
+							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Copy message" onClick={() => copyMailToClipboard({ messageId: message.id })}>
+								<ClipboardCopy size={18} />
+							</ActionIcon>
+						</Tooltip>
+						<Tooltip label="Copy the whole thread (for an AI agent)" withArrow>
+							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Copy thread" onClick={() => copyMailToClipboard({ threadId: String(threadId) })}>
+								<ClipboardList size={18} />
+							</ActionIcon>
+						</Tooltip>
 						<Tooltip label="Archive (a)" withArrow>
 							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Archive" onClick={archiveMessage}>
 								<Archive size={18} />
@@ -473,6 +484,19 @@ function EmailRenderer({
 										onClick={() => openEditor("forward")}
 									>
 										Forward
+									</Menu.Item>
+									<Menu.Divider />
+									<Menu.Item
+										leftSection={<ClipboardCopy size={14} />}
+										onClick={() => copyMailToClipboard({ messageId: message.id })}
+									>
+										Copy message
+									</Menu.Item>
+									<Menu.Item
+										leftSection={<ClipboardList size={14} />}
+										onClick={() => copyMailToClipboard({ threadId: String(threadId) })}
+									>
+										Copy thread
 									</Menu.Item>
 									<Menu.Divider />
 									<Menu.Item

@@ -34,6 +34,8 @@ const EmailEditor = dynamic(
 );
 export type MessageAttachmentWithUrl = MessageAttachmentEntity & {
 	signedUrl: string;
+	// ss2i : URL signee avec Content-Disposition attachment (telechargement direct).
+	downloadUrl?: string;
 };
 
 function getScrollParent(el: HTMLElement): HTMLElement {

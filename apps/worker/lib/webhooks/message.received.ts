@@ -1,5 +1,5 @@
 import { db, mailboxes, MessageEntity, webhooks } from "@db";
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 export const processWebhook = async ({
 	message,
@@ -15,15 +15,16 @@ export const processWebhook = async ({
 
 	if (!mailbox) return;
 
+	// ss2i (controle d'acces) : seulement les webhooks de l'identite de la boite, dans son
+	// workspace. Un webhook sans identite (ou d'un autre workspace) recevait tout le courrier
+	// entrant de toutes les boites de l'instance.
 	const hooks = await db
 		.select()
 		.from(webhooks)
 		.where(
 			and(
-				or(
-					eq(webhooks.identityId, mailbox.identityId),
-					isNull(webhooks.identityId),
-				),
+				eq(webhooks.identityId, mailbox.identityId),
+				eq(webhooks.workspaceId, mailbox.workspaceId),
 				sql`${webhooks.events} @> '{message.received}'::webhook_list[]`,
 				eq(webhooks.enabled, true),
 			),

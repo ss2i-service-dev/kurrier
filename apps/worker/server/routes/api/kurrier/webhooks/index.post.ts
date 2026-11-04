@@ -30,18 +30,22 @@ export default defineEventHandler(async (event) => {
 			"Field `events` must have at least one event",
 		);
 	}
-	if (data.identityId) {
-		await validateIdentityOwnership({
-			identityId: data.identityId,
-			ownerId,
-		});
+	// ss2i (controle d'acces) : identite obligatoire, a la cle API ; le webhook prend son
+	// workspace. Sans identite, le worker l'appelait pour tout le courrier entrant.
+	if (!data.identityId) {
+		return apiError(400, "MISSING_IDENTITY", "Field `identityId` is required");
 	}
+	const identity = await validateIdentityOwnership({
+		identityId: data.identityId,
+		ownerId,
+	});
 	const insertPayload = {
 		ownerId,
+		workspaceId: identity.workspaceId,
 		url: data.url,
 		description: data.description ?? null,
 		enabled: data.enabled ?? true,
-		identityId: data.identityId ?? null,
+		identityId: identity.id,
 		events: data.events,
 		metaData: data.metaData ?? null,
 	};

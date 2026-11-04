@@ -11,12 +11,21 @@ import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { simpleParser } from "mailparser";
 import { eq } from "drizzle-orm";
 import { parseAndStoreEmail } from "../../../../../../../lib/message-payload-parser";
+import { forbidden, verifySns } from "../../../../../../../lib/inbound-auth";
 
 export default defineEventHandler(async (event) => {
+	// ss2i (controle d'acces) : message SNS signe, d'un sujet autorise (403 sinon, cf.
+	// lib/inbound-auth.ts) ; avant, n'importe qui faisait suivre une SubscribeURL ou lire un
+	// objet S3 avec les identifiants SES d'un fournisseur.
+	const raw = (await readRawBody(event)) || "";
+	let sns: any;
 	try {
-		const raw = (await readRawBody(event)) || "";
-		const sns = JSON.parse(raw as string);
-
+		sns = JSON.parse(raw as string);
+	} catch {
+		throw forbidden("ses: payload is not JSON");
+	}
+	await verifySns(sns);
+	try {
 		// 1) One-time SNS handshake
 		if (sns?.Type === "SubscriptionConfirmation" && sns.SubscribeURL) {
 			await $fetch(sns.SubscribeURL as string, { method: "GET" });

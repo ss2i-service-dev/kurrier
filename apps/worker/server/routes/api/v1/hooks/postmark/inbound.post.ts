@@ -5,8 +5,11 @@ import { eq } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { parseAndStoreEmail } from "../../../../../../lib/message-payload-parser";
 import { getToEmails } from "../sendgrid/inbound.post";
+import { verifyPostmark } from "../../../../../../lib/inbound-auth";
 
 export default defineEventHandler(async (event) => {
+	// ss2i (controle d'acces) : secret partage exige (403 sinon, cf. lib/inbound-auth.ts).
+	verifyPostmark(event);
 	try {
 		const body = await readBody(event);
 

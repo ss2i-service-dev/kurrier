@@ -20,17 +20,22 @@ const DEBOUNCE_MS = 250;
 
 export default function MailboxSearch({
 										  publicId,
-										  mailboxSlug,
+										  mailboxSlug: requestedSlug,
 										  workspacePublicId,
 										  nouvelle = false,
 									  }: {
 	publicId: string;
-	mailboxSlug: string;
+	mailboxSlug?: string;
 	workspacePublicId: string;
 	// ss2i : bouton d'ouverture au style de la nouvelle interface (option par utilisateur).
 	nouvelle?: boolean;
 }) {
 
+	// ss2i : les pages sans dossier (parametres, programmes, snoozes) n'ont pas de mailboxSlug
+	// (URL .../undefined/search, erreur serveur « Mailbox not found ») et la vue Clients a le
+	// slug virtuel « clients » (.../clients/search, « Unknown client. ») : la recherche part
+	// alors de l'Inbox de l'identite.
+	const mailboxSlug = !requestedSlug || requestedSlug === "undefined" || requestedSlug === "clients" ? "inbox" : requestedSlug;
 	const k = (en: string, fr: string) => (nouvelle ? fr : en);
 	const showSnippet = useShowSnippet();
 	const [open, setOpen] = React.useState(false);

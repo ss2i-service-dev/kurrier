@@ -1,15 +1,17 @@
 "use client";
 import { useState, useTransition } from "react";
-import { Switch } from "@mantine/core";
+import { Select, Switch } from "@mantine/core";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import SectionCard from "@/components/mailbox/settings/settings-section-card";
 import { setRfcStyleEnabled } from "@/lib/actions/rfc-style";
+import { setUndoSendSeconds } from "@/lib/actions/undo-send";
 import { useK } from "@/components/k/ui-context";
 
 // ss2i : interrupteur du style RFC a l'envoi (option par utilisateur, memorisee cote
 // serveur, lue par le worker a l'assemblage du message).
-function SettingsComposeStyle({ enabled: initial }: { enabled: boolean }) {
+function SettingsComposeStyle({ enabled: initial, undoSeconds: initialUndo = 30 }: { enabled: boolean; undoSeconds?: number }) {
+	const [undoSeconds, setUndo] = useState(initialUndo);
 	const [enabled, setEnabled] = useState(initial);
 	const [pending, startTransition] = useTransition();
 	const router = useRouter();
@@ -33,10 +35,30 @@ function SettingsComposeStyle({ enabled: initial }: { enabled: boolean }) {
 		});
 	};
 
+	// ss2i : delai pendant lequel un envoi peut etre annule (0 = envoi immediat).
+	const onUndoChange = (value: string | null) => {
+		if (value == null) return;
+		const next = Number(value);
+		const previous = undoSeconds;
+		setUndo(next);
+		void setUndoSendSeconds(next).then((r) => {
+			if (r?.success === false) {
+				setUndo(previous);
+				toast.error(k("Could not save the preference", "Impossible d'enregistrer la préférence"));
+				return;
+			}
+			toast.success(k("Undo send delay saved.", "Délai d'annulation enregistré."));
+		});
+	};
+	const undoChoices = [
+		{ value: "0", label: k("Off (send immediately)", "Désactivé (envoi immédiat)") },
+		...[5, 10, 20, 30, 60].map((n) => ({ value: String(n), label: k(`${n} seconds`, `${n} secondes`) })),
+	];
+
 	return (
 		<SectionCard
 			title={k("Composing", "Rédaction")}
-			description={k("How your replies and signature are laid out when sending.", "Placement de vos réponses et de la signature à l'envoi.")}
+			description={k("How your replies and signature are laid out when sending, and how long you can undo a send.", "Placement de vos réponses et de la signature à l'envoi, délai d'annulation de l'envoi.")}
 		>
 			<Switch
 				label={k(
@@ -50,6 +72,20 @@ function SettingsComposeStyle({ enabled: initial }: { enabled: boolean }) {
 				checked={enabled}
 				disabled={pending}
 				onChange={(e) => onChange(e.currentTarget.checked)}
+			/>
+			<Select
+				className="mt-5"
+				classNames={{ wrapper: "max-w-xs" }}
+				label={k("Undo send", "Annulation de l'envoi")}
+				description={k(
+					"How long you can cancel a message after clicking Send.",
+					"Temps pendant lequel vous pouvez annuler un message après avoir cliqué sur Envoyer.",
+				)}
+				data={undoChoices}
+				value={String(undoSeconds)}
+				onChange={onUndoChange}
+				allowDeselect={false}
+				comboboxProps={{ withinPortal: true }}
 			/>
 		</SectionCard>
 	);

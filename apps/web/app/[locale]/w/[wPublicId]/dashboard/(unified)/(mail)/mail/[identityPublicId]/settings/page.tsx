@@ -7,6 +7,7 @@ import { unreadPanelEnabled } from "@/lib/actions/unread-panel";
 import { listPreviewMode } from "@/lib/actions/list-preview";
 import { threadOrder } from "@/lib/actions/thread-order";
 import { rfcStyleEnabled } from "@/lib/actions/rfc-style";
+import { undoSendSeconds } from "@/lib/actions/undo-send";
 import SettingsInterface from "@/components/mailbox/settings/settings-interface";
 import { interfaceMode, isNouvelleInterface } from "@/lib/actions/interface-pref";
 import { FormState, handleAction } from "@schema";
@@ -28,6 +29,8 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
     const conversationOrder = await threadOrder();
     // ss2i : style RFC a l'envoi (par utilisateur, cote serveur).
     const rfcStyle = await rfcStyleEnabled();
+    // ss2i : delai d'annulation de l'envoi (par utilisateur).
+    const undoSeconds = await undoSendSeconds();
     // ss2i : interface classique ou nouvelle (par utilisateur).
     const uiMode = await interfaceMode();
     const rls = await rlsClient();
@@ -84,7 +87,7 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
         <SettingsGeneral updateName={updateName} identity={identity} />
         <SettingsSignature updateSignature={updateSignature} identity={identity} />
         <SettingsUnreadPanel enabled={unreadPanelOn} listPreview={listPreview} threadOrder={conversationOrder} />
-        <SettingsComposeStyle enabled={rfcStyle} />
+        <SettingsComposeStyle enabled={rfcStyle} undoSeconds={undoSeconds} />
         <SettingsInterface mode={uiMode} />
     </>
 }

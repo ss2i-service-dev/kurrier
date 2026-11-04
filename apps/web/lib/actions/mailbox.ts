@@ -46,6 +46,7 @@ import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
 import { extractListUnsubscribe, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
+import { undoSendSeconds } from "@/lib/actions/undo-send";
 import dayjs from "dayjs";
 import {fetchWorkspace} from "@/lib/actions/workspace";
 import {
@@ -543,25 +544,25 @@ export async function sendMail(
 	// ss2i : annulation d'envoi. Le job part avec un delai : l'interface propose « Undo »
 	// (retrait du job) et « Send now » (promotion du job) pendant ce delai. Cote serveur,
 	// donc fermer l'onglet n'empeche pas l'envoi.
+	// Delai choisi par l'utilisateur (Parametres > Redaction), 0 = envoi immediat.
+	const undoMs = (await undoSendSeconds()) * 1000;
 	const { sendMailQueue } = await getRedis();
 	const job = await sendMailQueue.add("send-and-reconcile", decodedForm, {
 		jobId: `undo-send-${crypto.randomUUID()}`,
-		delay: UNDO_SEND_MS,
+		delay: undoMs,
 	});
 	// Le brouillon d'origine porte la marque « envoi en cours » (liste Drafts, ouverture).
 	await markDraftPending(
 		String(decodedForm.draftMessageId ?? ""),
 		String(job.id),
-		UNDO_SEND_MS,
+		undoMs,
 	);
 	return {
 		success: true,
 		message: "Message sent",
-		data: { pendingSendId: String(job.id), undoMs: UNDO_SEND_MS },
+		data: { pendingSendId: String(job.id), undoMs },
 	};
 }
-
-const UNDO_SEND_MS = 30_000;
 
 // ss2i : le brouillon n'est touche que s'il est visible de l'utilisateur (RLS).
 async function ownedDraftId(draftMessageId: string) {

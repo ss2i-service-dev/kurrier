@@ -144,7 +144,14 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 		useImperativeHandle(
 			ref,
 			() => ({
-				focus: () => textEditorRef.current?.focus("end"),
+				// ss2i : un champ destinataire marque (nouveau message, transfert) passe
+				// avant le corps ; une reponse va directement dans le corps.
+				focus: () => {
+					const el = formRef.current?.querySelector<HTMLElement>('[data-k-autofocus="true"]');
+					const input = el && (el.matches("input") ? el : el.querySelector<HTMLElement>("input"));
+					if (input) input.focus();
+					else textEditorRef.current?.focus("end");
+				},
 				getElement: () => textEditorRef.current?.getElement() ?? null,
 			}),
 			[],
@@ -460,6 +467,27 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				// Le brouillon envoye disparait du dossier Drafts : on rafraichit.
 				router.refresh();
 			};
+			// Annulation desactivee (Parametres > Redaction) : envoi direct, sans toast.
+			if (undoMs <= 0) {
+				const toastId = toast.loading(t("Sending…", "Envoi…"), { position: "bottom-left" });
+				settled = true;
+				if (mounted.current) handleClose();
+				void waitPendingSend(pendingSendId).then((result) => {
+					if (result?.error) {
+						markSent(null);
+						toast.error(t("Sending failed", "L'envoi a échoué"), {
+							id: toastId,
+							description: result.error,
+							position: "bottom-left",
+						});
+					} else {
+						dropBackup();
+						toast.success(t("Sent", "Envoyé"), { id: toastId, position: "bottom-left" });
+					}
+					router.refresh();
+				});
+				return;
+			}
 			const timer = setTimeout(finish, undoMs);
 
 			const toastId = toast(t("Sending…", "Envoi…"), {

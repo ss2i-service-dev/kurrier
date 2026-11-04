@@ -283,7 +283,7 @@ async function visibleThreadsOfIdentity(identityId: string, threadIds: unknown):
 }
 
 export type LinkClientResult =
-	| { success: true; companyId: number; name: string; linked: number; previous: PreviousClientLink[]; archived: string[] }
+	| { success: true; companyId: number; name: string; linked: number; previous: PreviousClientLink[]; archived: string[]; inboxMailboxId: string | null }
 	| { success: false; error: string };
 
 // ss2i : boite de reception et dossier Archive de l'identite (lecture RLS).
@@ -321,8 +321,10 @@ export async function linkThreadsToClient(
 	// encore dans l'Inbox en sortent (archivage habituel, IMAP compris) ; ils restent visibles
 	// dans le dossier client (patch 0081). L'annulation les y remet (undoLinkThreadsToClient).
 	let archived: string[] = [];
+	let inboxMailboxId: string | null = null;
 	if (opts?.archive) {
 		const { inbox } = await inboxAndArchive(ident.id);
+		inboxMailboxId = inbox?.id ?? null;
 		if (inbox) {
 			const rls = await rlsClient();
 			const inInbox = await rls((tx) =>
@@ -342,7 +344,7 @@ export async function linkThreadsToClient(
 			}
 		}
 	}
-	return { success: true, companyId, name: company.name, linked: ids.length, previous, archived };
+	return { success: true, companyId, name: company.name, linked: ids.length, previous, archived, inboxMailboxId };
 }
 
 /** Annule un rattachement manuel (bouton Annuler du toast) : etat d'avant, fil par fil. */

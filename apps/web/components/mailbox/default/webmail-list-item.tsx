@@ -255,7 +255,7 @@ export default function WebmailListItem({
 					// "grid-cols-[auto_auto_minmax(16rem,1fr)_minmax(10rem,2fr)_auto]",
 					"grid-cols-[auto_auto_20rem_minmax(10rem,2fr)_auto]",
 					// "grid-cols-[auto_auto_minmax(8rem,12rem)_minmax(10rem,2fr)_auto]",
-					"items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/50",
+					"items-center gap-3 pl-6 pr-3 py-2 transition-colors hover:bg-muted/50",
 					isRead ? "bg-muted/50" : "font-semibold",
 					// ss2i : envoi en attente, ligne de l'Outbox (teinte et filet), pas un brouillon.
 					isDrafts && isSendingDraft(mailboxThreadItem.draftSend)
@@ -269,7 +269,7 @@ export default function WebmailListItem({
 					identityPublicId={identityPublicId}
 					threadId={mailboxThreadItem.threadId}
 					subject={mailboxThreadItem.subject}
-					className="absolute inset-y-0 left-0 z-10 w-3 opacity-0 transition-opacity group-hover:opacity-100"
+					className="absolute inset-y-0 left-0 z-10 w-6 opacity-0 transition-opacity group-hover:opacity-100"
 				/>
 				{/* ss2i : toute la cellule de la case est cliquable (hauteur de la ligne,
 				    debord a gauche), pas seulement les 16 px de la case. La case ne capte
@@ -278,7 +278,7 @@ export default function WebmailListItem({
 					className={
 						isOnSnoozedPage
 							? "flex items-center"
-							: "flex items-center self-stretch -my-2 -ml-3 pl-3 pr-2 cursor-pointer"
+							: "flex items-center self-stretch -my-2 -ml-6 pl-6 pr-2 cursor-pointer"
 					}
 					onClick={(e) => {
 						if (isOnSnoozedPage) return;

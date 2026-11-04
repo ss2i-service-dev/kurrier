@@ -55,7 +55,8 @@ export default function KThreadRow({
 	pinned,
 }: Props) {
 	const router = useRouter();
-	const showSnippet = useShowSnippet();
+	// Epingles : expediteur et objet seulement, pour un bloc compact en tete de liste.
+	const showSnippet = useShowSnippet() && !pinned;
 	const isActive = useMailStore((s) => s.active === item.threadId);
 	const readOverride = useMailStore((s) => s.read.get(String(item.threadId)));
 	const starOverride = useMailStore((s) => s.starred.get(String(item.threadId)));

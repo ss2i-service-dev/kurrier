@@ -36,6 +36,7 @@ import DeleteMailboxFolder from "@/components/mailbox/default/delete-folder";
 import { setIdentityCollapsed } from "@/lib/actions/collapsed-identities";
 import { useK } from "@/components/k/ui-context";
 import type { IdentityClients as IdentityClientsData } from "@/lib/actions/thread-clients";
+import { endThreadDrag, isThreadDrag, linkThreadsWithUndo, readThreadDrag, useThreadDrag } from "@/lib/client-link";
 import { IconMailFast } from "@tabler/icons-react";
 
 const ORDER: MailboxKind[] = [
@@ -216,8 +217,40 @@ export function IdentityClients({
 			return !c;
 		});
 	};
-	if (!entry || entry.clients.length === 0) return null;
+	// ss2i (OI 10270) : fils glisses depuis la liste (poignee) : la section s'ouvre et chaque
+	// client devient une cible ; deposer rattache les fils a la main.
+	const router = useRouter();
+	const drag = useThreadDrag();
+	const dragHere = drag?.identityPublicId === identity.publicId;
+	const [dropOver, setDropOver] = React.useState<number | null>(null);
+	// Identite pro sans client : la section reste, pour le dossier « Sans client ».
+	if (!entry) return null;
 	const unreadClients = entry.clients.filter((c) => (c.unreadCount ?? 0) > 0).length;
+	const open = !collapsed || dragHere;
+	const dropProps = (companyId: number) => ({
+		onDragOver: (e: React.DragEvent) => {
+			if (!dragHere || !isThreadDrag(e)) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = "link";
+			if (dropOver !== companyId) setDropOver(companyId);
+		},
+		onDragLeave: (e: React.DragEvent) => {
+			if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropOver((v) => (v === companyId ? null : v));
+		},
+		onDrop: (e: React.DragEvent) => {
+			const payload = readThreadDrag(e);
+			setDropOver(null);
+			endThreadDrag();
+			if (!payload || payload.identityPublicId !== identity.publicId) return;
+			e.preventDefault();
+			void linkThreadsWithUndo({
+				identityPublicId: identity.publicId,
+				threadIds: payload.threadIds,
+				companyId,
+				refresh: () => router.refresh(),
+			});
+		},
+	});
 
 	const base = `/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/clients`;
 	const needle = filter.trim().toLowerCase();
@@ -256,7 +289,7 @@ export function IdentityClients({
 					)}
 				</Link>
 			</div>
-			{!collapsed && entry.clients.length > SIDEBAR_CLIENTS && (
+			{open && entry.clients.length > SIDEBAR_CLIENTS && (
 				<input
 					type="text"
 					value={filter}
@@ -265,19 +298,42 @@ export function IdentityClients({
 					className="mx-1.5 my-1 w-[calc(100%-12px)] rounded border bg-transparent px-2 py-1 text-xs outline-none focus:border-brand"
 				/>
 			)}
-			{!collapsed && <div className="space-y-0.5">
+			{open && <div className={`space-y-0.5 ${dragHere ? "rounded outline-1 outline-dashed outline-brand/50" : ""}`}>
+				{dragHere && (
+					<div className="px-2 pt-1 text-[11px] text-sidebar-foreground/60">
+						{k("Drop on a client to link", "Déposer sur un client pour rattacher")}
+					</div>
+				)}
+				{(() => {
+					// ss2i (OI 10270) : fils avec un interlocuteur exterieur et sans client.
+					const href = `${base}/orphans`;
+					const active = pathname === href || pathname.startsWith(`${href}/`);
+					return (
+						<Link
+							href={href}
+							title={k("Conversations with an outside contact and no client", "Fils avec un interlocuteur extérieur et sans client")}
+							className={`mx-1.5 rounded hover:dark:bg-neutral-800 ${
+								active ? "dark:bg-neutral-800 dark:text-brand-foreground bg-brand-200 text-brand" : ""
+							} flex items-center gap-1 w-full p-1.5 pl-2`}
+						>
+							<span className="truncate text-sm italic text-sidebar-foreground/80">{k("No client", "Sans client")}</span>
+						</Link>
+					);
+				})()}
 				{shown.map((c) => {
 					const href = `${base}/${c.companyId}`;
 					const active = pathname === href || pathname.startsWith(`${href}/`);
 					const unread = c.unreadCount ?? 0;
+					const over = dropOver === c.companyId;
 					return (
 						<Link
 							key={c.companyId}
 							href={href}
 							title={c.name}
+							{...dropProps(c.companyId)}
 							className={`mx-1.5 rounded hover:dark:bg-neutral-800 ${
 								active ? "dark:bg-neutral-800 dark:text-brand-foreground bg-brand-200 text-brand" : ""
-							} flex items-center gap-1 w-full p-1.5 pl-2`}
+							} ${over ? "ring-2 ring-brand bg-brand/15" : ""} flex items-center gap-1 w-full p-1.5 pl-2`}
 						>
 							<span className={`truncate text-sm ${unread ? "font-semibold" : "font-normal"}`}>{c.name}</span>
 							{unread > 0 && (

@@ -3,7 +3,7 @@ import { mailboxTitle } from "@/components/k/format";
 import { adjustCount, mailActions, scheduleRefresh, useMailStore } from "@/components/k/mail-store";
 import MobileNavButton from "@/components/k/mobile-nav-button";
 import React, { useRef, useEffect, useState } from "react";
-import { Archive, Inbox, ListChecks, MailOpen, RotateCw, Trash2 } from "lucide-react";
+import { Archive, Building2, Inbox, ListChecks, MailOpen, RotateCw, Trash2 } from "lucide-react";
 import { findLikelyNotSpam } from "@/lib/actions/spam-triage";
 import { moveWithUndo } from "@/lib/pending-moves";
 import { fetchAllThreadIds, type SelectAllScope } from "@/lib/actions/select-all";
@@ -38,7 +38,8 @@ import { PublicConfig } from "@schema";
 import { useMediaQuery } from "@mantine/hooks";
 import { clsx } from "clsx";
 import MoveToFolder from "@/components/mailbox/default/move-to-folder";
-import { usePathname } from "next/navigation";
+import { LinkClientPicker } from "@/components/mailbox/default/client-link-ui";
+import { useParams, usePathname } from "next/navigation";
 
 // SS2i (nouvelle interface) : en-tete de la liste. Logique reprise telle quelle
 // de mail-list-header.tsx (selection, « tout selectionner », Undo, spam, corbeille),
@@ -97,6 +98,7 @@ function KListHeader({
 		if (activeMailbox?.id) mailboxIdRef.current = activeMailbox.id;
 	}, [activeMailbox?.identityId, activeMailbox?.id]);
 
+	const routeParams = useParams<{ identityPublicId?: string }>() ?? {};
 	const selectedSize = state?.selectedThreadIds?.size ?? 0;
 	const hasSelected = selectedSize > 0;
 	// ss2i : « tout coche » = chaque fil affiche est dans la selection. Avant, on comparait
@@ -311,6 +313,17 @@ function KListHeader({
 							{selectedSize} sélectionné{selectedSize > 1 ? "s" : ""}
 						</span>
 						<MoveToFolder identityMailboxes={identityMailboxes} activeMailbox={activeMailbox} />
+						{/* ss2i (OI 10270) : rattacher la selection a un client (identites pro) */}
+						<LinkClientPicker
+							identityPublicId={String(routeParams.identityPublicId ?? state?.identityPublicId ?? "")}
+							threadIds={() => Array.from(state?.selectedThreadIds ?? []).map(String)}
+							onLinked={clearSelection}
+							trigger={(open) => (
+								<button type="button" onClick={open} className={bulkBtn} title="Rattacher à un client…">
+									<Building2 className="h-4 w-4" />
+								</button>
+							)}
+						/>
 						{mailboxKind.current === "spam" && inboxId && (
 							<button type="button" onClick={notSpam} className={bulkBtn} title="Pas un spam : remettre dans la boîte de réception">
 								<Inbox className="h-4 w-4" />

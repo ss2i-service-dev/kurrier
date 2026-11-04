@@ -35,9 +35,11 @@ export default function ThreadClientChip({
 					: "inline-flex items-center gap-1 rounded-full border bg-brand-200/40 px-2 py-0.5 dark:bg-neutral-800"
 			}
 			title={
-				matchedBy === "domain"
-					? k("Linked by email domain", "Rattaché par le domaine de l'adresse")
-					: k("Linked by contact email", "Rattaché par l'adresse du contact")
+				matchedBy === "manual"
+					? k("Linked by hand", "Rattaché à la main")
+					: matchedBy === "domain"
+						? k("Linked by email domain", "Rattaché par le domaine de l'adresse")
+						: k("Linked by contact email", "Rattaché par l'adresse du contact")
 			}
 		>
 			<Building2 className="h-3.5 w-3.5 shrink-0 opacity-70" />

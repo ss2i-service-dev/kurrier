@@ -8,6 +8,7 @@ import { s3 } from "../create-s3-client";
 import typesense from "../get-typesense";
 import {
 	type Attachment,
+	type Identity,
 	type MailboxThread,
 	type Message,
 	McpToolError,
@@ -16,6 +17,7 @@ import {
 	getOwnedAttachment,
 	getOwnedMessage,
 	isUuid,
+	knownCompany,
 	listClientThreads,
 	listClients,
 	listIdentities,
@@ -27,11 +29,14 @@ import {
 	searchThreadsSql,
 	threadMessages,
 	threadPlacements,
+	threadsInIdentity,
 	unreadCountsByMailbox,
 } from "./access";
 import { htmlToText, messageBodyText, truncate } from "./html-text";
 import { pickSenderIdentity } from "./sender-identity";
 import { type QuoteScope, stripQuotedText } from "@common";
+import { attachThreadsToCompany, crmSearchCompanies, detachThreadsFromCompany, searchKnownCrmCompanies, upsertCrmCompanies } from "@common/server-client-link";
+import { isProIdentityValue } from "../crm/link-thread";
 
 // Registre des outils de l'MCP courrier. Chaque outil recoit l'utilisateur authentifie
 // et des arguments deja validés par son schema JSON (cote client) ; il revalide ce
@@ -780,6 +785,27 @@ async function searchThreads(ctx: ToolContext, args: Record<string, any>) {
 	return { engine, total, items: await withClients(ctx.userId, items) };
 }
 
+// ss2i : identite pro de l'utilisateur (section Clients), sinon erreur explicite.
+async function proIdentity(ctx: ToolContext, args: Record<string, unknown>) {
+	const identity = (await resolveIdentity(ctx.userId, str(args.identity, "identity", { optional: true }))) as Identity;
+	if (!isProIdentityValue(identity.value)) throw new McpToolError(`Clients are only available on professional identities (${identity.value})`);
+	return identity;
+}
+
+// Identite pro, societe connue et fils de l'identite (les autres sont ignores).
+async function clientLinkTargets(ctx: ToolContext, args: Record<string, unknown>) {
+	const identity = await proIdentity(ctx, args);
+	const ids = threadIdList(args.thread_ids);
+	const companyId = int(args.client_id, "client_id", 0, 0, 2_147_483_647);
+	if (!companyId) throw new McpToolError("'client_id' is required");
+	const company = await knownCompany(companyId);
+	if (!company) throw new McpToolError(`Unknown client_id ${companyId}: find it first with search_crm_companies`);
+	const threadIds = await threadsInIdentity(ctx.userId, identity.id, ids);
+	if (!threadIds.length) throw new McpToolError(`Thread not found in ${identity.value}`);
+	const found = new Set(threadIds);
+	return { identity, company, threadIds, ignored: ids.filter((id) => !found.has(id)) };
+}
+
 // ---------------------------------------------------------------------------
 // Outils
 // ---------------------------------------------------------------------------
@@ -1080,6 +1106,87 @@ export const TOOLS: ToolDefinition[] = [
 				next_offset: hasMore ? offset + limit : null,
 				items: rows.slice(0, limit).map(threadSummary),
 			};
+		},
+	},
+	// ss2i : rattachement manuel d'un fil a un client (OI 10270), comme le glisser-deposer du
+	// webmail : ligne thread_clients « manual », jamais retiree par le rattachement automatique.
+	{
+		name: "search_crm_companies",
+		scope: "emails:receive",
+		description:
+			"Find a company in the SS2i CRM to link threads to (link_thread_to_client), including companies with no thread yet. Query: part of the name, EBP customer code, CRM id, or an email address / domain of the company.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				query: { type: "string", description: "Name, EBP code, CRM id, email address or domain." },
+				identity: identityProp,
+				limit: { type: "integer", minimum: 1, maximum: 50, description: "Default 20." },
+			},
+			required: ["query"],
+			additionalProperties: false,
+		},
+		handler: async (ctx, args) => {
+			const identity = await proIdentity(ctx, args);
+			const query = str(args.query, "query", { max: 200 }) ?? "";
+			const limit = int(args.limit, "limit", 20, 1, 50);
+			const { CRM_URL, CRM_LORE_TOKEN } = getServerEnv();
+			const fromCrm = await crmSearchCompanies({ crmUrl: CRM_URL, token: CRM_LORE_TOKEN }, query, limit);
+			await upsertCrmCompanies(fromCrm);
+			const known = await searchKnownCrmCompanies(query, limit);
+			const items = new Map<number, { client_id: number; name: string; ebp_customer_id: string | null }>();
+			for (const c of [...fromCrm, ...known]) {
+				if (!items.has(c.id)) items.set(c.id, { client_id: c.id, name: c.name, ebp_customer_id: c.ebpCustomerId });
+			}
+			return { identity: identity.value, items: [...items.values()].slice(0, limit) };
+		},
+	},
+	{
+		name: "link_thread_to_client",
+		scope: "emails:receive",
+		description:
+			"Link threads to a client (CRM company) of a professional identity, by hand: they appear in that client's folder and the automatic linking never removes them. A detached link is restored. client_id from list_clients or search_crm_companies.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				thread_ids: threadIdsProp,
+				client_id: { type: "integer", description: "CRM company id (from list_clients or search_crm_companies)." },
+				identity: identityProp,
+			},
+			required: ["thread_ids", "client_id"],
+			additionalProperties: false,
+		},
+		handler: async (ctx, args) => {
+			const { identity, company, threadIds, ignored } = await clientLinkTargets(ctx, args);
+			const previous = await attachThreadsToCompany(identity, threadIds, company.id);
+			return {
+				identity: identity.value,
+				client_id: company.id,
+				name: company.name,
+				linked: previous.filter((p) => p.state !== "linked" || p.matchedBy !== "manual").length,
+				already_linked: previous.filter((p) => p.state === "linked" && p.matchedBy === "manual").length,
+				ignored,
+			};
+		},
+	},
+	{
+		name: "unlink_thread_from_client",
+		scope: "emails:receive",
+		description:
+			"Detach threads from a client of a professional identity (manual or automatic link). The detachment is remembered: the automatic linking does not restore it.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				thread_ids: threadIdsProp,
+				client_id: { type: "integer", description: "CRM company id (client_id from list_clients or list_threads)." },
+				identity: identityProp,
+			},
+			required: ["thread_ids", "client_id"],
+			additionalProperties: false,
+		},
+		handler: async (ctx, args) => {
+			const { identity, company, threadIds, ignored } = await clientLinkTargets(ctx, args);
+			const detached = await detachThreadsFromCompany(identity, threadIds, company.id);
+			return { identity: identity.value, client_id: company.id, name: company.name, detached, ignored };
 		},
 	},
 	{

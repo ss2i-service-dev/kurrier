@@ -17,6 +17,7 @@ import { useMediaQuery } from "@mantine/hooks";
 import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-item-mobile";
 import { usePathname } from "next/navigation";
 import { useHiddenThreads } from "@/lib/pending-moves";
+import { useLinkedThreads } from "@/lib/client-link";
 import type { SelectAllScope } from "@/lib/actions/select-all";
 import { useNouvelle } from "@/components/k/ui-context";
 import KThreadListStatic, { type KStaticListProps } from "@/components/k/thread-list-static";
@@ -39,6 +40,8 @@ type WebListProps = {
     totalThreads?: number;
     // ss2i : vue qui montre aussi les fils archives (dossier client) : archiver ne les en retire pas.
     keepArchived?: boolean;
+    // ss2i (OI 10270) : dossier « Sans client » : un fil rattache a un client en sort aussitot.
+    hideLinked?: boolean;
 };
 
 // ss2i : nouvelle interface (option par utilisateur) : memes donnees, liste de la nouvelle
@@ -62,13 +65,17 @@ function ClassicWebmailListLabelSearch({
                                         selectAllScope,
                                         totalThreads,
                                         keepArchived,
+                                        hideLinked,
                                     }: WebListProps) {
     const mailboxOf = (mailboxId: string) => mailboxById?.[mailboxId] ?? activeMailbox;
     // ss2i : comme webmail-list, les fils en cours de depart (corbeille, archive...)
     // disparaissent des le clic. Avant, ils restaient affiches jusqu'au rechargement.
     const isHidden = useHiddenThreads({ keepArchived });
+    const isLinked = useLinkedThreads();
     const mailboxThreads = serverThreads.filter(
-        (t) => !isHidden(String(t.mailboxId), String(t.threadId)),
+        (t) =>
+            !isHidden(String(t.mailboxId), String(t.threadId)) &&
+            !(hideLinked && isLinked(identityPublicId, String(t.threadId))),
     );
     const isMobile = useMediaQuery("(max-width: 768px)");
     // ss2i : chemin reel de l'URL, pas useParams : apres une recherche lancee depuis un fil ouvert,

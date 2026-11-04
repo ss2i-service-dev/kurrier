@@ -12,6 +12,7 @@ import type { FetchLabelsResult, FetchMailboxThreadLabelsResult } from "@/lib/ac
 import type { SelectAllScope } from "@/lib/actions/select-all";
 import { DynamicContextProvider, useDynamicContext } from "@/hooks/use-dynamic-context";
 import { useHiddenThreads } from "@/lib/pending-moves";
+import { useLinkedThreads } from "@/lib/client-link";
 import KListHeader from "@/components/k/list-header";
 import KThreadRow from "@/components/k/thread-row";
 import { KEmptyState } from "@/components/k/section";
@@ -37,12 +38,19 @@ export type KStaticListProps = {
 	kEmptyText?: string;
 	/** Vue qui montre aussi les fils archives (dossier client) : archiver ne les en retire pas (patch 0081). */
 	keepArchived?: boolean;
+	/** Dossier « Sans client » (OI 10270) : un fil rattache a un client en sort aussitot. */
+	hideLinked?: boolean;
 };
 
 export default function KThreadListStatic(props: KStaticListProps) {
 	const { mailboxThreads: serverThreads, activeMailbox, identityPublicId, identityMailboxes } = props;
 	const isHidden = useHiddenThreads({ keepArchived: props.keepArchived });
-	const threads = serverThreads.filter((t) => !isHidden(String(t.mailboxId), String(t.threadId)));
+	const isLinked = useLinkedThreads();
+	const threads = serverThreads.filter(
+		(t) =>
+			!isHidden(String(t.mailboxId), String(t.threadId)) &&
+			!(props.hideLinked && isLinked(identityPublicId, String(t.threadId))),
+	);
 	const ownAddresses = React.useMemo(
 		() => new Set(identityMailboxes.map((im) => String(im.identity.value).toLowerCase())),
 		[identityMailboxes],

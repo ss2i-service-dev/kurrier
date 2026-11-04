@@ -84,6 +84,7 @@ export default async function KThreadPage({
 					markSmtp={!!mailboxSync}
 					hasUnread={messages.some((m) => !m.seen)}
 					pinned={!!pins[threadId]}
+					identityPublicId={identityPublicId}
 				/>
 				<div className="k-scroll min-h-0 flex-1 overflow-y-auto" data-k-thread-scroll>
 					<div className="w-full px-5 pb-10 pt-6 md:px-8">

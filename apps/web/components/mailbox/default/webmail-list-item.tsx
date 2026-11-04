@@ -30,6 +30,7 @@ type Props = {
 };
 import { Temporal } from "@js-temporal/polyfill";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
+import { ThreadDragHandle } from "@/components/mailbox/default/client-link-ui";
 import { toast } from "sonner";
 import { moveWithUndo } from "@/lib/pending-moves";
 import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
@@ -263,6 +264,13 @@ export default function WebmailListItem({
 					`pr-[${ACTIONS_W}]`,
 				].join(" ")}
 			>
+				{/* ss2i (OI 10270) : poignee, glisser le fil (ou la selection) sur un client */}
+				<ThreadDragHandle
+					identityPublicId={identityPublicId}
+					threadId={mailboxThreadItem.threadId}
+					subject={mailboxThreadItem.subject}
+					className="absolute inset-y-0 left-0 z-10 w-3 opacity-0 transition-opacity group-hover:opacity-100"
+				/>
 				{/* ss2i : toute la cellule de la case est cliquable (hauteur de la ligne,
 				    debord a gauche), pas seulement les 16 px de la case. La case ne capte
 				    plus la souris ; au clavier (espace), onChange coche toujours. */}

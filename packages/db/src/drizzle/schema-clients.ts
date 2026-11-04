@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { boolean, index, integer, pgPolicy, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { identities, threads, users, workspaces } from "./schema";
 import { identitySelectCondition, workspaceMutationPolicies } from "./helpers";
@@ -49,6 +50,7 @@ export const threadClients = pgTable(
 		matchedBy: text("matched_by"),
 		lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull(),
 		// Detache a la main (rattachement par domaine errone) : le rattrapage ne le remet pas.
+		// matchedBy = "manual" : rattache a la main, le rattrapage ne le retire jamais.
 		detached: boolean("detached").notNull().default(false),
 		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 		updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -64,5 +66,29 @@ export const threadClients = pgTable(
 			using: identitySelectCondition(t, t.identityId),
 		}),
 		...workspaceMutationPolicies(t, "thread_clients"),
+	],
+).enableRLS();
+
+// ss2i : dossier « Sans client » (migration 009). Par fil et identite pro, adresses
+// exterieures humaines vues au dernier passage de crm-link (memes filtres que crm-match)
+// et derniere activite. Lue par les connexions admin seulement (RLS sans politique).
+export const threadCrmScans = pgTable(
+	"thread_crm_scans",
+	{
+		threadId: uuid("thread_id")
+			.references(() => threads.id, { onDelete: "cascade" })
+			.notNull(),
+		identityId: uuid("identity_id")
+			.references(() => identities.id, { onDelete: "cascade" })
+			.notNull(),
+		externalAddresses: integer("external_addresses").notNull().default(0),
+		lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull(),
+		scannedAt: timestamp("scanned_at", { withTimezone: true }).defaultNow().notNull(),
+	},
+	(t) => [
+		primaryKey({ name: "pk_thread_crm_scans", columns: [t.threadId, t.identityId] }),
+		index("ix_thread_crm_scans_external")
+			.on(t.identityId, t.lastActivityAt.desc(), t.threadId.desc())
+			.where(sql`${t.externalAddresses} > 0`),
 	],
 ).enableRLS();

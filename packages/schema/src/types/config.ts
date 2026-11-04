@@ -46,6 +46,16 @@ export const ZServerConfig = z.object({
 	CRM_INTERNAL_DOMAINS: z.string().optional(),
 	CRM_MATCH_TTL_DAYS: z.string().optional(),
 	CRM_MATCH_RETRY_DAYS: z.string().optional(),
+	// ss2i : « Ajouter a l'agenda » depuis un fil (OI 10280). ANTHROPIC_API_KEY : analyse du
+	// fil par un LLM (API Anthropic). GRAPH_TENANT, GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET :
+	// app Microsoft Graph en app-only (Calendars.ReadWrite), memes noms que graph-bridge.env.
+	// BRIDGE_MAILBOXES : boites M365 dont on peut ecrire l'agenda (meme liste que la
+	// passerelle graph-bridge, adresses separees par des virgules).
+	ANTHROPIC_API_KEY: z.string().optional(),
+	GRAPH_TENANT: z.string().optional(),
+	GRAPH_CLIENT_ID: z.string().optional(),
+	GRAPH_CLIENT_SECRET: z.string().optional(),
+	BRIDGE_MAILBOXES: z.string().optional(),
 });
 
 /** Safe to expose to the browser */

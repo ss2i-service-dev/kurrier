@@ -32,7 +32,7 @@ import {
 	threadsInIdentity,
 	unreadCountsByMailbox,
 } from "./access";
-import { htmlToText, messageBodyText, truncate } from "./html-text";
+import { htmlToText, messageBodyText, truncate } from "@common/html-text";
 import { pickSenderIdentity } from "./sender-identity";
 import { type QuoteScope, stripQuotedText } from "@common";
 import { attachThreadsToCompany, crmSearchCompanies, detachThreadsFromCompany, searchKnownCrmCompanies, upsertCrmCompanies } from "@common/server-client-link";

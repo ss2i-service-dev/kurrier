@@ -3,8 +3,9 @@
 // arriere-plan et on passe aussitot au fil suivant (ou a la liste).
 import React, { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Archive, ArrowLeft, Building2, ChevronDown, ChevronUp, ClipboardList, Mail, Trash2, X } from "lucide-react";
+import { Archive, ArrowLeft, Building2, CalendarPlus, ChevronDown, ChevronUp, ClipboardList, Mail, Trash2, X } from "lucide-react";
 import { LinkClientPicker } from "@/components/mailbox/default/client-link-ui";
+import { AddToAgenda } from "@/components/mailbox/default/add-to-agenda";
 import { copyMailToClipboard } from "@/lib/mail-copy";
 import KIconButton from "@/components/k/icon-button";
 import SnoozeMail from "@/components/k/snooze";
@@ -152,6 +153,16 @@ export default function ThreadToolbar({
 					)}
 				/>
 			)}
+			{/* ss2i (OI 10280) : dates du fil vers l'agenda Outlook, apres relecture. */}
+			<AddToAgenda
+				identityPublicId={identityPublicId}
+				threadId={String(threadId)}
+				trigger={(open) => (
+					<KIconButton label="Ajouter à l'agenda…" onClick={open}>
+						<CalendarPlus />
+					</KIconButton>
+				)}
+			/>
 
 			<div className="ml-auto flex items-center">
 				<KIconButton label="Fil précédent" shortcut={hint.prev} onClick={() => go(-1)}>

@@ -14,7 +14,7 @@ import { addressObjToList } from "./mail-client";
 
 export { addressObjToList };
 export * from "./draft-send";
-import { mergeDraftMeta, type DraftPendingSend, type DraftSendError } from "./draft-send";
+import { draftTimesOf, mergeDraftMeta, type DraftPendingSend, type DraftSendError } from "./draft-send";
 
 /**
  * ss2i : brouillons, couche base de donnees (partagee par le web et le worker).
@@ -85,6 +85,10 @@ export type DraftMeta = {
 	quoteHtml?: string;
 	revision: number;
 	imapRevision?: number;
+	// ss2i : creation du brouillon (premier enregistrement), conservee d'un enregistrement a
+	// l'autre, meme quand le brouillon change de dossier Drafts (changement d'expediteur).
+	createdAt?: string;
+	// Dernier enregistrement (derniere edition).
 	savedAt?: string;
 	// Envoi en cours (job send-and-reconcile differe ou en traitement) : pose par l'envoi
 	// (web et MCP), efface par l'annulation ou le worker. Le brouillon disparait au succes.
@@ -257,6 +261,8 @@ export async function upsertDraftRow(input: DraftInput) {
 	// L'expediteur (From) a change d'identite : le brouillon change de dossier Drafts. On
 	// repart d'une ligne neuve et l'appelant supprime l'ancienne version IMAP (`replaced`).
 	let replaced: DraftImapRef | null = null;
+	// Creation du brouillon, lue avant un eventuel changement de dossier (ligne neuve).
+	const createdAt = existing ? draftTimesOf(existing).createdAt : null;
 	if (existing && existing.mailboxId !== box.id) {
 		replaced = await deleteDraftRow({
 			ownerId: input.ownerId,
@@ -345,6 +351,7 @@ export async function upsertDraftRow(input: DraftInput) {
 		...(quoteMode && quoteMode !== "auto" ? { quoteMode } : {}),
 		...(quoteMode === "custom" && quoteHtml ? { quoteHtml } : {}),
 		revision,
+		createdAt: createdAt ?? now.toISOString(),
 		savedAt: now.toISOString(),
 	});
 
@@ -434,6 +441,7 @@ export async function upsertDraftRow(input: DraftInput) {
 		draftId,
 		revision,
 		savedAt: now,
+		createdAt: draftMeta.createdAt ?? now.toISOString(),
 		threadId: row.threadId,
 		mailboxId: box.id,
 		identityId: identity.id,

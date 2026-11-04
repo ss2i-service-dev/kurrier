@@ -1,5 +1,6 @@
 "use client";
 import type { DraftSendState } from "@common";
+import type { DraftTimes } from "@common/draft-send";
 import { useRouter } from "next/navigation";
 import React, { useEffect, useState } from "react";
 import { IconSend } from "@tabler/icons-react";
@@ -190,5 +191,45 @@ export function DraftSendingBanner({
 				)}
 			</div>
 		</div>
+	);
+}
+
+// ss2i : heure (aujourd'hui) ou date et heure d'un horodatage de brouillon.
+export function draftStamp(iso: string, now = new Date()) {
+	const d = new Date(iso);
+	const time = d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+	if (d.toDateString() === now.toDateString()) return time;
+	const day = d.toLocaleDateString("fr-FR", {
+		day: "2-digit",
+		month: "2-digit",
+		...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}),
+	});
+	return `${day} ${time}`;
+}
+
+// ss2i : creation et derniere edition d'un brouillon, dans la liste Drafts et l'editeur.
+export function DraftTimesLabel({
+	times,
+	className = "",
+}: {
+	times: DraftTimes | null | undefined;
+	className?: string;
+}) {
+	const k = useK();
+	if (!times?.createdAt) return null;
+	const created = draftStamp(times.createdAt);
+	const edited =
+		times.savedAt && Math.abs(new Date(times.savedAt).getTime() - new Date(times.createdAt).getTime()) >= 60_000
+			? draftStamp(times.savedAt)
+			: null;
+	const full = (iso: string) => new Date(iso).toLocaleString("fr-FR");
+	return (
+		<span
+			className={`shrink-0 whitespace-nowrap tabular-nums ${className}`}
+			title={`${k("Created", "Créé le")} ${full(times.createdAt)}${times.savedAt ? ` · ${k("last edited", "dernière modification le")} ${full(times.savedAt)}` : ""}`}
+		>
+			{k("Created", "Créé")} {created}
+			{edited ? ` · ${k("edited", "modifié")} ${edited}` : ""}
+		</span>
 	);
 }

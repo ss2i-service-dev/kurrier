@@ -1,4 +1,5 @@
 "use client";
+import { draftTimesOf } from "@common/draft-send";
 import { useK } from "@/components/k/ui-context";
 import React, {
 	useCallback,
@@ -45,6 +46,8 @@ export type EmailEditorHandle = {
 export type DraftStatus = {
 	state: "idle" | "saving" | "saved" | "error";
 	savedAt?: Date;
+	// ss2i : creation du brouillon (premier enregistrement).
+	createdAt?: Date;
 	error?: string;
 };
 export type DraftContext = {
@@ -181,7 +184,16 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 		const [draftId, setDraftId] = useState<string | null>(draft?.id ?? null);
 		const draftIdRef = useRef<string | null>(draft?.id ?? null);
 		const [draftStatus, setDraftStatus] = useState<DraftStatus>(
-			draft ? { state: "saved", savedAt: draft.date ?? undefined } : { state: "idle" },
+			draft
+				? (() => {
+						const times = draftTimesOf(draft);
+						return {
+							state: "saved" as const,
+							savedAt: times.savedAt ? new Date(times.savedAt) : (draft.date ?? undefined),
+							createdAt: times.createdAt ? new Date(times.createdAt) : undefined,
+						};
+					})()
+				: { state: "idle" },
 		);
 		const lastSavedKey = useRef<string | null>(null);
 		const seenKey = useRef<string | null>(null);
@@ -295,11 +307,11 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				}
 				// Rien a garder tant que l'editeur est vide.
 				if (empty && !draftIdRef.current) return;
-				setDraftStatus({ state: "saving" });
+				setDraftStatus((prev) => ({ state: "saving", createdAt: prev.createdAt }));
 				const res = await saveDraft({ ...payload, draftMessageId: draftIdRef.current });
 				if (!res?.draftMessageId) {
 					const error = res?.error ?? t("Draft could not be saved.", "Le brouillon n'a pas pu être enregistré.");
-					setDraftStatus({ state: "error", error });
+					setDraftStatus((prev) => ({ state: "error", error, createdAt: prev.createdAt }));
 					notifySaveError(error);
 					return;
 				}
@@ -309,16 +321,17 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				lastSavedKey.current = key;
 				notifySaveOk();
 				backupNow();
-				setDraftStatus({
+				setDraftStatus((prev) => ({
 					state: "saved",
 					savedAt: res.savedAt ? new Date(res.savedAt) : new Date(),
-				});
+					createdAt: res.createdAt ? new Date(res.createdAt) : prev.createdAt,
+				}));
 				if (flush) await flushDraft(payload.identityPublicId, savedId);
 			};
 			// Les enregistrements d'un meme brouillon se suivent, jamais deux a la fois.
 			chain.current = chain.current.then(run).catch((e: any) => {
 				const error = String(e?.message ?? e);
-				setDraftStatus({ state: "error", error });
+				setDraftStatus((prev) => ({ state: "error", error, createdAt: prev.createdAt }));
 				notifySaveError(error);
 			});
 			return chain.current;

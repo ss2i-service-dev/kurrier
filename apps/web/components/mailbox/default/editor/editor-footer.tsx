@@ -1,5 +1,6 @@
 "use client";
 
+import { draftStamp } from "@/components/mailbox/default/draft-send-status";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { createPortal } from "react-dom";
@@ -242,17 +243,20 @@ export default function EditorFooter({
 	};
 
 	const draft = state.draft;
-	const draftLabel =
+	// ss2i : heure de creation du brouillon devant l'etat d'enregistrement (derniere edition).
+	const createdAt = draft?.status.createdAt;
+	const createdLabel = createdAt
+		? `${t("Created", "Créé")} ${draftStamp(new Date(createdAt).toISOString())}`
+		: "";
+	const statusLabel =
 		draft?.status.state === "saving"
 			? t("Saving…", "Enregistrement…")
 			: draft?.status.state === "error"
 				? t("Not saved", "Non enregistré")
 				: draft?.status.state === "saved" && draft.status.savedAt
-					? `${t("Saved", "Enregistré à")} ${new Date(draft.status.savedAt).toLocaleTimeString(undefined, {
-							hour: "2-digit",
-							minute: "2-digit",
-						})}`
+					? `${t("saved", "modifié")} ${draftStamp(new Date(draft.status.savedAt).toISOString())}`
 					: "";
+	const draftLabel = [createdLabel, statusLabel].filter(Boolean).join(" · ");
 
 	console.log("isPending", state)
 

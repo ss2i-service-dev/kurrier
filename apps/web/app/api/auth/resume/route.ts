@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { getWorkspaceRedirectUrl, isSignedIn } from "@/lib/actions/auth";
+import { isSignedIn } from "@/lib/actions/auth";
+import { getWorkspaceRedirectUrl } from "@/lib/auth-session";
 import { withLocale } from "@/lib/utils";
 
 // Reprise d'une session encore valide : envoie vers la boite de reception de

@@ -1,13 +1,12 @@
 "use server"
 
 import {cache} from "react";
-import {getWorkspaceId, rlsClient} from "@/lib/actions/clients";
-import {and, eq} from "drizzle-orm";
+import {getWorkspaceId, rlsClient, rlsClientForWorkspace} from "@/lib/actions/clients";
+import {and, eq, or} from "drizzle-orm";
 import {
     db,
     identities,
-    UserEntity,
-    workspaceIdentityMembers, workspaceMembers, WorkspaceRolesListType, workspaces,
+    workspaceIdentityMembers, workspaceMembers, workspaces,
 } from "@db";
 import {FormState, handleAction} from "@schema";
 import {decode} from "decode-formdata";
@@ -15,8 +14,8 @@ import {revalidatePath} from "next/cache";
 import {users} from "@db";
 import { createHash } from "node:crypto";
 import {isSignedIn} from "@/lib/actions/auth";
-import {cookies} from "next/headers";
 import {redirect} from "next/navigation";
+import {updateWorkSpaceContext} from "@/lib/auth-session";
 
 export const fetchWorkspace = cache(async () => {
     const rls = await rlsClient();
@@ -78,6 +77,9 @@ export type FetchWorkspacesResult = Awaited<
 >;
 
 export const fetchWorkspaceMembers = async (id: string) => {
+    // ss2i (controle d'acces) : membres d'un workspace dont l'utilisateur est membre ;
+    // avant, n'importe quel id (adresses des membres, sans connexion).
+    await rlsClientForWorkspace(String(id));
     return await db
         .select({
             workspace_members: workspaceMembers,
@@ -167,42 +169,24 @@ export const refreshView = async (path: string) => {
 };
 
 export const switchWorkSpace = async (workspacePublicId: string, id: string) => {
-    await updateWorkSpaceContext(workspacePublicId, id);
-    redirect(`/w/${workspacePublicId}/dashboard/platform/overview`)
-};
-
-
-export const updateWorkSpaceContext = async (workspacePublicId: string, id: string, user?: UserEntity) => {
-    const cookieStore = await cookies()
-    if (!user) {
-        user = await isSignedIn() as UserEntity;
-    }
-    let role: WorkspaceRolesListType = "member"
-    const [member] = await db.select().from(workspaceMembers).where(and(
-        eq(workspaceMembers.workspaceId, id),
-        eq(workspaceMembers.userId, String(user?.id))
-    )).limit(1)
-    if (member){
-        role = member.role as WorkspaceRolesListType
-    }
-    cookieStore.set({
-        name: 'workspaceId',
-        value: id,
-        httpOnly: true,
-        path: '/',
-    })
-    cookieStore.set({
-        name: 'workspacePublicId',
-        value: workspacePublicId,
-        httpOnly: true,
-        path: '/',
-    })
-    if (role){
-        cookieStore.set({
-            name: 'workspaceRole',
-            value: String(role),
-            httpOnly: true,
-            path: '/',
-        })
-    }
+    // ss2i (controle d'acces) : cookies poses seulement pour un workspace dont l'utilisateur
+    // est proprietaire ou membre, avec ses identifiants relus en base.
+    const user = await isSignedIn();
+    if (!user?.id) throw new Error("Unauthorized");
+    const [workspace] = await db
+        .select({ id: workspaces.id, publicId: workspaces.publicId })
+        .from(workspaces)
+        .leftJoin(workspaceMembers, and(
+            eq(workspaceMembers.workspaceId, workspaces.id),
+            eq(workspaceMembers.userId, user.id),
+        ))
+        .where(and(
+            eq(workspaces.id, String(id)),
+            eq(workspaces.publicId, String(workspacePublicId)),
+            or(eq(workspaces.ownerId, user.id), eq(workspaceMembers.userId, user.id)),
+        ))
+        .limit(1);
+    if (!workspace) throw new Error("Workspace not found or no access");
+    await updateWorkSpaceContext(workspace.publicId, workspace.id, user);
+    redirect(`/w/${workspace.publicId}/dashboard/platform/overview`)
 };

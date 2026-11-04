@@ -743,6 +743,28 @@ export type FetchContactsForAttendeesResult = Awaited<
 	ReturnType<typeof getContactsForAttendeeIds>
 >;
 
+// ss2i (controle d'acces) : evenement et participant relus par RLS (workspace de
+// l'utilisateur), le participant appartenant a l'evenement ; seuls ces ids relus partent au
+// worker. Avant : n'importe quel evenement, sans connexion.
+async function verifiedInviteTarget(eventId: unknown, attendeeId: unknown) {
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({ eventId: calendarEvents.id, attendeeId: calendarEventAttendees.id })
+			.from(calendarEventAttendees)
+			.innerJoin(calendarEvents, eq(calendarEventAttendees.eventId, calendarEvents.id))
+			.where(
+				and(
+					eq(calendarEvents.id, String(eventId ?? "")),
+					eq(calendarEventAttendees.id, String(attendeeId ?? "")),
+				),
+			)
+			.limit(1),
+	);
+	if (!row) throw new Error("Invitation not found");
+	return row;
+}
+
 export async function yesCalendarInvite(
 	_prev: FormState,
 	formData: FormData,
@@ -754,10 +776,11 @@ export async function yesCalendarInvite(
 			attendeeId: string;
 		};
 
+		const target = await verifiedInviteTarget(decodedForm.eventId, decodedForm.attendeeId);
 		const { davQueue, davEvents } = await getRedis();
 		const job = await davQueue.add("dav:calendar:itip-reply", {
-			eventId: decodedForm.eventId,
-			attendeeId: decodedForm.attendeeId,
+			eventId: target.eventId,
+			attendeeId: target.attendeeId,
 			partstat: "accepted",
 		});
 		await job.waitUntilFinished(davEvents);
@@ -777,10 +800,11 @@ export async function noCalendarInvite(
 			attendeeId: string;
 		};
 
+		const target = await verifiedInviteTarget(decodedForm.eventId, decodedForm.attendeeId);
 		const { davQueue, davEvents } = await getRedis();
 		const job = await davQueue.add("dav:calendar:itip-reply", {
-			eventId: decodedForm.eventId,
-			attendeeId: decodedForm.attendeeId,
+			eventId: target.eventId,
+			attendeeId: target.attendeeId,
 			partstat: "declined",
 		});
 		await job.waitUntilFinished(davEvents);
@@ -800,10 +824,11 @@ export async function maybeCalendarInvite(
 			attendeeId: string;
 		};
 
+		const target = await verifiedInviteTarget(decodedForm.eventId, decodedForm.attendeeId);
 		const { davQueue, davEvents } = await getRedis();
 		const job = await davQueue.add("dav:calendar:itip-reply", {
-			eventId: decodedForm.eventId,
-			attendeeId: decodedForm.attendeeId,
+			eventId: target.eventId,
+			attendeeId: target.attendeeId,
 			partstat: "tentative",
 		});
 		await job.waitUntilFinished(davEvents);

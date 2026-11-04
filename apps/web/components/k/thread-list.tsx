@@ -8,7 +8,7 @@ import * as React from "react";
 import { use } from "react";
 import { usePathname } from "next/navigation";
 import { Inbox } from "lucide-react";
-import { IconPinnedFilled, IconSend } from "@tabler/icons-react";
+import { IconMail, IconPinnedFilled, IconSend } from "@tabler/icons-react";
 import { PublicConfig } from "@schema";
 import {
 	FetchIdentityMailboxListResult,
@@ -306,7 +306,18 @@ function Rows({
 						Épinglés ({pinnedRows.length})
 					</li>
 					{pinnedRows.map(row(true))}
-					{rows.length > 0 && sending.length === 0 && <li aria-hidden className="mx-3 my-1.5 h-px bg-k-line" />}
+					{/* Fin des epingles : bande vide de la couleur du fond de page, d'un
+					    bord a l'autre du panneau. Epingles et reste de la liste se lisent
+					    comme deux cartes empilees. */}
+					{rows.length > 0 && sending.length === 0 && (
+						<>
+							<li aria-hidden className="!my-1.5 -mx-1.5 h-3 border-y border-k-line bg-k-canvas" />
+							<li className={`${section} flex items-center gap-1.5`}>
+								<IconMail size={12} aria-hidden />
+								Messages
+							</li>
+						</>
+					)}
 				</>
 			)}
 			{sending.length > 0 ? (

@@ -101,7 +101,13 @@ export const fetchMailbox = cache(
 		);
 
 		// ss2i : identite et dossier dans le message (journal serveur) pour retrouver la requete fautive.
-		if (!identity) throw new Error(`Identity not found: identity=${identityPublicId} slug=${mailboxSlug}`);
+		// ss2i : une URL ne doit jamais bloquer (Samuel, 04/11 : precedent ou F5 laissaient sur une
+		// page cassee) : identite inconnue -> accueil de la messagerie, dossier inconnu (undefined,
+		// clients, dossier supprime, vieux lien) -> Inbox de l'identite.
+		if (!identity) {
+			console.warn(`[fetchMailbox] Identity not found: identity=${identityPublicId} slug=${mailboxSlug}, redirection`);
+			redirect(`/w/${await getWorkspacePublicId()}/dashboard/mail`);
+		}
 
 		const [mailboxList, activeMailbox] = await Promise.all([
 			rls((tx) =>
@@ -125,7 +131,11 @@ export const fetchMailbox = cache(
 			).then((rows) => rows[0]),
 		]);
 
-		if (!activeMailbox) throw new Error(`Mailbox not found: identity=${identityPublicId} slug=${mailboxSlug}`);
+		if (!activeMailbox) {
+			console.warn(`[fetchMailbox] Mailbox not found: identity=${identityPublicId} slug=${mailboxSlug}, redirection`);
+			const ws = await getWorkspacePublicId();
+			redirect(mailboxSlug === "inbox" ? `/w/${ws}/dashboard/mail` : `/w/${ws}/dashboard/mail/${identityPublicId}/inbox`);
+		}
 
 		const [messagesCountRow, sync] = await Promise.all([
 			rls((tx) =>

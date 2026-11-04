@@ -15,6 +15,7 @@ import {getWorkspacePublicId} from "@/lib/actions/clients";
 import { isNouvelleInterface } from "@/lib/actions/interface-pref";
 import { KEmptyState, KPager } from "@/components/k/section";
 import { Paperclip, Search, Star } from "lucide-react";
+import { redirect } from "next/navigation";
 
 async function ClassicSearchPage({
 											 params,
@@ -274,8 +275,21 @@ async function NouvelleSearchPage({
 }
 
 export default async function SearchPage(props: {
-	params: {mailboxSlug: string; identityPublicId: string };
+	params: {mailboxSlug: string; identityPublicId: string; wPublicId?: string };
 	searchParams: Record<string, string | string[] | undefined>;
 }) {
+	// ss2i : URL sans vrai dossier (.../undefined/search venue d'une page sans dossier, ou
+	// .../clients/search depuis la vue Clients) : redirection vers la recherche de l'Inbox au
+	// lieu d'une erreur serveur « Mailbox not found » (un onglet reste sur l'URL cassee et
+	// « Reload » la redemande telle quelle).
+	const { mailboxSlug, identityPublicId, wPublicId } = await props.params;
+	if (!mailboxSlug || mailboxSlug === "undefined" || mailboxSlug === "clients") {
+		const sp = new URLSearchParams();
+		for (const [key, v] of Object.entries(await props.searchParams)) {
+			if (typeof v === "string") sp.set(key, v);
+		}
+		const qs = sp.toString();
+		redirect(`/w/${wPublicId}/dashboard/mail/${identityPublicId}/inbox/search${qs ? `?${qs}` : ""}`);
+	}
 	return (await isNouvelleInterface()) ? <NouvelleSearchPage {...props} /> : <ClassicSearchPage {...props} />;
 }

@@ -329,6 +329,8 @@ export async function getSignedUrlsForMessage(messageId: string) {
 }
 
 export const revalidateMailbox = async (path: string) => {
+	// ss2i (controle d'acces) : action publique par nature, reservee aux utilisateurs connectes.
+	if (!(await isSignedIn())) return;
 	revalidatePath(path);
 };
 
@@ -568,6 +570,7 @@ async function markDraftPending(
 // visible de l'utilisateur (RLS) ; sinon tout se passe comme si le job n'existait pas.
 async function ownedPendingSend(pendingSendId: string) {
 	if (!pendingSendId) return null;
+	await assertSignedIn();
 	const { sendMailQueue } = await getRedis();
 	const job = await sendMailQueue.getJob(String(pendingSendId));
 	if (!job) return null;
@@ -616,9 +619,9 @@ export async function sendPendingNow(pendingSendId: string) {
 // pour afficher une erreur eventuelle. Jamais pendant le delai : les actions serveur
 // d'un onglet passent une par une, attendre ici bloquerait toutes les autres.
 export async function waitPendingSend(pendingSendId: string): Promise<FormState> {
-	const { sendMailEvents } = await getRedis();
 	const job = await ownedPendingSend(pendingSendId);
 	if (!job) return {};
+	const { sendMailEvents } = await getRedis();
 	try {
 		return (await job.waitUntilFinished(sendMailEvents, 120_000)) ?? {};
 	} catch (e: any) {
@@ -1810,7 +1813,11 @@ export async function fetchThreadMailSubscriptions(opts: {
 	ownerId: string;
 	messages: Array<{ id: string; headersJson: any; from?: any }>;
 }) {
+	// ss2i (controle d'acces) : abonnements de l'utilisateur connecte seulement ; l'ownerId
+	// passe par l'appelant (client compris : c'est une action) n'est plus utilise.
+	const user = await isSignedIn();
 	const keysByMessageId = new Map<string, string>();
+	if (!user?.id) return { byMessageId: new Map<string, any>(), keysByMessageId };
 
 	for (const m of opts.messages) {
 		const key = subscriptionKeyFromMessage(m);
@@ -1827,7 +1834,7 @@ export async function fetchThreadMailSubscriptions(opts: {
 		.from(mailSubscriptions)
 		.where(
 			and(
-				eq(mailSubscriptions.ownerId, opts.ownerId),
+				eq(mailSubscriptions.ownerId, user.id),
 				inArray(mailSubscriptions.subscriptionKey, uniqueKeys),
 			),
 		);

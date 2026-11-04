@@ -1,4 +1,5 @@
 "use client";
+import { hideThreads, showThreads } from "@/lib/pending-moves";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { isProIdentityPublicId, linkThreadsToClient, undoLinkThreadsToClient } from "@/lib/actions/thread-clients";
@@ -147,6 +148,9 @@ export async function linkThreadsWithUndo({
 		toast.error(fr ? `Rattachement impossible : ${res.error}` : `Could not link: ${res.error}`, { position });
 		return false;
 	}
+	// ss2i : les fils archives quittent la liste de l'Inbox tout de suite (Samuel, 04/11 : « il est
+	// toujours dans ma liste »), comme un archivage ; ils restent dans la vue du client.
+	if (res.inboxMailboxId && res.archived.length) hideThreads(res.inboxMailboxId, res.archived, true);
 	refresh();
 	const n = res.linked;
 	toast.success(
@@ -165,6 +169,7 @@ export async function linkThreadsWithUndo({
 							return;
 						}
 						setLinked(identityPublicId, threadIds, false);
+						if (res.inboxMailboxId && res.archived.length) showThreads(res.inboxMailboxId, res.archived);
 						refresh();
 					});
 				},

@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* Modern interface styles, scoped to <html data-ui="k"> */
+@import "./k-ui.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -485,4 +487,11 @@
 	.animate-weekFade {
 		animation: weekFade 0.35s ease forwards;
 	}
+}
+
+/* Unread panel next to the open thread: the thread column gives up the minimum
+   width of the "wide" Container (otherwise it overflows on a laptop). */
+[data-k-thread-column] .sm\:min-w-2xl,
+[data-k-thread-column] .lg\:min-w-5xl {
+	min-width: 0;
 }

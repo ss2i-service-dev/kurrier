@@ -258,52 +258,59 @@ export const processRules = async ({ messageId }: { messageId: string }) => {
     }
 
     for (const rule of rules) {
-        const match = rule.match as MailRuleMatchV1;
-        if (!match?.conditions?.length) continue;
+        // ss2i (OI 10344) : l'echec d'une regle ne coupe ni les suivantes ni le traitement du message.
+        try {
+            const match = rule.match as MailRuleMatchV1;
+            if (!match?.conditions?.length) continue;
 
-        const ok = evalMatch(message, match);
-        if (!ok) continue;
+            const ok = evalMatch(message, match);
+            if (!ok) continue;
 
-        const ruleActions = actionsByRuleId.get(rule.id) ?? [];
+            const ruleActions = actionsByRuleId.get(rule.id) ?? [];
 
-        for (const act of ruleActions) {
-            switch (act.actionType) {
-                case "mark_read": {
-                    await markAsRead(thread.id, mailbox.id, identity.smtpAccountId);
-                    break;
-                }
-                case "flag": {
-                    await toggleStar(thread.id, mailbox.id, true, identity.smtpAccountId);
-                    break;
-                }
-                case "trash": {
-                    await moveToTrash(thread.id, mailbox.id, identity.smtpAccountId, message.id);
-                    break;
-                }
-                case "add_label": {
-                    const labelId = (act.params as any)?.labelId as string | undefined;
-                    if (!labelId) break;
-                    // ss2i (controle d'acces) : etiquette du workspace de l'identite seulement.
-                    const [label] = await db
-                        .select({ id: labels.id })
-                        .from(labels)
-                        .where(and(eq(labels.id, labelId), eq(labels.workspaceId, identity.workspaceId)))
-                        .limit(1);
-                    if (!label) break;
-                    await db.insert(mailboxThreadLabels).values({
-                        threadId: thread.id,
-                        mailboxId: mailbox.id,
-                        ownerId: mailbox.ownerId,
-                        labelId,
-                    })
-                    break;
-                }
-                default: {
-                    break;
+            for (const act of ruleActions) {
+                switch (act.actionType) {
+                    case "mark_read": {
+                        await markAsRead(thread.id, mailbox.id, identity.smtpAccountId);
+                        break;
+                    }
+                    case "flag": {
+                        await toggleStar(thread.id, mailbox.id, true, identity.smtpAccountId);
+                        break;
+                    }
+                    case "trash": {
+                        await moveToTrash(thread.id, mailbox.id, identity.smtpAccountId, message.id);
+                        break;
+                    }
+                    case "add_label": {
+                        const labelId = (act.params as any)?.labelId as string | undefined;
+                        if (!labelId) break;
+                        // ss2i (controle d'acces) : etiquette du workspace de l'identite seulement.
+                        const [label] = await db
+                            .select({ id: labels.id })
+                            .from(labels)
+                            .where(and(eq(labels.id, labelId), eq(labels.workspaceId, identity.workspaceId)))
+                            .limit(1);
+                        if (!label) break;
+                        await db.insert(mailboxThreadLabels).values({
+                            threadId: thread.id,
+                            mailboxId: mailbox.id,
+                            ownerId: mailbox.ownerId,
+                            // ss2i (OI 10344) : colonne NOT NULL dont le defaut vient du JWT, NULL cote worker.
+                            workspaceId: identity.workspaceId,
+                            labelId,
+                        }).onConflictDoNothing();
+                        break;
+                    }
+                    default: {
+                        break;
+                    }
                 }
             }
-        }
 
-        if (rule.stopProcessing) break;
+            if (rule.stopProcessing) break;
+        } catch (err) {
+            console.error("[COMMON] Rule failed, skipped:", rule.id, "message:", messageId, err);
+        }
     }
 };

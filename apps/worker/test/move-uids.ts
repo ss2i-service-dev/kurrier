@@ -7,9 +7,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	cursorAtTop,
 	destCursorAfterMove,
-	destCursorBeforeMove,
 	heldUids,
+	knownArrivals,
 	matchMovedUids,
 	normMessageId,
 	shouldMoveImap,
@@ -127,11 +128,33 @@ const src = (p: string) => readFileSync(join(root, p), "utf8");
 		assert.deepEqual(matchMovedUids([{ id: "a", messageId: "<A@x>" }], []).missing, ["a"]);
 	});
 
-	await test("curseur avant : avance sur le lot si rien n'attend au-dessus, sinon on n'y touche pas", () => {
-		assert.equal(destCursorBeforeMove(99, 100, 8), 107);
-		assert.equal(destCursorBeforeMove(90, 100, 8), null); // deltaFetch en retard
-		assert.equal(destCursorBeforeMove(99, 0, 8), null); // UIDNEXT inconnu
-		assert.equal(destCursorBeforeMove(120, 100, 8), 120); // jamais en arriere ici
+	await test("curseur : pose seulement si rien n'attendait au-dessus (deltaFetch a jour)", () => {
+		assert.equal(cursorAtTop(99, 100), true);
+		assert.equal(cursorAtTop(90, 100), false); // deltaFetch en retard : on n'y touche pas
+		assert.equal(cursorAtTop(99, 0), false); // UIDNEXT inconnu
+		assert.equal(cursorAtTop(120, 100), true); // curseur au-dela du reel : ramene au dernier UID
+	});
+
+	await test("UID connus : tout Message-ID du lot (ambigus et doublons compris)", () => {
+		const found = [
+			{ uid: 100, messageId: "<A@x>" },
+			{ uid: 101, messageId: "<A@x>" }, // seconde copie (doublon ou ambigu)
+			{ uid: 102, messageId: "<etranger@x>" }, // arrive pendant le lot
+			{ uid: 103, messageId: null },
+		];
+		const known = knownArrivals(found, ["a@x"], [999]);
+		assert.deepEqual([...known].sort((a, b) => a - b), [100, 101, 999]);
+		assert.equal(destCursorAfterMove(100, found.map((f) => ({ uid: f.uid, known: known.has(f.uid) }))), 101);
+		// sans Message-ID : connu seulement si le lot a lui-meme un message sans Message-ID
+		assert.equal(knownArrivals(found, [null, "a@x"]).has(103), true);
+		assert.equal(knownArrivals(found, ["a@x"]).has(103), false);
+	});
+
+	await test("curseur apres : un lot de 70 000 UID ne depasse pas la limite d'arguments", () => {
+		const big = Array.from({ length: 70_000 }, (_, i) => ({ uid: 1000 + i, known: true }));
+		assert.equal(destCursorAfterMove(1000, big), 70_999);
+		big[50_000].known = false;
+		assert.equal(destCursorAfterMove(1000, big), 50_999);
 	});
 
 	await test("curseur apres : dernier UID reel, ou juste sous le premier inconnu", () => {
@@ -161,6 +184,24 @@ const src = (p: string) => readFileSync(join(root, p), "utf8");
 		assert.doesNotMatch(s, /for \(const \[srcUid, destUid\] of uidMap\)/);
 		// client IMAP verifie avant la mise a jour en base
 		assert.ok(s.indexOf("IMAP indisponible") < s.indexOf("await db.transaction"));
+	});
+
+	await test("branchement worker : UID retire dans la transaction, recopie par tranches, curseur ecrit apres le MOVE", () => {
+		const s = src("apps/worker/lib/imap/imap-move.ts");
+		const tx = s.slice(s.indexOf("await db.transaction"), s.indexOf("if (!moveImap) return;"));
+		assert.match(tx, /#- '\{imap,uid\}'/);
+		assert.doesNotMatch(s, /await setUid\(/);
+		assert.match(s, /from \(values \$\{sql\.join\(/);
+		assert.ok(s.indexOf("casCursor(cursor.id") > s.indexOf("client.messageMove("));
+		assert.equal((s.match(/casCursor\(/g) ?? []).length, 2); // definition + un seul appel
+		assert.doesNotMatch(s, /notInArray/);
+	});
+
+	await test("branchement web : corbeille rejouee 8 fois, 5 s puis croissance exponentielle", () => {
+		const s = src("apps/web/lib/actions/mailbox.ts");
+		const body = s.slice(s.indexOf("export const moveToTrash = async"), s.indexOf("export const archiveThread = async"));
+		const job = body.slice(body.indexOf('"mail:move"'));
+		assert.match(job, /attempts: 8,\s*backoff: \{ type: "exponential", delay: 5000 \}/);
 	});
 
 	await test("branchement web : corbeille, archive et deplacement demandent l'etat au serveur", () => {

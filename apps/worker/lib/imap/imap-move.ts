@@ -1,13 +1,14 @@
 import { db, mailboxes, mailboxSync, messages, mailboxThreads } from "@db";
 import { upsertMailboxThreadItem } from "@common";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { ImapFlow } from "imapflow";
 import { initSmtpClient } from "./imap-client";
 import {
 	planMessageMove,
+	cursorAtTop,
 	destCursorAfterMove,
-	destCursorBeforeMove,
 	heldUids,
+	knownArrivals,
 	matchMovedUids,
 	normMessageId,
 	shouldMoveImap,
@@ -165,19 +166,49 @@ export const moveMail = async (
 	// et l'EXPUNGE recu par la connexion temps reel pouvait supprimer la ligne avant qu'elle
 	// soit deplacee. OI 10286 : ce que le serveur n'a pas deplace est remis dans le dossier
 	// source en base (moveGroupOnImap), au lieu de laisser la base mentir.
+	const dupIds = new Set<string>();
 	await db.transaction(async (tx) => {
+		// ss2i (OI 10286) : copie deja presente a l'arrivee (meme Message-ID : envoi a soi-meme,
+		// copie des Envoyes deja rangee la) : l'index unique (mailbox_id, message_id) faisait
+		// echouer tout le job. La ligne source est supprimee en base, la copie d'arrivee la
+		// represente ; son UID reste dans le MOVE IMAP (byPath) et l'UID d'arrivee compte comme
+		// connu pour le curseur.
+		const mids = [...new Set(toMove.map((m) => m.messageId).filter(Boolean) as string[])];
+		for (const part of chunks(mids, CHUNK)) {
+			const there = new Set(
+				(
+					await tx
+						.select({ messageId: messages.messageId })
+						.from(messages)
+						.where(and(eq(messages.mailboxId, destMailboxRow.id), inArray(messages.messageId, part)))
+				).map((r) => r.messageId),
+			);
+			for (const m of toMove) if (m.messageId && there.has(m.messageId)) dupIds.add(m.id);
+		}
+		if (dupIds.size) {
+			for (const part of chunks([...dupIds], CHUNK)) {
+				await tx.delete(messages).where(inArray(messages.id, part));
+			}
+			console.info(
+				`[mail:move] ${dupIds.size} message(s) deja presents dans ${destPath} (meme Message-ID) : ligne source supprimee en base, copie IMAP deplacee`,
+			);
+		}
+
 		const set: Record<string, any> = {
 			mailboxId: destMailboxRow.id,
 			updatedAt: new Date(),
 		};
 		if (moveImap) {
+			// ss2i (OI 10286) : l'UID de la source part avec le changement de dossier (il est releve
+			// avant, dans byPath) ; un arret du worker entre cette transaction et la recopie des UID
+			// laissait sinon un UID de la source sur un chemin d'arrivee.
 			set.metaData = sql`
         jsonb_set(
           coalesce(${messages.metaData}, '{}'::jsonb),
           '{imap,mailboxPath}',
           to_jsonb(${destPath}::text),
           true
-        )
+        ) #- '{imap,uid}'
       `;
 		}
 
@@ -197,21 +228,8 @@ export const moveMail = async (
 			// Les recapitulatifs de fil sont par dossier : ceux de la destination sont recalcules,
 			// ceux de la source aussi (fil partiel) ou supprimes (fil parti en entier).
 			for (const threadId of [...plan.fullThreadIds, ...plan.partialThreadIds]) {
-				const movedOne = toMove.find((m) => m.threadId === threadId)!;
-				await upsertMailboxThreadItem(movedOne.id, tx as any);
-				const stay = threadMsgs.find((m) => m.threadId === threadId && !movingIds!.has(m.id));
-				if (stay) {
-					await upsertMailboxThreadItem(stay.id, tx as any);
-				} else {
-					await tx
-						.delete(mailboxThreads)
-						.where(
-							and(
-								eq(mailboxThreads.threadId, threadId),
-								eq(mailboxThreads.mailboxId, fromMailboxId),
-							),
-						);
-				}
+				await refreshThreadIn(tx, threadId, destMailboxRow.id);
+				await refreshThreadIn(tx, threadId, fromMailboxId);
 			}
 			return;
 		}
@@ -253,8 +271,11 @@ export const moveMail = async (
 			await tx
 				.delete(mailboxThreads)
 				.where(and(eq(mailboxThreads.threadId, t), eq(mailboxThreads.mailboxId, fromMailboxId)));
-			const one = toMove.find((m) => m.threadId === t);
-			if (one) await upsertMailboxThreadItem(one.id, tx as any);
+		}
+		// Fils fusionnes, et fils dont une copie a ete supprimee (compteurs a refaire).
+		const dupThreads = toMove.filter((m) => dupIds.has(m.id)).map((m) => m.threadId);
+		for (const t of new Set([...clash, ...dupThreads])) {
+			await refreshThreadIn(tx, t, destMailboxRow.id);
 		}
 	});
 
@@ -270,7 +291,8 @@ export const moveMail = async (
 		src: srcMailbox,
 		dest: destMailboxRow,
 		destPath,
-		movingIds: toMove.map((m) => m.id),
+		movingIds: new Set(toMove.map((m) => m.id)),
+		dupIds,
 		threadOf: new Map(toMove.map((m) => [m.id, m.threadId])),
 	};
 	let reverted = 0;
@@ -283,26 +305,39 @@ export const moveMail = async (
 	}
 };
 
+// Tranches : Postgres refuse plus de 65 534 parametres par requete, et un seul job peut porter
+// plusieurs dizaines de milliers de messages (archivage du 04/11 : 54 119).
+const CHUNK = 10_000;
+function chunks<T>(list: T[], n: number): T[][] {
+	const out: T[][] = [];
+	for (let i = 0; i < list.length; i += n) out.push(list.slice(i, i + n));
+	return out;
+}
+
 type MoveCtx = {
 	src: typeof mailboxes.$inferSelect;
 	dest: typeof mailboxes.$inferSelect;
 	destPath: string;
-	// Tous les messages du job : leur UID en base est encore celui de la source.
-	movingIds: string[];
+	movingIds: Set<string>;
+	// Messages dont une copie (meme Message-ID) etait deja a l'arrivee : ligne source supprimee
+	// dans la transaction, rien a remettre dans la source.
+	dupIds: Set<string>;
 	threadOf: Map<string, string>;
 };
 
 /**
  * ss2i (OI 10286) : MOVE IMAP d'un dossier source, sous UN verrou de la connexion (aucune
  * synchronisation ne s'intercale) :
- * 1. resolveUids (UID reels dans la source, verifies par Message-ID) ;
- * 2. UIDNEXT du dossier d'arrivee (STATUS) et curseur deltaFetch avance sur le lot ;
+ * 1. resolveUids (UID reels dans la source, verifies par Message-ID) ; ce qu'il ne trouve pas
+ *    n'est pas envoye et est remis dans la source en base ;
+ * 2. UIDNEXT du dossier d'arrivee (STATUS) et curseur deltaFetch lu ;
  * 3. UID MOVE ; imapflow rend false sur un refus, sans lever ni journaliser : on le dit ;
  * 4. relecture du dossier d'arrivee (EXAMINE, UID >= UIDNEXT d'avant) et UID recopies par
  *    Message-ID (matchMovedUids), jamais par la position dans le COPYUID que Stalwart permute ;
- * 5. ce qui n'est pas arrive est cherche dans la source a son UID : s'il y est, il est remis
- *    dans le dossier source en base (le serveur ne l'a pas deplace) ; s'il n'est nulle part,
- *    il reste a destination sans UID.
+ *    curseur pose en un compare-and-set ;
+ * 5. ce qui a ete envoye mais n'est pas arrive est cherche dans la source a son UID : s'il y
+ *    est, il est remis dans le dossier source en base (le serveur ne l'a pas deplace) ; s'il
+ *    n'est nulle part, il reste a destination sans UID.
  * Rend le nombre de messages remis dans la source.
  */
 async function moveGroupOnImap(
@@ -313,10 +348,10 @@ async function moveGroupOnImap(
 	const { path: srcPath, rows } = g;
 	const tag = `${ctx.src.identityId} ${srcPath} -> ${ctx.destPath}`;
 	const rowById = new Map(rows.map((r) => [r.id, r]));
+	const isDup = (id: string) => ctx.dupIds.has(id);
 	const settled = new Set<string>();
 	const srcUid = new Map<string, number>();
 	let state: "avant" | "envoye" | "fait" | "refuse" = "avant";
-	let cursor: Cursor | null = null;
 	let reverted = 0;
 
 	let lock: { release: () => void };
@@ -324,18 +359,37 @@ async function moveGroupOnImap(
 		lock = await client.getMailboxLock(srcPath);
 	} catch (err) {
 		console.error(`[mail:move] dossier source illisible (${tag}) : ${rows.length} message(s) remis dans la source en base`, err);
-		return await revertToSource(rows.map((r) => ({ id: r.id, uid: r.uid })), srcPath, ctx);
+		return await revertToSource(
+			rows.filter((r) => !isDup(r.id)).map((r) => ({ id: r.id, uid: r.uid })),
+			srcPath,
+			ctx,
+		);
 	}
 	try {
 		const wanted = await resolveUids(client, rows);
 		for (const [uid, id] of wanted) if (!srcUid.has(id)) srcUid.set(id, uid);
-		const toCheck = rows.filter((r) => !srcUid.has(r.id)).map((r) => r.id);
 
+		// Jamais envoyes dans le MOVE : resolveUids ne les a pas trouves dans la source (UID
+		// perime que Stalwart ne retrouve pas : SEARCH HEADER vide, balayage borne a 5 000
+		// messages ; ou lecture en erreur). Le serveur ne les a pas deplaces : remis dans la
+		// source en base, sans relire leur UID en base, qui designe peut-etre un autre message.
+		const notSent = rows.filter((r) => !srcUid.has(r.id));
+		if (notSent.length) {
+			const back = notSent.filter((r) => !isDup(r.id));
+			reverted += await revertToSource(back.map((r) => ({ id: r.id, uid: r.uid })), srcPath, ctx);
+			notSent.forEach((r) => settled.add(r.id));
+			console.error(
+				`[mail:move] ${notSent.length} message(s) introuvables dans ${srcPath} par leur UID ou leur Message-ID (${tag}) : pas envoyes dans le MOVE, ${back.length} remis dans le dossier source en base`,
+				notSent.slice(0, 20).map((r) => r.id),
+			);
+		}
+
+		let toCheck: string[] = [];
 		if (wanted.size) {
 			const st = await client.status(ctx.destPath, { uidNext: true });
 			const u0 = Number((st && st.uidNext) || 0);
 			if (!u0) throw new Error(`UIDNEXT de ${ctx.destPath} illisible (STATUS)`);
-			cursor = await preAdvanceDestCursor(ctx.dest.id, u0, wanted.size);
+			const cursor = await readDestCursor(ctx.dest.id);
 
 			state = "envoye";
 			const moved = await client.messageMove([...wanted.keys()], ctx.destPath, { uid: true });
@@ -350,39 +404,57 @@ async function moveGroupOnImap(
 			const copyUids = moved && moved.uidMap ? [...moved.uidMap.values()] : [];
 			const found = await readArrived(client, Number(box?.exists ?? 0), u0, copyUids);
 
-			const movedRows = [...new Set(wanted.values())].map((id) => rowById.get(id)!);
+			const sentIds = [...new Set(wanted.values())];
+			const movedRows = sentIds.filter((id) => !isDup(id)).map((id) => rowById.get(id)!);
 			const taken = heldUids(found, await heldInDest(ctx, found));
 			const m = matchMovedUids(movedRows, found, taken);
-			for (const [id, uid] of m.assigned) {
-				await setUid(id, ctx.dest.id, uid);
-				settled.add(id);
-			}
+			await setUids([...m.assigned], ctx.dest.id);
+			for (const id of m.assigned.keys()) settled.add(id);
 			if (m.ambiguous.length) {
-				await clearUid(m.ambiguous, ctx.dest.id);
 				m.ambiguous.forEach((id) => settled.add(id));
 				console.warn(
-					`[mail:move] ${m.ambiguous.length} message(s) au Message-ID en double dans le lot (${tag}) : laisses sans UID`,
+					`[mail:move] ${m.ambiguous.length} message(s) au Message-ID en double a l'arrivee (${tag}) : laisses sans UID`,
 					m.ambiguous.slice(0, 20),
 				);
 			}
-			toCheck.push(...m.missing);
 
-			if (cursor) {
-				const known = new Set([...taken, ...m.assigned.values()]);
+			// Copies supprimees en base (dupIds) : rien a remettre ; on dit seulement si le serveur
+			// ne les a pas deplacees (elles restent dans la source sans ligne en base).
+			const dupSent = sentIds.filter(isDup);
+			if (dupSent.length) {
+				dupSent.forEach((id) => settled.add(id));
+				const arrivedMids = new Set(found.filter((f) => f.uid >= u0).map((f) => normMessageId(f.messageId)));
+				const lost = dupSent.filter((id) => !arrivedMids.has(normMessageId(rowById.get(id)!.messageId)));
+				if (lost.length) {
+					console.error(
+						`[mail:move] ${lost.length} copie(s) deja presente(s) a l'arrivee non deplacee(s) par le serveur (${tag}) : restee(s) dans ${srcPath}, sans ligne en base`,
+						lost.slice(0, 20),
+					);
+				}
+			}
+
+			if (cursor && cursorAtTop(cursor.l0, u0)) {
+				const known = knownArrivals(
+					found,
+					sentIds.map((id) => rowById.get(id)!.messageId),
+					[...taken, ...m.assigned.values()],
+				);
 				const target = destCursorAfterMove(
 					u0,
 					found.map((f) => ({ uid: f.uid, known: known.has(f.uid) })),
 				);
-				await settleDestCursor(cursor, target);
-				cursor = null;
+				if (target !== cursor.l0 && !(await casCursor(cursor.id, cursor.l0, target))) {
+					console.warn(`[mail:move] curseur ${cursor.id} modifie pendant le deplacement (attendu ${cursor.l0}), laisse tel quel`);
+				}
 			}
+			toCheck = m.missing;
 		}
 
 		if (toCheck.length) {
-			// Pas arrive (ou pas trouve dans la source par resolveUids, peut-etre sur une lecture
-			// en erreur) : le serveur l'a-t-il encore dans la source, a son UID ?
+			// Envoye mais pas arrive : le serveur l'a-t-il encore dans la source, a l'UID que
+			// resolveUids y a verifie ?
 			await client.mailboxOpen(srcPath, { readOnly: true });
-			const uidOf = (id: string) => srcUid.get(id) ?? rowById.get(id)!.uid;
+			const uidOf = (id: string) => srcUid.get(id)!;
 			const atSrc = await envelopesAt(client, toCheck.map(uidOf));
 			const back: Array<{ id: string; uid: number }> = [];
 			const nowhere: string[] = [];
@@ -403,7 +475,6 @@ async function moveGroupOnImap(
 				);
 			}
 			if (nowhere.length) {
-				await clearUid(nowhere, ctx.dest.id);
 				nowhere.forEach((id) => settled.add(id));
 				console.warn(
 					`[mail:move] ${nowhere.length} message(s) ni dans la source ni dans le lot arrive (${tag}) : laisses a destination sans UID`,
@@ -412,17 +483,15 @@ async function moveGroupOnImap(
 			}
 		}
 	} catch (err) {
-		const rest = rows.filter((r) => !settled.has(r.id));
-		// Serveur qui a repondu OK au MOVE : ces messages sont a destination, UID inconnu.
-		// Sinon (refus, coupure avant ou pendant le MOVE) : remis dans la source en base.
+		const rest = rows.filter((r) => !settled.has(r.id) && !isDup(r.id));
+		// Serveur qui a repondu OK au MOVE : ces messages sont a destination, UID inconnu (deja
+		// retire en base). Sinon (refus, coupure avant ou pendant le MOVE) : remis dans la source.
 		const arrived = state === "fait" ? rest.filter((r) => srcUid.has(r.id)) : [];
 		const back = rest.filter((r) => !arrived.includes(r));
 		console.error(
 			`[mail:move] IMAP en erreur (${tag}, etape ${state}) : ${back.length} message(s) remis dans la source en base, ${arrived.length} laisses a destination sans UID`,
 			err,
 		);
-		if (cursor) await settleDestCursor(cursor, cursor.l0).catch(() => {});
-		if (arrived.length) await clearUid(arrived.map((r) => r.id), ctx.dest.id);
 		reverted += await revertToSource(
 			back.map((r) => ({ id: r.id, uid: srcUid.get(r.id) ?? r.uid })),
 			srcPath,
@@ -449,8 +518,8 @@ async function readArrived(
 			if (Number(m.uid) >= u0) out.set(Number(m.uid), m.envelope?.messageId ?? null);
 		}
 		const extra = [...new Set(copyUids.map(Number))].filter((u) => u > 0 && u < u0);
-		if (extra.length) {
-			for await (const m of client.fetch(extra.join(","), { uid: true, envelope: true }, { uid: true })) {
+		for (const part of chunks(extra, 500)) {
+			for await (const m of client.fetch(part.join(","), { uid: true, envelope: true }, { uid: true })) {
 				out.set(Number(m.uid), m.envelope?.messageId ?? null);
 			}
 		}
@@ -462,8 +531,7 @@ async function readArrived(
 async function envelopesAt(client: ImapFlow, uids: number[]) {
 	const out = new Map<number, string>();
 	const list = [...new Set(uids.map(Number))].filter((u) => u > 0);
-	for (let i = 0; i < list.length; i += 500) {
-		const part = list.slice(i, i + 500);
+	for (const part of chunks(list, 500)) {
 		for await (const m of client.fetch(part.join(","), { uid: true, envelope: true }, { uid: true })) {
 			out.set(Number(m.uid), normMessageId(m.envelope?.messageId));
 		}
@@ -471,44 +539,36 @@ async function envelopesAt(client: ImapFlow, uids: number[]) {
 	return out;
 }
 
-// Messages du dossier d'arrivee (hors job) qui tiennent deja l'un de ces UID en base.
+// Messages du dossier d'arrivee (hors job) qui tiennent deja l'un de ces UID en base. Par
+// tranches (limite de parametres), les messages du job ecartes ici plutot qu'en SQL.
 async function heldInDest(ctx: MoveCtx, found: DestEnvelope[]): Promise<DestEnvelope[]> {
-	if (!found.length) return [];
 	const uidText = sql<string>`${messages.metaData}->'imap'->>'uid'`;
-	const rows = await db
-		.select({ uid: uidText, messageId: messages.messageId })
-		.from(messages)
-		.where(
-			and(
-				eq(messages.mailboxId, ctx.dest.id),
-				inArray(uidText, found.map((f) => String(f.uid))),
-				ctx.movingIds.length ? notInArray(messages.id, ctx.movingIds) : undefined,
-			),
-		);
-	return rows.map((r) => ({ uid: Number(r.uid), messageId: r.messageId }));
+	const out: DestEnvelope[] = [];
+	for (const part of chunks(found.map((f) => String(f.uid)), CHUNK)) {
+		const rows = await db
+			.select({ id: messages.id, uid: uidText, messageId: messages.messageId })
+			.from(messages)
+			.where(and(eq(messages.mailboxId, ctx.dest.id), inArray(uidText, part)));
+		for (const r of rows) if (!ctx.movingIds.has(r.id)) out.push({ uid: Number(r.uid), messageId: r.messageId });
+	}
+	return out;
 }
 
-const setUid = (id: string, mailboxId: string, uid: number) =>
-	db
-		.update(messages)
-		.set({
-			metaData: sql`
-        jsonb_set(
-          coalesce(${messages.metaData}, '{}'::jsonb),
-          '{imap,uid}',
-          to_jsonb(${Number(uid)}::bigint),
-          true
-        )
-      `,
-		})
-		.where(and(eq(messages.id, id), eq(messages.mailboxId, mailboxId)));
-
-// Pas d'UID plutot qu'un UID faux : un lu / non lu / etoile ne verifie pas le Message-ID.
-const clearUid = (ids: string[], mailboxId: string) =>
-	db
-		.update(messages)
-		.set({ metaData: sql`${messages.metaData} #- '{imap,uid}'` })
-		.where(and(inArray(messages.id, ids), eq(messages.mailboxId, mailboxId)));
+// UID d'arrivee recopies en base : un UPDATE par tranche (et non par message), le verrou IMAP
+// de la connexion etant tenu pendant ce temps.
+async function setUids(pairs: Array<[string, number]>, mailboxId: string) {
+	for (const part of chunks(pairs, 1000)) {
+		await db.execute(sql`
+			update messages
+			set meta = jsonb_set(coalesce(messages.meta, '{}'::jsonb), '{imap,uid}', to_jsonb(v.uid), true)
+			from (values ${sql.join(
+				part.map(([id, uid]) => sql`(${id}::uuid, ${Number(uid)}::bigint)`),
+				sql`, `,
+			)}) as v(id, uid)
+			where messages.id = v.id and messages.mailbox_id = ${mailboxId}::uuid
+		`);
+	}
+}
 
 // Remet dans le dossier source, en base, des messages que le serveur n'a pas deplaces
 // (chemin et UID de la source), puis recalcule les lignes de fil des deux dossiers.
@@ -520,24 +580,22 @@ async function revertToSource(
 	if (!items.length) return 0;
 	let n = 0;
 	await db.transaction(async (tx) => {
-		for (const it of items) {
-			const r = await tx
-				.update(messages)
-				.set({
-					mailboxId: ctx.src.id,
-					updatedAt: new Date(),
-					metaData: sql`
-            jsonb_set(
-              jsonb_set(coalesce(${messages.metaData}, '{}'::jsonb), '{imap,mailboxPath}', to_jsonb(${srcPath}::text), true),
-              '{imap,uid}',
-              to_jsonb(${Number(it.uid)}::bigint),
-              true
-            )
-          `,
-				})
-				.where(and(eq(messages.id, it.id), eq(messages.mailboxId, ctx.dest.id)))
-				.returning({ id: messages.id });
-			n += r.length;
+		for (const part of chunks(items, 1000)) {
+			const res = await tx.execute(sql`
+				update messages
+				set mailbox_id = ${ctx.src.id}::uuid,
+				    updated_at = now(),
+				    meta = jsonb_set(
+				      jsonb_set(coalesce(messages.meta, '{}'::jsonb), '{imap,mailboxPath}', to_jsonb(${srcPath}::text), true),
+				      '{imap,uid}', to_jsonb(v.uid), true)
+				from (values ${sql.join(
+					part.map((it) => sql`(${it.id}::uuid, ${Number(it.uid)}::bigint)`),
+					sql`, `,
+				)}) as v(id, uid)
+				where messages.id = v.id and messages.mailbox_id = ${ctx.dest.id}::uuid
+				returning messages.id
+			`);
+			n += (res as unknown as unknown[]).length;
 		}
 		const threadIds = [...new Set(items.map((it) => ctx.threadOf.get(it.id)))].filter(Boolean) as string[];
 		for (const t of threadIds) await resettleThread(tx, t, ctx.dest, ctx.src);
@@ -545,8 +603,25 @@ async function revertToSource(
 	return n;
 }
 
+// Ligne mailbox_threads d'un fil dans un dossier : recalculee s'il y reste un message du fil,
+// supprimee sinon.
+async function refreshThreadIn(tx: any, threadId: string, mailboxId: string) {
+	const [one] = await tx
+		.select({ id: messages.id })
+		.from(messages)
+		.where(and(eq(messages.threadId, threadId), eq(messages.mailboxId, mailboxId)))
+		.limit(1);
+	if (one) {
+		await upsertMailboxThreadItem(one.id, tx);
+	} else {
+		await tx
+			.delete(mailboxThreads)
+			.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, mailboxId)));
+	}
+}
+
 // Lignes mailbox_threads d'un fil dont des messages viennent de repasser de `from` a `to`.
-// Fil revenu en entier : sa ligne revient avec lui (report de rappel garde) ; sinon les deux
+// Fil revenu en entier : sa ligne revient avec lui (report de rappel garde) ; puis les deux
 // lignes sont recalculees, celle d'un dossier qui n'a plus de message du fil supprimee.
 async function resettleThread(
 	tx: any,
@@ -554,68 +629,48 @@ async function resettleThread(
 	from: typeof mailboxes.$inferSelect,
 	to: typeof mailboxes.$inferSelect,
 ) {
-	const oneIn = async (mailboxId: string) =>
+	const has = async (mailboxId: string) =>
 		(
 			await tx
 				.select({ id: messages.id })
 				.from(messages)
 				.where(and(eq(messages.threadId, threadId), eq(messages.mailboxId, mailboxId)))
 				.limit(1)
-		)[0]?.id as string | undefined;
-	const inTo = await oneIn(to.id);
-	if (!inTo) return;
-	const leftFrom = await oneIn(from.id);
+		).length > 0;
+	if (!(await has(to.id))) return;
 	const [toRow] = await tx
 		.select({ threadId: mailboxThreads.threadId })
 		.from(mailboxThreads)
 		.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, to.id)))
 		.limit(1);
-	if (!leftFrom && !toRow) {
+	if (!toRow && !(await has(from.id))) {
 		await tx
 			.update(mailboxThreads)
 			.set({ mailboxId: to.id, mailboxSlug: to.slug ?? null, updatedAt: new Date() })
 			.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, from.id)));
 	}
-	await upsertMailboxThreadItem(inTo, tx);
-	if (leftFrom) {
-		await upsertMailboxThreadItem(leftFrom, tx);
-	} else {
-		await tx
-			.delete(mailboxThreads)
-			.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, from.id)));
-	}
+	await refreshThreadIn(tx, threadId, to.id);
+	await refreshThreadIn(tx, threadId, from.id);
 }
 
-// Curseur deltaFetch du dossier d'arrivee (cf. destCursorBeforeMove / destCursorAfterMove).
-// Ecritures en compare-and-set, toujours sous le verrou de la connexion IMAP que deltaFetch
-// partage (imapInstances) : il ne lit ni n'ecrit ce curseur pendant le deplacement.
-type Cursor = { id: string; l0: number; pre: number };
+// Curseur deltaFetch du dossier d'arrivee (cf. cursorAtTop / destCursorAfterMove) : lu avant le
+// MOVE, pose une seule fois en fin d'operation, en compare-and-set depuis cette valeur. Le tout
+// sous le verrou de la connexion IMAP que deltaFetch partage (imapInstances) : il ne lit ni
+// n'ecrit ce curseur pendant le deplacement.
+async function readDestCursor(mailboxId: string) {
+	const [s] = await db
+		.select({ id: mailboxSync.id, lastSeenUid: mailboxSync.lastSeenUid })
+		.from(mailboxSync)
+		.where(eq(mailboxSync.mailboxId, mailboxId))
+		.limit(1);
+	return s ? { id: s.id, l0: Number(s.lastSeenUid ?? 0) } : null;
+}
 
 async function casCursor(id: string, from: number, to: number) {
-	if (from === to) return true;
 	const r = await db
 		.update(mailboxSync)
 		.set({ lastSeenUid: to, updatedAt: new Date() })
 		.where(and(eq(mailboxSync.id, id), eq(mailboxSync.lastSeenUid, from)))
 		.returning({ id: mailboxSync.id });
 	return r.length === 1;
-}
-
-async function preAdvanceDestCursor(mailboxId: string, u0: number, n: number): Promise<Cursor | null> {
-	const [s] = await db
-		.select({ id: mailboxSync.id, lastSeenUid: mailboxSync.lastSeenUid })
-		.from(mailboxSync)
-		.where(eq(mailboxSync.mailboxId, mailboxId))
-		.limit(1);
-	if (!s) return null;
-	const l0 = Number(s.lastSeenUid ?? 0);
-	const pre = destCursorBeforeMove(l0, u0, n);
-	if (pre === null || !(await casCursor(s.id, l0, pre))) return null;
-	return { id: s.id, l0, pre };
-}
-
-async function settleDestCursor(c: Cursor, target: number) {
-	if (!(await casCursor(c.id, c.pre, target))) {
-		console.warn(`[mail:move] curseur ${c.id} modifie pendant le deplacement (attendu ${c.pre}), laisse tel quel`);
-	}
 }

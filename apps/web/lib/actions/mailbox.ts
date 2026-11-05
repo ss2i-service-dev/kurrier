@@ -1066,8 +1066,11 @@ export const moveToTrash = async (
 		"mail:move",
 		{ threadId: ids[0], threadIds: ids, mailboxId: source.id, op: "trash", messageId, moveImap },
 		{
-			attempts: 3,
-			backoff: { type: "exponential", delay: 1500 },
+			// ss2i (OI 10286) : le worker fait echouer le job quand le serveur IMAP n'a pas deplace
+			// les messages (remis dans la source en base) ; 8 essais espaces de 5 s, 10 s, 20 s...
+			// couvrent un redemarrage de Stalwart (3 essais en 4,5 s n'y suffisaient pas).
+			attempts: 8,
+			backoff: { type: "exponential", delay: 5000 },
 			removeOnComplete: true,
 			removeOnFail: false,
 		},

@@ -69,29 +69,47 @@ export function matchMovedUids(
 	return { assigned, ambiguous, missing };
 }
 
-// Curseur deltaFetch (mailbox_sync.last_seen_uid) du dossier d'arrivee, avance AVANT le MOVE
-// sur les UID que le lot va occuper : une synchronisation lancee entre le MOVE et la recopie
-// des UID relirait sinon tout le lot (source complete de chaque message) et, si un autre
-// message porte le meme Message-ID (copie des Envoyes), « detecterait un deplacement » du
-// mauvais fil. Seulement si rien n'attend au-dessus du curseur (l0 >= UIDNEXT - 1) : sinon
-// deltaFetch est en retard et on ne touche a rien. Rend la cible, ou null.
-export function destCursorBeforeMove(l0: number, u0: number, n: number): number | null {
-	if (!(u0 > 0) || l0 < u0 - 1) return null;
-	return Math.max(l0, u0 - 1 + Math.max(0, n));
+// Curseur deltaFetch (mailbox_sync.last_seen_uid) du dossier d'arrivee : sans lui, la synchro
+// suivante relit tout le lot (source complete de chaque message) et, si un autre message porte
+// le meme Message-ID, peut « detecter un deplacement » du mauvais fil. Il n'est pose qu'une fois,
+// en fin d'operation (compare-and-set depuis la valeur lue avant le MOVE), et seulement si rien
+// n'attendait au-dessus (l0 >= UIDNEXT - 1) : sinon deltaFetch est en retard, on n'y touche pas.
+export const cursorAtTop = (l0: number, u0: number) => u0 > 0 && l0 >= u0 - 1;
+
+// UID arrives a compter comme connus de la base pour le curseur : ceux deja tenus ou recopies
+// (`alsoKnown`), et tout UID dont le Message-ID appartient au lot, ambigus et doublons compris
+// (sinon le curseur redescendrait sous le lot et deltaFetch le relirait). Le Message-ID vide
+// n'en est que si le lot a lui-meme un message sans Message-ID (deltaFetch en creerait un
+// double a chaque lecture).
+export function knownArrivals(
+	found: DestEnvelope[],
+	lotMessageIds: Array<string | null>,
+	alsoKnown: Iterable<number> = [],
+): Set<number> {
+	const lot = new Set(lotMessageIds.map(normMessageId));
+	const out = new Set([...alsoKnown].map(Number));
+	for (const f of found) if (lot.has(normMessageId(f.messageId))) out.add(Number(f.uid));
+	return out;
 }
 
-// Apres le lot (si le curseur a ete avance avant) : `arrived` = UID >= u0 presents dans le
-// dossier, `known` quand la base tient ce message (meme UID, meme Message-ID). Tout est connu :
-// curseur sur le dernier UID reel (jamais au-dela, un UID non encore attribue serait saute).
-// Sinon juste sous le premier inconnu, pour que deltaFetch le synchronise.
+// En fin de lot (si cursorAtTop) : `arrived` = UID >= u0 presents dans le dossier, `known`
+// d'apres knownArrivals. Tout est connu : curseur sur le dernier UID reel (jamais au-dela, un UID
+// non encore attribue serait saute). Sinon juste sous le premier inconnu, pour que deltaFetch le
+// synchronise. Boucle plutot que Math.max(...) : un lot de plusieurs dizaines de milliers d'UID
+// depasserait la limite d'arguments.
 export function destCursorAfterMove(
 	u0: number,
 	arrived: Array<{ uid: number; known: boolean }>,
 ): number {
-	const fresh = arrived.filter((a) => Number(a.uid) >= u0);
-	const unknown = fresh.filter((a) => !a.known).map((a) => Number(a.uid));
-	if (unknown.length) return Math.min(...unknown) - 1;
-	return Math.max(u0 - 1, ...fresh.map((a) => Number(a.uid)));
+	let top = u0 - 1;
+	let firstUnknown = Infinity;
+	for (const a of arrived) {
+		const uid = Number(a.uid);
+		if (uid < u0) continue;
+		if (uid > top) top = uid;
+		if (!a.known && uid < firstUnknown) firstUnknown = uid;
+	}
+	return firstUnknown === Infinity ? top : firstUnknown - 1;
 }
 
 // Le MOVE IMAP ne depend pas de ce que la page a charge : un dossier synchronise en IMAP

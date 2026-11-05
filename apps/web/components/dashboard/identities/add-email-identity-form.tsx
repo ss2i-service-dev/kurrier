@@ -6,6 +6,7 @@ import {
 import { ReusableForm } from "@/components/common/reusable-form";
 import React, {useEffect} from "react";
 import { parseSecret } from "@/lib/utils";
+import { availableProviderOptions } from "@/lib/identity-provider-options";
 import { imapQuotaList } from "@schema";
 import {Checkbox, MultiSelect, Select} from "@mantine/core";
 import {FetchWorkspaceMembersResult} from "@/lib/actions/workspace";
@@ -58,6 +59,18 @@ function AddEmailIdentityForm({
 	useEffect(() => {
 		setSharedWithWorkspace(mustBeShared)
 	}, [mustBeShared]);
+
+	// SMTP accounts already used by an identity are left out (after upstream 8189d986).
+	const providerChoices = React.useMemo(
+		() =>
+			availableProviderOptions(
+				providerOptions,
+				smtpAccounts,
+				userEmailIdentities.map((identity) => identity.identities.value),
+				(account) => String(parseSecret(account).SMTP_USERNAME ?? ""),
+			),
+		[providerOptions, smtpAccounts, userEmailIdentities],
+	);
 
 	function getSmtpFields() {
 		const parsedVaultValues = parseSecret(smtpAccount);
@@ -216,7 +229,7 @@ function AddEmailIdentityForm({
 			name: "provider",
 			label: "Choose a verified provider",
 			kind: "select" as const,
-			options: providerOptions,
+			options: providerChoices,
 			wrapperClasses: "col-span-12",
 			props: {
 				defaultValue: rawProvider || undefined,

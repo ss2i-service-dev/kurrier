@@ -6,8 +6,10 @@ import {getServerEnv} from "@schema";
 import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import {getSignedUrl} from "@aws-sdk/s3-request-presigner";
 import {s3} from "@/lib/create-s3-client";
-import {db, messages} from "@db";
+import {messages} from "@db";
 import {eq} from "drizzle-orm";
+import {rlsClient} from "@/lib/actions/clients";
+import {assertOwnedS3Key, assertSignedIn, isSafeKeySegment, safeExtension} from "@/lib/authz";
 
 export async function createAttachmentUploadUrl(input: {
     fileName: string;
@@ -16,11 +18,10 @@ export async function createAttachmentUploadUrl(input: {
 }) {
     const user = await isSignedIn();
     if (!user) throw new Error("Unauthorized");
+    if (!isSafeKeySegment(input.messageId)) throw new Error("Invalid message id");
     const { S3_BUCKET } = getServerEnv();
 
-    const ext = input.fileName.includes(".")
-        ? input.fileName.split(".").pop()
-        : "";
+    const ext = safeExtension(String(input.fileName ?? ""));
 
     const key = `private/${user.id}/${input.messageId}/${crypto.randomUUID()}${
         ext ? `.${ext}` : ""
@@ -46,10 +47,13 @@ export async function createAttachmentUploadUrl(input: {
 export async function createAttachmentDownloadUrl(path: string) {
     const user = await isSignedIn();
     if (!user) throw new Error("Unauthorized");
+    // Only an attachment of the user or of a message of their workspace; used to accept any
+    // key of the bucket.
+    const key = await assertOwnedS3Key(path, user.id);
     const { S3_BUCKET } = getServerEnv();
     const command = new GetObjectCommand({
         Bucket: S3_BUCKET!,
-        Key: path,
+        Key: key,
     });
 
     const url = await getSignedUrl(s3, command, {
@@ -60,17 +64,25 @@ export async function createAttachmentDownloadUrl(path: string) {
 }
 
 export async function getRawMessageDownloadUrl(messageId: string) {
-    const [message] = await db.select().from(messages).where(eq(messages.id, messageId))
-    if (!message?.rawStorageKey) return { url: null };
+    const rls = await rlsClient();
+    const [message] = await rls((tx) =>
+        tx
+            .select()
+            .from(messages)
+            .where(eq(messages.id, messageId))
+            .limit(1),
+    );
+    if (!message?.rawStorageKey) {
+        return { url: null };
+    }
     const { S3_BUCKET } = getServerEnv();
-
     const command = new GetObjectCommand({
-        Bucket: S3_BUCKET,
+        Bucket: S3_BUCKET!,
         Key: message.rawStorageKey,
     });
-
-    const url = await getSignedUrl(s3, command, { expiresIn: 3600 });
-
+    const url = await getSignedUrl(s3, command, {
+        expiresIn: 300,
+    });
     return { url };
 }
 
@@ -83,6 +95,20 @@ export async function uploadContactProfileAction(params: {
     thumbPath: string;
 }) {
     const { mainFile, thumbFile, mainPath, thumbPath } = params;
+
+    // Signed-in user, images only, and keys under their own contacts folder (same shape as
+    // the contact forms and the DAV sync: private/<userId>/contacts/<publicId>/<name>.<ext>);
+    // used to allow writing to any key of the bucket, without sign-in.
+    const user = await assertSignedIn();
+    const contactKey = new RegExp(
+        `^private/${user.id}/contacts/[A-Za-z0-9_-]{1,64}/[A-Za-z0-9_-]{1,64}\\.[A-Za-z0-9]{1,12}$`,
+    );
+    if (!contactKey.test(String(mainPath)) || !contactKey.test(String(thumbPath))) {
+        throw new Error("Invalid contact image path");
+    }
+    if (!String(mainFile?.type).startsWith("image/") || !String(thumbFile?.type).startsWith("image/")) {
+        throw new Error("Contact image must be an image");
+    }
 
     const mainBuffer = Buffer.from(await mainFile.arrayBuffer());
     const thumbBuffer = Buffer.from(await thumbFile.arrayBuffer());

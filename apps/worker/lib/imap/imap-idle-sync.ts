@@ -353,11 +353,12 @@ function scheduleReconnect(
 		return;
 	}
 
-	// ss2i (OI 10346) : mot de passe refuse, ne pas retenter seul (bannissement Stalwart).
+	// ss2i (OI 10346) : mot de passe refuse, ne pas retenter seul (bannissement Stalwart) ; le
+	// balayage retente une fois la suspension echue (6 h).
 	if (imapAuthSuspended(identityId)) {
 		console.error(
 			`[realtime:${identityId}] IMAP authentication refused; automatic reconnect suspended ` +
-			"until a successful connection or imap:start-idle",
+			"for 6 h, or until a successful connection or imap:start-idle",
 		);
 		return;
 	}
@@ -813,7 +814,8 @@ export const recoverOfflineRealtime = async (
 		}
 
 		// ss2i (OI 10346) : reconnexion deja programmee ou ouverture en cours, on la laisse faire ;
-		// mot de passe refuse, on ne retente pas (bannissement Stalwart).
+		// mot de passe refuse, on ne retente pas avant l'echeance de la suspension (bannissement
+		// Stalwart).
 		if (
 			reconnectTimers.has(identity.id) ||
 			startingIdentities.has(identity.id) ||

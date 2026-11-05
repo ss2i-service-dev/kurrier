@@ -11,18 +11,66 @@ const BASE_DELAY = 5000;
 // consecutifs par identite, tous clients confondus. Stalwart bannit l'IP source apres 100 echecs
 // d'authentification par jour, toutes boites confondues : un mot de passe refuse, retente a chaque
 // balayage imap:realtime-recovery (144 fois par jour), aurait coupe l'IMAP de toutes les boites.
-// Au-dela de MAX_AUTH_FAILURES, imap-idle-sync.ts suspend ses reconnexions automatiques jusqu'a une
-// connexion reussie de l'identite ou un imap:start-idle explicite. Un autre echec (serveur
-// injoignable, coupure) interrompt la serie.
+// Au-dela de MAX_AUTH_FAILURES, imap-idle-sync.ts suspend ses reconnexions automatiques pendant
+// AUTH_SUSPENSION_MS depuis le dernier echec, ou jusqu'a une connexion reussie de l'identite ou un
+// imap:start-idle explicite ; a l'echeance, le balayage retente un LOGIN, soit au plus 3 + 4
+// echecs par jour et par identite. Une suspension sans fin coupait sans bruit la synchro d'une
+// boite que personne n'ouvre. Un autre echec (serveur injoignable, coupure, refus passager)
+// interrompt la serie.
 const MAX_AUTH_FAILURES = 3;
-const authFailures = new Map<string, number>();
+const AUTH_SUSPENSION_MS = 6 * 60 * 60 * 1000;
+const authFailures = new Map<string, { count: number; at: number }>();
 
-export const imapAuthSuspended = (identityId: string) =>
-	(authFailures.get(identityId) ?? 0) >= MAX_AUTH_FAILURES;
+// ss2i (OI 10346) : horloge des echecs d'authentification, remplacee par imap-idle-reconnect.ts.
+export const imapClientDeps = {
+	now: () => Date.now(),
+};
+
+// ss2i (OI 10346) : ImapFlow pose authenticationFailed sur tout NO ou BAD au LOGIN
+// (commands/login.js, authenticate.js), refus passagers compris : Stalwart repond [CONTACTADMIN]
+// tant que son stockage ne repond pas, [LIMIT] au-dela des connexions simultanees du compte. Ne
+// comptent que les refus des identifiants : NO sans code (Microsoft 365) ou a code d'identifiants
+// de la RFC 5530 ([AUTHENTICATIONFAILED] de Stalwart et Gmail pour un mot de passe faux).
+const CREDENTIAL_RESPONSE_CODES = new Set([
+	"AUTHENTICATIONFAILED",
+	"AUTHORIZATIONFAILED",
+	"EXPIRED",
+]);
+
+const isCredentialRefusal = (err: unknown) => {
+	const e = err as {
+		authenticationFailed?: boolean;
+		responseStatus?: string;
+		serverResponseCode?: string;
+	} | null;
+	return (
+		e?.authenticationFailed === true &&
+		e.responseStatus === "NO" &&
+		(!e.serverResponseCode || CREDENTIAL_RESPONSE_CODES.has(e.serverResponseCode))
+	);
+};
+
+export const imapAuthSuspended = (identityId: string) => {
+	const failures = authFailures.get(identityId);
+	return (
+		!!failures &&
+		failures.count >= MAX_AUTH_FAILURES &&
+		imapClientDeps.now() - failures.at < AUTH_SUSPENSION_MS
+	);
+};
 
 export const resetImapAuthFailures = (identityId: string) => {
 	authFailures.delete(identityId);
 };
+
+// ss2i (OI 10346, repris de pendingConnections de 5707ed41 amont) : ouverture en cours, par table
+// de clients et par identite. Le rattrapage de l'IDLE (deltaFetch, hors de la file BullMQ), les
+// jobs et safeReconnect pouvaient ouvrir en meme temps deux clients de commandes : le second
+// restait ouvert et, a sa fermeture, son safeReconnect deconnectait le client actif.
+const pendingConnections = new WeakMap<
+	Map<string, ImapFlow>,
+	Map<string, Promise<ImapFlow | undefined>>
+>();
 
 function safeReconnect(
 	identityId: string,
@@ -59,14 +107,48 @@ function safeReconnect(
 	reconnectTimers.set(identityId, timer);
 }
 
-export const initSmtpClient = async (
+export const initSmtpClient = (
 	identityId: string,
 	imapInstances: Map<string, ImapFlow>,
 	// ss2i (OI 10346) : false pour le client IDLE, que imap-idle-sync.ts reconnecte lui-meme
 	// (scheduleReconnect, balayage imap:realtime-recovery) ; safeReconnect en rouvrait un second en
 	// parallele, sans IDLE, qui pouvait prendre la place du bon dans la table.
 	{ reconnect = true }: { reconnect?: boolean } = {},
-) => {
+): Promise<ImapFlow | undefined> => {
+	const existing = imapInstances.get(identityId);
+	if (existing?.authenticated && existing?.usable) {
+		return Promise.resolve(existing);
+	}
+
+	let pending = pendingConnections.get(imapInstances);
+	if (!pending) {
+		pending = new Map();
+		pendingConnections.set(imapInstances, pending);
+	}
+
+	const current = pending.get(identityId);
+	if (current) {
+		return current;
+	}
+
+	const connection = openImapClient(identityId, imapInstances, reconnect);
+	pending.set(identityId, connection);
+	void connection
+		.finally(() => {
+			if (pending.get(identityId) === connection) {
+				pending.delete(identityId);
+			}
+		})
+		.catch(() => {});
+
+	return connection;
+};
+
+const openImapClient = async (
+	identityId: string,
+	imapInstances: Map<string, ImapFlow>,
+	reconnect: boolean,
+): Promise<ImapFlow | undefined> => {
 	const retry = () => {
 		if (reconnect) safeReconnect(identityId, imapInstances);
 	};
@@ -135,14 +217,24 @@ export const initSmtpClient = async (
 			logRaw: false,
 		});
 
+		// ss2i (OI 10346) : une coupure pendant le LOGIN fait emettre 'error' (Connection not
+		// available) avant que les ecouteurs ci-dessous soient poses : uncaughtException. Le rejet
+		// de connect() suffit a traiter l'echec ; l'ecouteur reste sur un client refuse.
+		const ignoreConnectError = () => {};
+		client.on("error", ignoreConnectError);
+
 		try {
 			await client.connect();
+			client.off("error", ignoreConnectError);
 			retryCounts.set(identityId, 0);
 			authFailures.delete(identityId);
 		} catch (err) {
 			console.error(`[IMAP:${identityId}] connect() failed:`, err);
-			if ((err as { authenticationFailed?: boolean } | null)?.authenticationFailed) {
-				authFailures.set(identityId, (authFailures.get(identityId) ?? 0) + 1);
+			if (isCredentialRefusal(err)) {
+				authFailures.set(identityId, {
+					count: (authFailures.get(identityId)?.count ?? 0) + 1,
+					at: imapClientDeps.now(),
+				});
 			} else {
 				authFailures.delete(identityId);
 			}

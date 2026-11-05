@@ -44,7 +44,7 @@ import { isSignedIn } from "@/lib/actions/auth";
 import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
-import { extractListUnsubscribe, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, type DraftSendState, type DraftTimes } from "@common";
+import { extractListUnsubscribe, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
 import dayjs from "dayjs";
@@ -1014,6 +1014,20 @@ const waitForThreadsToLeave = async (
 	return false;
 };
 
+// ss2i (OI 10286) : un dossier synchronise en IMAP est toujours deplace sur le serveur, quoi
+// qu'ait charge la page. La recherche, les libelles et la vue Clients n'ont pas l'etat de
+// synchronisation du dossier : ils envoyaient moveImap=false et la corbeille partait « base
+// seule » (base et IMAP divergeaient). Le worker applique la meme regle (moveMail) ; ici elle
+// vaut aussi pour la creation du dossier Archive et la suppression definitive.
+const imapSynced = async (mailboxId: string) =>
+	(
+		await db
+			.select({ id: mailboxSync.id })
+			.from(mailboxSync)
+			.where(eq(mailboxSync.mailboxId, mailboxId))
+			.limit(1)
+	).length > 0;
+
 export const moveToTrash = async (
 	threadIds: string | string[],
 	mailboxId: string,
@@ -1030,6 +1044,7 @@ export const moveToTrash = async (
 	// ss2i (controle d'acces) : dossier visible et fils de ce dossier seulement ; un message
 	// precis (messageId) doit etre dans ce dossier, sinon le worker n'aurait rien deplace.
 	const { mailbox: source, threadIds: ids } = await assertThreadsInMailbox(mailboxId, requestedIds);
+	moveImap = shouldMoveImap(moveImap, await imapSynced(source.id));
 
 	// ss2i : depuis la corbeille, « supprimer » ne peut pas etre un deplacement vers la
 	// corbeille (le job ne faisait rien et l'interface annoncait « moved to Trash ») :
@@ -1100,6 +1115,7 @@ export const archiveThread = async (
 	const { mailbox: src, threadIds: ids } = await assertThreadsInMailbox(mailboxId, requestedIds);
 	if (!ids.length) return;
 	if (src.kind === "archive") return;
+	moveImap = shouldMoveImap(moveImap, await imapSynced(src.id));
 
 	const findArchive = async () => {
 		const [row] = await db
@@ -1668,6 +1684,7 @@ export const moveToFolder = async (
 	if (messageId && !(await messageInMailbox(messageId, from.id))) return;
 	fromMailboxId = from.id;
 	toMailboxId = to.id;
+	moveImap = shouldMoveImap(moveImap, await imapSynced(from.id));
 
 	const { smtpQueue, searchIngestQueue } = await getRedis();
 

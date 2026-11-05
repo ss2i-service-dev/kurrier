@@ -258,52 +258,63 @@ export const processRules = async ({ messageId }: { messageId: string }) => {
     }
 
     for (const rule of rules) {
-        const match = rule.match as MailRuleMatchV1;
-        if (!match?.conditions?.length) continue;
+        // A failing rule neither cuts the following ones nor the processing of the message.
+        // `matched` lives outside the try: a rule that matches and whose action throws keeps its
+        // "stop processing" (otherwise a lower priority rule would apply).
+        let matched = false;
+        try {
+            const match = rule.match as MailRuleMatchV1;
+            if (!match?.conditions?.length) continue;
 
-        const ok = evalMatch(message, match);
-        if (!ok) continue;
+            const ok = evalMatch(message, match);
+            if (!ok) continue;
+            matched = true;
 
-        const ruleActions = actionsByRuleId.get(rule.id) ?? [];
+            const ruleActions = actionsByRuleId.get(rule.id) ?? [];
 
-        for (const act of ruleActions) {
-            switch (act.actionType) {
-                case "mark_read": {
-                    await markAsRead(thread.id, mailbox.id, identity.smtpAccountId);
-                    break;
-                }
-                case "flag": {
-                    await toggleStar(thread.id, mailbox.id, true, identity.smtpAccountId);
-                    break;
-                }
-                case "trash": {
-                    await moveToTrash(thread.id, mailbox.id, identity.smtpAccountId, message.id);
-                    break;
-                }
-                case "add_label": {
-                    const labelId = (act.params as any)?.labelId as string | undefined;
-                    if (!labelId) break;
-                    // Access control: only labels of the identity's workspace.
-                    const [label] = await db
-                        .select({ id: labels.id })
-                        .from(labels)
-                        .where(and(eq(labels.id, labelId), eq(labels.workspaceId, identity.workspaceId)))
-                        .limit(1);
-                    if (!label) break;
-                    await db.insert(mailboxThreadLabels).values({
-                        threadId: thread.id,
-                        mailboxId: mailbox.id,
-                        ownerId: mailbox.ownerId,
-                        labelId,
-                    })
-                    break;
-                }
-                default: {
-                    break;
+            for (const act of ruleActions) {
+                switch (act.actionType) {
+                    case "mark_read": {
+                        await markAsRead(thread.id, mailbox.id, identity.smtpAccountId);
+                        break;
+                    }
+                    case "flag": {
+                        await toggleStar(thread.id, mailbox.id, true, identity.smtpAccountId);
+                        break;
+                    }
+                    case "trash": {
+                        await moveToTrash(thread.id, mailbox.id, identity.smtpAccountId, message.id);
+                        break;
+                    }
+                    case "add_label": {
+                        const labelId = (act.params as any)?.labelId as string | undefined;
+                        if (!labelId) break;
+                        // Access control: only labels of the identity's workspace.
+                        const [label] = await db
+                            .select({ id: labels.id })
+                            .from(labels)
+                            .where(and(eq(labels.id, labelId), eq(labels.workspaceId, identity.workspaceId)))
+                            .limit(1);
+                        if (!label) break;
+                        await db.insert(mailboxThreadLabels).values({
+                            threadId: thread.id,
+                            mailboxId: mailbox.id,
+                            ownerId: mailbox.ownerId,
+                            // NOT NULL column whose default comes from the JWT, NULL on the worker side.
+                            workspaceId: identity.workspaceId,
+                            labelId,
+                        }).onConflictDoNothing();
+                        break;
+                    }
+                    default: {
+                        break;
+                    }
                 }
             }
-        }
 
-        if (rule.stopProcessing) break;
+        } catch (err) {
+            console.error("[COMMON] Rule failed, skipped:", rule.id, "message:", messageId, err);
+        }
+        if (matched && rule.stopProcessing) break;
     }
 };

@@ -1,7 +1,7 @@
 // Connexion par Cerise (OI 10297) : domaines (avec l'arobase, pièges compris), state à temps
 // constant, URL d'aller et de retour, lecture du profil /api/v1/me sur des fetch simulés
 // (jeton refusé, Cerise injoignable, profil incomplet), règle de rattachement (lien, adresse,
-// identité -> confirmation par mot de passe, création, ambiguïté), et câblage : ordre des
+// et identité -> confirmation par mot de passe, création, ambiguïté, jeton d'une autre app), et câblage : ordre des
 // contrôles dans la callback, lien posé seulement après un mot de passe vérifié, mot de passe
 // toujours accepté (Cerise ne ferme rien), bouton sur la page de login.
 // Aucune base, aucun réseau. Lancé par Dockerfile.web avant le build : rouge = pas d'image.
@@ -13,6 +13,8 @@ import { join } from "node:path";
 import {
 	CERISE_CALLBACK_PATH,
 	CERISE_DEFAULT_DOMAINS,
+	CERISE_LINK_COOKIE,
+	CERISE_STATE_COOKIE,
 	CeriseError,
 	ceriseAuthorizeUrl,
 	ceriseBaseUrl,
@@ -90,9 +92,11 @@ async function main() {
 	await test("profil /api/v1/me", () => {
 		const p = parseCeriseProfile({
 			user: { id: 12, email: " Samuel@SS2i-Digital.fr ", firstname: "Samuel", lastname: "LEGROS", fullname: "Samuel LEGROS" },
+			token: { name: "courrier" },
 		});
 		assert.deepEqual(p, {
 			id: "12",
+			tokenName: "courrier",
 			email: "samuel@ss2i-digital.fr",
 			firstname: "Samuel",
 			lastname: "LEGROS",
@@ -119,7 +123,7 @@ async function main() {
 		const p = await fetchCeriseProfile(
 			"https://c4.ss2i-services.fr",
 			"42|abcDEF",
-			fakeFetch(200, { user: { id: 7, email: "jb@ss2i-digital.fr" } }, seen),
+			fakeFetch(200, { user: { id: 7, email: "jb@ss2i-digital.fr" }, token: { name: "courrier" } }, seen),
 		);
 		assert.equal(p.id, "7");
 		assert.equal(seen.url, "https://c4.ss2i-services.fr/api/v1/me");
@@ -143,6 +147,10 @@ async function main() {
 		assert.equal(await code(fetchCeriseProfile(b, "t", fakeFetch(500, {}))), "unreachable");
 		assert.equal(await code(fetchCeriseProfile(b, "t", fakeFetch(200, "<html>"))), "profile");
 		assert.equal(await code(fetchCeriseProfile(b, "t", fakeFetch(200, { user: {} }))), "profile");
+		// Jeton d'une autre app du pont (Docator, Lore...) ou Cerise sans token.name : refusé.
+		const u = { id: 7, email: "jb@ss2i-digital.fr" };
+		assert.equal(await code(fetchCeriseProfile(b, "t", fakeFetch(200, { user: u, token: { name: "docator" } }))), "audience");
+		assert.equal(await code(fetchCeriseProfile(b, "t", fakeFetch(200, { user: u }))), "audience");
 		const down = (async () => {
 			throw new TypeError("fetch failed");
 		}) as unknown as typeof fetch;
@@ -162,10 +170,10 @@ async function main() {
 			resolveCeriseAccount({ linkedUserIds: ["u1", "u2"], userIdByEmail: null, identityOwnerIds: [] }),
 			{ kind: "ambiguous" },
 		);
-		// JB, Hugo : même adresse dans Cerise et dans courrier.
+		// JB, Hugo : même adresse dans Cerise et dans courrier ; premier lien confirmé quand même.
 		assert.deepEqual(
 			resolveCeriseAccount({ linkedUserIds: [], userIdByEmail: "u2", identityOwnerIds: ["u2"] }),
-			{ kind: "email", userId: "u2" },
+			{ kind: "confirm" },
 		);
 		// Samuel : compte samuel@ss2i.ca, Cerise samuel@ss2i-digital.fr (une identité du compte).
 		assert.deepEqual(
@@ -197,6 +205,10 @@ async function main() {
 		const signIn = at("signInUserAndRedirect(user)");
 		assert.ok(state < fetchP && fetchP < domain && domain < resolve && resolve < signIn);
 		assert.ok(at("cookieStore.delete({ name: CERISE_STATE_COOKIE") < state, "state consommé avant contrôle");
+		// Seul un lien existant ouvre une session ; jamais la seule adresse transmise par Cerise.
+		assert.ok(!s.includes('case "email"'));
+		const linkedCase = s.slice(at('case "linked"'), at('case "create"'));
+		assert.ok(!linkedCase.includes("linkCeriseAccount"));
 		// signInUserAndRedirect lève NEXT_REDIRECT : jamais dans un try.
 		assert.ok(!/try\s*{[^}]*signInUserAndRedirect/.test(s.replace(/\n/g, " ")));
 		assert.ok(!/token.*(insert|set\(|console)/i.test(s.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n").replace(/params\.get\("token"\)/g, "")),
@@ -207,6 +219,7 @@ async function main() {
 		const s = src("app/api/auth/cerise/route.ts");
 		assert.ok(s.includes("randomBytes(32)"));
 		assert.ok(s.includes("httpOnly: true"));
+		assert.ok(s.includes("secure: true") && s.includes('path: "/"'), "cookie __Host- : secure, path=/");
 		assert.ok(s.includes("ceriseCallbackUrl(getPublicEnv().WEB_URL, state)"));
 		assert.ok(s.includes('status: 404'));
 	});
@@ -215,10 +228,11 @@ async function main() {
 		const s = src("lib/actions/auth.ts");
 		const verify = s.indexOf("argon2.verify(");
 		const invalid = s.indexOf('return { error: "Invalid credentials" }', verify);
-		const consume = s.indexOf("consumePendingCeriseLink(user.id)");
+		const consume = s.indexOf("consumePendingCeriseLink(user.id, formData.get(CERISE_LINK_FIELD)");
 		const signIn = s.indexOf("signInUserAndRedirect(user, locale)");
 		assert.ok(verify > 0 && invalid > verify && consume > invalid && signIn > consume);
 		assert.ok(!s.includes("CERISE_ONLY"), "Cerise ne ferme pas le mot de passe (Samuel le 05/11)");
+		assert.ok(s.includes("cookieStore.delete(CERISE_LINK_COOKIE)"), "signOut efface le lien en attente");
 	});
 
 	await test("page de login : bouton Cerise et lien en attente", () => {
@@ -228,6 +242,7 @@ async function main() {
 		const page = src("app/[locale]/auth/login/page.tsx");
 		assert.ok(page.includes("readPendingCeriseLink()"));
 		assert.ok(page.includes("ceriseEnabled"));
+		assert.ok(form.includes('name="cerise_link_confirm" value="1"'), "case explicite");
 	});
 
 	await test("lien : un compte Cerise n'ouvre qu'un compte courrier", () => {
@@ -235,6 +250,17 @@ async function main() {
 		assert.ok(s.includes("existing.some((r) => r.userId !== userId)"));
 		assert.ok(s.includes('setAudience(LINK_AUDIENCE)') && s.includes("audience: LINK_AUDIENCE"));
 		assert.ok(s.includes('algorithms: ["HS256"]'));
+		// Consommation : cookie toujours effacé, lien seulement si demandé ET adresse du compte.
+		const c = s.slice(s.indexOf("export async function consumePendingCeriseLink"));
+		assert.ok(c.indexOf("clearPendingCeriseLink()") < c.indexOf("if (!pending || !confirmed) return"));
+		assert.ok(c.indexOf("userOwnsAddress(userId, pending.email)") < c.indexOf("linkCeriseAccount(userId, pending)"));
+		assert.ok(s.includes("return inserted.length > 0"));
+	});
+
+	await test("cookies __Host- et session sans audience", () => {
+		assert.ok(CERISE_STATE_COOKIE.startsWith("__Host-") && CERISE_LINK_COOKIE.startsWith("__Host-"));
+		assert.ok(src("lib/auth-session.ts").includes("payload.aud !== undefined"));
+		assert.ok(src("proxy.ts").includes("payload.aud === undefined"));
 	});
 
 	console.log(`cerise-auth : ${passed} tests OK`);

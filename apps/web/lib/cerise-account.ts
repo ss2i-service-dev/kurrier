@@ -120,7 +120,7 @@ export async function linkCeriseAccount(userId: string, profile: CeriseProfile):
 	}
 	if (!provider) return false;
 
-	await db
+	const inserted = await db
 		.insert(authAccounts)
 		.values({
 			userId,
@@ -136,8 +136,32 @@ export async function linkCeriseAccount(userId: string, profile: CeriseProfile):
 			},
 			workspaceId: workspace.id,
 		})
-		.onConflictDoNothing();
-	return true;
+		.onConflictDoNothing()
+		.returning({ id: authAccounts.id });
+	return inserted.length > 0;
+}
+
+/** Le compte a-t-il cette adresse, comme adresse de connexion ou comme identité d'envoi ? */
+export async function userOwnsAddress(userId: string, email: string): Promise<boolean> {
+	const e = normalizeEmail(email);
+	const [u] = await db
+		.select({ id: users.id })
+		.from(users)
+		.where(and(eq(users.id, userId), sql`lower(${users.email}) = ${e}`))
+		.limit(1);
+	if (u) return true;
+	const [i] = await db
+		.select({ id: identities.id })
+		.from(identities)
+		.where(
+			and(
+				eq(identities.ownerId, userId),
+				eq(identities.kind, "email"),
+				sql`lower(${identities.value}) = ${e}`,
+			),
+		)
+		.limit(1);
+	return !!i;
 }
 
 /**
@@ -159,7 +183,7 @@ export async function setPendingCeriseLink(profile: CeriseProfile) {
 	const cookieStore = await cookies();
 	cookieStore.set(CERISE_LINK_COOKIE, token, {
 		httpOnly: true,
-		secure: process.env.NODE_ENV === "production",
+		secure: true,
 		sameSite: "lax",
 		path: "/",
 		maxAge: CERISE_LINK_TTL_SECONDS,
@@ -193,13 +217,23 @@ export async function clearPendingCeriseLink() {
 	cookieStore.delete(CERISE_LINK_COOKIE);
 }
 
-/** Appelé par le login par mot de passe, une fois le mot de passe vérifié. */
-export async function consumePendingCeriseLink(userId: string) {
+/**
+ * Appelé par le login par mot de passe, une fois le mot de passe vérifié. Le cookie est
+ * toujours effacé. Le lien ne se pose que si l'utilisateur l'a demandé explicitement (case du
+ * formulaire, affichée par la bannière) ET que le compte a l'adresse transmise par Cerise
+ * (adresse de connexion ou identité, relue en base) : un cookie oublié sur un poste partagé
+ * ne lie pas le Cerise de A au compte de B.
+ */
+export async function consumePendingCeriseLink(userId: string, confirmed: boolean) {
 	const pending = await readPendingCeriseLink();
-	if (!pending) return;
 	await clearPendingCeriseLink();
+	if (!pending || !confirmed) return;
+	if (!(await userOwnsAddress(userId, pending.email))) {
+		console.warn(`[cerise] lien refuse : ${pending.email} n'est pas une adresse de user ${userId}`);
+		return;
+	}
 	const ok = await linkCeriseAccount(userId, pending);
 	console.info(
-		`[cerise] lien ${ok ? "pose" : "refuse (deja lie a un autre compte)"} : cerise ${pending.id} (${pending.email}) -> user ${userId}`,
+		`[cerise] lien ${ok ? "pose" : "non pose (deja lie ailleurs ou conflit)"} : cerise ${pending.id} (${pending.email}) -> user ${userId}`,
 	);
 }

@@ -260,6 +260,11 @@ export async function verifyAndDecode(
 		if (!payload.sub) {
 			return null;
 		}
+		// ss2i (OI 10297) : la session ne porte jamais d'audience ; un autre jeton signé avec
+		// JWT_SECRET (lien Cerise en attente, aud courrier:cerise-link) n'en est pas une.
+		if (payload.aud !== undefined) {
+			return null;
+		}
 
 		return payload;
 	} catch {

@@ -57,16 +57,16 @@ export default async function LoginPage({ params, searchParams }: {
 				{pendingLink && (
 					<div className="rounded-md bg-blue-50 border border-blue-200 p-3" data-testid="cerise-link-pending">
 						<p className="text-sm text-blue-900">
-							Cerise t&apos;a reconnu comme <strong>{pendingLink.email}</strong>. Cette adresse est une identité
-							de ton compte courrier : connecte-toi une fois avec ton adresse et ton mot de passe courrier,
-							les deux connexions seront liées. Ensuite, le bouton Cerise suffira.
+							Cerise t&apos;a reconnu comme <strong>{pendingLink.email}</strong>. Pour lier Cerise à ton compte
+							courrier, connecte-toi une fois ci-dessous avec ton adresse et ton mot de passe courrier, case
+							cochée. Ensuite, le bouton Cerise suffira.
 						</p>
 					</div>
 				)}
 				<LoginForm dict={dict} oidc={{
 					googleEnabled: !!googleEnabled,
 					ceriseEnabled,
-				}} />
+				}} pendingCeriseEmail={pendingLink?.email ?? null} />
 			</div>
 		</div>
 	);

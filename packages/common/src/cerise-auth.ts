@@ -18,8 +18,12 @@ import { timingSafeEqual } from "node:crypto";
 export const CERISE_APP_SLUG = "courrier";
 export const CERISE_PROVIDER_NAME = "cerise";
 export const CERISE_CALLBACK_PATH = "/api/auth/cerise/callback";
-export const CERISE_STATE_COOKIE = "cerise_state";
-export const CERISE_LINK_COOKIE = "cerise_link";
+// Préfixe __Host- : cookie posé par mail.ss2i.ca seul, en https, sur path=/ ; un sous-domaine
+// voisin ne peut ni l'écraser ni en injecter un (login-CSRF par cookie).
+export const CERISE_STATE_COOKIE = "__Host-cerise_state";
+export const CERISE_LINK_COOKIE = "__Host-cerise_link";
+// Champ du formulaire de login qui accepte explicitement le lien en attente.
+export const CERISE_LINK_FIELD = "cerise_link_confirm";
 export const CERISE_STATE_TTL_SECONDS = 10 * 60;
 export const CERISE_LINK_TTL_SECONDS = 15 * 60;
 export const CERISE_FETCH_TIMEOUT_MS = 10_000;
@@ -29,6 +33,8 @@ export const CERISE_DEFAULT_DOMAINS = ["ss2i.ca", "ss2i-digital.fr", "ss2i-servi
 
 export type CeriseProfile = {
 	id: string;
+	/** Application pour laquelle Cerise a émis le jeton (/api/v1/me, token.name). */
+	tokenName?: string | null;
 	email: string;
 	firstname: string | null;
 	lastname: string | null;
@@ -44,6 +50,7 @@ export class CeriseError extends Error {
 			| "unreachable"
 			| "rejected"
 			| "profile"
+			| "audience"
 			| "domain",
 		message: string,
 	) {
@@ -120,8 +127,10 @@ export function parseCeriseProfile(json: unknown): CeriseProfile | null {
 	const email = typeof user.email === "string" ? normalizeEmail(user.email) : "";
 	if (!id || !email || !email.includes("@")) return null;
 	const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+	const token = (json as { token?: { name?: unknown } }).token;
 	return {
 		id,
+		tokenName: typeof token?.name === "string" ? token.name : null,
 		email,
 		firstname: str(user.firstname),
 		lastname: str(user.lastname),
@@ -162,23 +171,28 @@ export async function fetchCeriseProfile(
 	}
 	const profile = parseCeriseProfile(json);
 	if (!profile) throw new CeriseError("profile", "Profil Cerise incomplet");
+	// Tous les jetons du pont ont les pleins droits et la plupart n'expirent pas (Docator,
+	// Lore...) : un jeton émis pour une autre app n'ouvre pas courrier.
+	if (profile.tokenName !== CERISE_APP_SLUG) {
+		throw new CeriseError("audience", `Jeton emis pour « ${profile.tokenName ?? "?"} », pas pour courrier`);
+	}
 	return profile;
 }
 
 /**
  * Comment ouvrir la session une fois Cerise passé, dans cet ordre :
- * - « linked » : ce compte Cerise est déjà lié à un compte courrier ;
- * - « email » : un compte courrier a exactement cette adresse de connexion (lien créé) ;
- * - « confirm » : l'adresse est seulement une identité d'envoi d'un compte courrier (cas de
- *   Samuel : compte samuel@ss2i.ca, Cerise samuel@ss2i-digital.fr). Pas d'ouverture sur la
- *   seule foi d'une identité (une boîte partagée peut porter l'adresse d'un autre) : le
- *   titulaire confirme une fois avec son mot de passe courrier, le lien est alors posé ;
- * - « create » : personne, compte créé et lié ;
+ * - « linked » : ce compte Cerise est déjà lié à un compte courrier, session ouverte ;
+ * - « confirm » : un compte courrier a cette adresse, comme adresse de connexion (JB, Hugo)
+ *   ou seulement comme identité d'envoi (Samuel : compte samuel@ss2i.ca, Cerise
+ *   samuel@ss2i-digital.fr). Le PREMIER lien se confirme une fois par le mot de passe
+ *   courrier de ce compte : l'adresse transmise par Cerise ne suffit jamais à ouvrir un
+ *   compte existant (revue de sécurité du 05/11 : elle était modifiable par chacun dans son
+ *   profil Cerise, et une boîte partagée porte l'adresse d'un autre) ;
+ * - « create » : aucun compte ni identité à cette adresse, compte créé et lié ;
  * - « ambiguous » : le compte Cerise est lié à plusieurs comptes courrier, rien n'est ouvert.
  */
 export type CeriseResolution =
 	| { kind: "linked"; userId: string }
-	| { kind: "email"; userId: string }
 	| { kind: "confirm" }
 	| { kind: "create" }
 	| { kind: "ambiguous" };
@@ -191,7 +205,6 @@ export function resolveCeriseAccount(input: {
 	const linked = Array.from(new Set(input.linkedUserIds));
 	if (linked.length > 1) return { kind: "ambiguous" };
 	if (linked.length === 1) return { kind: "linked", userId: linked[0] };
-	if (input.userIdByEmail) return { kind: "email", userId: input.userIdByEmail };
-	if (input.identityOwnerIds.length > 0) return { kind: "confirm" };
+	if (input.userIdByEmail || input.identityOwnerIds.length > 0) return { kind: "confirm" };
 	return { kind: "create" };
 }

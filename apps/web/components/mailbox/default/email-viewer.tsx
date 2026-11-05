@@ -33,14 +33,20 @@ export const BASE_CSS = `
   font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";
   background: var(--bg);
   color: var(--text);
-   word-break: break-word;
-   overflow-wrap: anywhere;       /* allow wrapping mid-word */
+   /* ss2i : break-word et pas anywhere (ni word-break: break-word, qui vaut
+      anywhere dans Chrome) : anywhere fait tomber la largeur minimale d'une
+      cellule à une lettre, l'algorithme des tableaux répartit alors mal la
+      largeur et coupe les mots au milieu (« Aucun/e »). break-word ne coupe
+      qu'un mot qui déborde vraiment. Un tableau trop large défile au lieu
+      d'être rogné. */
+   overflow-wrap: break-word;
    white-space: normal !important; /* override inline nowrap */
+   overflow-x: auto;
 }
 
 
 .email-root * {
-  word-wrap: break-word !important; /* enforce wrapping for nested tags */
+  overflow-wrap: break-word !important; /* enforce wrapping for nested tags */
   white-space: normal !important;   /* neutralize inline nowrap */
 }
 

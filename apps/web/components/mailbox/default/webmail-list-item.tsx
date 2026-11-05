@@ -26,10 +26,12 @@ type Props = {
 	labelsByThreadId: FetchMailboxThreadLabelsResult;
 	workspacePublicId?: string;
 	// ss2i : ordre affiche des fils, pour la selection par plage (Shift+clic).
-	orderedThreadIds?: string[];
+	// Obligatoire : une liste qui l'oublie casse Maj+clic (regression du 05/11/2026).
+	orderedThreadIds: string[];
 };
 import { Temporal } from "@js-temporal/polyfill";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
+import { toggleThreadSelection } from "@/lib/thread-selection";
 import { ThreadDragHandle } from "@/components/mailbox/default/client-link-ui";
 import { toast } from "sonner";
 import { moveWithUndo } from "@/lib/pending-moves";
@@ -47,7 +49,7 @@ export default function WebmailListItem({
 	globalLabels,
 	labelsByThreadId,
 	workspacePublicId,
-	orderedThreadIds = [],
+	orderedThreadIds,
 }: Props) {
 	const showSnippet = useShowSnippet();
 	function formatDateLabel(input?: string | number | Date) {
@@ -225,26 +227,10 @@ export default function WebmailListItem({
 	}>();
 
 	// ss2i : Shift+clic applique l'etat de la case cliquee a toute la plage
-	// depuis la derniere case cliquee, comme Gmail. Mise a jour fusionnee : le
-	// setState du contexte remplace l'etat entier.
+	// depuis la derniere case cliquee, comme Gmail (lib/thread-selection.ts, teste).
 	const toggleSelection = (shiftKey: boolean) => {
 		const id = mailboxThreadItem.threadId;
-		setState((prev) => {
-			const next = new Set(prev?.selectedThreadIds);
-			const willCheck = !next.has(id);
-			const anchor = prev?.lastSelectedThreadId;
-			const from = anchor ? orderedThreadIds.indexOf(anchor) : -1;
-			const to = orderedThreadIds.indexOf(id);
-			const ids =
-				shiftKey && from >= 0 && to >= 0
-					? orderedThreadIds.slice(Math.min(from, to), Math.max(from, to) + 1)
-					: [id];
-			for (const t of ids) {
-				if (willCheck) next.add(t);
-				else next.delete(t);
-			}
-			return { ...prev, selectedThreadIds: next, lastSelectedThreadId: id };
-		});
+		setState((prev) => toggleThreadSelection(prev, id, shiftKey, orderedThreadIds));
 	};
 
 	return (

@@ -15,6 +15,7 @@ import { FetchMailboxThreadsResult } from "@/lib/actions/mailbox";
 import { FetchLabelsResult, FetchMailboxThreadLabelsResult } from "@/lib/actions/labels";
 import { IconPin, IconPinnedFilled, IconPinnedOff, IconStar, IconStarFilled } from "@tabler/icons-react";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
+import { toggleThreadSelection } from "@/lib/thread-selection";
 import { ThreadDragHandle } from "@/components/mailbox/default/client-link-ui";
 import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 import ThreadLabelHoverButtons from "@/components/dashboard/labels/thread-label-hover-buttons";
@@ -104,21 +105,9 @@ export default function KThreadRow({
 
 	const toggleSelection = (shiftKey: boolean) => {
 		const id = item.threadId;
-		setState((prev) => {
-			const next = new Set(prev?.selectedThreadIds);
-			const willCheck = !next.has(id);
-			const anchor = prev?.lastSelectedThreadId;
-			const from = anchor ? orderedThreadIds.indexOf(anchor) : -1;
-			const to = orderedThreadIds.indexOf(id);
-			const range =
-				shiftKey && from >= 0 && to >= 0 ? orderedThreadIds.slice(Math.min(from, to), Math.max(from, to) + 1) : [id];
-			for (const t of range) {
-				if (willCheck) next.add(t);
-				else next.delete(t);
-			}
-			return { ...prev, selectedThreadIds: next, lastSelectedThreadId: id };
-		});
+		setState((prev) => toggleThreadSelection(prev, id, shiftKey, orderedThreadIds));
 	};
+
 
 	const openThread = (e: React.MouseEvent) => {
 		// Mode selection (comme la classique) : un clic coche au lieu d'ouvrir.

@@ -39,6 +39,50 @@ import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import { MessageEntity } from "@db";
 import { FocusTrap } from "@mantine/core";
 import { KSignatureSlot } from "@/components/k/signature-slot";
+import { imageFileToDataUrl, pastedImageFiles } from "@/lib/paste-image";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
+
+// ss2i : l'extension Image de Tiptap ecarte les images data: par defaut (allowBase64) :
+// une image collee, celle d'un brouillon repris ou d'une signature disparaissait.
+const MailImage = Image.configure({ allowBase64: true });
+
+// ss2i : image du presse-papiers ou deposee, inseree dans le corps a la position voulue.
+// Le curseur repart sous l'image : laissee selectionnee, la frappe suivante (ou un second
+// collage) la remplacait.
+function insertImageFiles(view: any, files: File[], pos?: number) {
+	(async () => {
+		for (const file of files) {
+			let src: string;
+			try {
+				src = await imageFileToDataUrl(file);
+			} catch {
+				continue;
+			}
+			if (view.isDestroyed) return;
+			const { schema } = view.state;
+			const node = schema.nodes.image?.create({ src, alt: file.name || "image" });
+			if (!node) return;
+			let tr = view.state.tr;
+			if (typeof pos === "number") {
+				const at = Math.max(0, Math.min(pos, tr.doc.content.size));
+				tr = tr.setSelection(TextSelection.near(tr.doc.resolve(at)));
+			}
+			tr = tr.replaceSelectionWith(node, false);
+			let end = tr.selection instanceof NodeSelection ? tr.selection.to : tr.selection.from;
+			if (!(tr.selection instanceof NodeSelection)) {
+				view.dispatch(tr.scrollIntoView());
+				if (typeof pos === "number") pos = tr.selection.from;
+				continue;
+			}
+			const next = tr.doc.nodeAt(end);
+			if (!next || !next.isTextblock) tr = tr.insert(end, schema.nodes.paragraph.create());
+			tr = tr.setSelection(TextSelection.create(tr.doc, end + 1));
+			view.dispatch(tr.scrollIntoView());
+			if (typeof pos === "number") pos = end + 1;
+		}
+		view.focus();
+	})();
+}
 
 function formatWhen(d: Date) {
 	return Temporal.Instant.from(d.toISOString())
@@ -88,14 +132,32 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 						// le lien de StarterKit ferait doublon avec celui de Mantine (Link)
 						StarterKit.configure({ link: false }),
 						Link,
-						Image,
+						MailImage,
 						TextStyle,
 						Color,
 						FontSize,
 						Highlight.configure({ multicolor: true }),
 						TextAlign.configure({ types: ["heading", "paragraph"] }),
 					]
-				: [StarterKit, Link, Image],
+				: [StarterKit, Link, MailImage],
+			editorProps: {
+				handlePaste: (view, event) => {
+					const files = pastedImageFiles(event.clipboardData, { ignoreIfText: true });
+					if (!files.length) return false;
+					event.preventDefault();
+					insertImageFiles(view, files);
+					return true;
+				},
+				handleDrop: (view, event, _slice, moved) => {
+					if (moved) return false;
+					const files = pastedImageFiles(event.dataTransfer, { ignoreIfText: false });
+					if (!files.length) return false;
+					event.preventDefault();
+					const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
+					insertImageFiles(view, files, at?.pos);
+					return true;
+				},
+			},
 			// ss2i : reprise d'un brouillon, le corps enregistre est le contenu initial.
 			content: fromStoredHtml(defaultValue),
 			onCreate: ({ editor }) => {

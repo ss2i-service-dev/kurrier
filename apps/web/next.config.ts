@@ -7,6 +7,9 @@ const nextConfig: NextConfig = {
 	reactCompiler: true,
 	experimental: {
 		proxyClientMaxBodySize: "10gb",
+		// ss2i : le corps du mail (images collees en data: URI) passe par les actions
+		// serveur sendMail et saveDraft, limitees a 1 Mo par defaut.
+		serverActions: { bodySizeLimit: "40mb" },
 	},
 	// cacheComponents: true,
 	images: {

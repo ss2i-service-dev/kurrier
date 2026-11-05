@@ -10,9 +10,11 @@
 import { and, eq } from "drizzle-orm";
 import { identities, type MessageEntity, mailboxThreads, messages } from "@db";
 import { getServerEnv } from "@schema";
+import { DEFAULT_PRO_DOMAINS, parseDomainList } from "@common/crm-match";
 import {
 	LoreError,
 	type LoreSource,
+	loreActAs,
 	loreConfigMessage,
 	loreConfigMissing,
 	loreDraftBody,
@@ -108,7 +110,13 @@ export async function replyWithLore(input: {
 			crmCompanyIds: companies.map((c) => c.companyId),
 		});
 		const reply = await requestLoreReply(
-			{ url: env.LORE_URL!, token: env.LORE_APP_TOKEN!, actAs: user.email },
+			{ url: env.LORE_URL!, token: env.LORE_APP_TOKEN!, actAs: loreActAs({
+					accountEmail: user.email,
+					threadIdentity: ident.value,
+					identities: own.map((i) => i.value),
+					proDomains: parseDomainList(env.CRM_PRO_DOMAINS, DEFAULT_PRO_DOMAINS),
+				}),
+			},
 			request,
 		);
 

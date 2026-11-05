@@ -126,7 +126,7 @@ The web app forwards `/api/kurrier/*` and `/api/v1/*` to the worker. MCP clients
 Installation and configuration are the same as upstream; see the [Kurrier documentation](https://www.kurrier.org). Differences:
 
 - **Images.** `db/docker-compose.yml` pulls upstream's `ghcr.io/kurrier-org/kurrier-web` and `kurrier-worker` images. To run this fork, build the images from this repository (`apps/web/Dockerfile`, `apps/worker/Dockerfile`) and point the compose file at them.
-- **Database.** Four migrations are added (`db/init/migrations/004` to `007`: MCP OAuth tables, recipient statistics, blocked senders, thread merging). The bootstrap service applies them like upstream's, in order.
+- **Database.** Four migrations are added (`db/init/migrations/community_001` to `community_004`, prefixed so that they never share a name with upstream's own numbered migrations: MCP OAuth tables, recipient statistics, blocked senders, thread merging). The bootstrap service applies them like upstream's, in order.
 - **Inbound webhooks.** If you receive mail through provider webhooks, set the matching secret, otherwise the worker answers 403.
 
 Environment variables added by this fork, all optional:

@@ -92,7 +92,8 @@ async function hasValidSession(request: NextRequest) {
 	if (!secret) return false;
 	try {
 		const { payload } = await jwtVerify(token, new TextEncoder().encode(secret));
-		return Boolean(payload.sub);
+		// ss2i (OI 10297) : jeton à audience (lien Cerise en attente) = pas une session.
+		return Boolean(payload.sub) && payload.aud === undefined;
 	} catch {
 		return false;
 	}

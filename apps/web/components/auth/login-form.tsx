@@ -25,11 +25,12 @@ export function LoginForm({
 	className,
 	oidc,
 	dict,
+	pendingCeriseEmail,
 	...props
 }: React.ComponentProps<"div"> & {oidc?: {
 		googleEnabled?: boolean;
 		ceriseEnabled?: boolean;
-	} }  & {dict: Dictionary}) {
+	} }  & {dict: Dictionary; pendingCeriseEmail?: string | null}) {
 	const [formState, formAction, isPending] = useActionState<
 		FormState,
 		FormData
@@ -59,6 +60,13 @@ export function LoginForm({
 				<CardContent>
 					<Form action={formAction}>
 						<input type="hidden" name="locale" value={dict.locale} />
+						{/* ss2i (OI 10297) : accord explicite pour lier le compte Cerise en attente. */}
+						{pendingCeriseEmail && (
+							<label className="flex items-start gap-2 text-sm mb-4" data-testid="cerise-link-confirm">
+								<input type="checkbox" name="cerise_link_confirm" value="1" defaultChecked className="mt-1" />
+								<span>Lier mon compte Cerise ({pendingCeriseEmail}) à ce compte courrier</span>
+							</label>
+						)}
 						<div className="grid gap-6">
 							{/*TODO Google Login*/}
 							{/*<div className="flex flex-col gap-4">*/}

@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
 
 	const cookieStore = await cookies();
 	const cookieState = cookieStore.get(CERISE_STATE_COOKIE)?.value;
-	cookieStore.delete({ name: CERISE_STATE_COOKIE, path: "/api/auth/cerise" });
+	cookieStore.delete({ name: CERISE_STATE_COOKIE, path: "/", secure: true });
 
 	const params = request.nextUrl.searchParams;
 	if (!ceriseStateMatches(cookieState, params.get("state"))) {
@@ -57,7 +57,9 @@ export async function GET(request: NextRequest) {
 	} catch (e) {
 		const code = e instanceof CeriseError ? e.code : "unreachable";
 		console.warn(`[cerise] profil non obtenu (${code}) : ${(e as Error).message}`);
-		return toLogin(code === "rejected" || code === "token" ? "cerise_rejected" : "cerise_unreachable");
+		return toLogin(
+			code === "rejected" || code === "token" || code === "audience" ? "cerise_rejected" : "cerise_unreachable",
+		);
 	}
 
 	if (!isAllowedCeriseEmail(profile.email, parseAllowedDomains(env.CERISE_ALLOWED_DOMAINS))) {
@@ -74,18 +76,11 @@ export async function GET(request: NextRequest) {
 			return toLogin("cerise_ambiguous");
 		case "confirm":
 			await setPendingCeriseLink(profile);
-			console.info(`[cerise] ${profile.email} : confirmation par mot de passe demandee`);
+			console.info(`[cerise] ${profile.email} (cerise ${profile.id}) : premier lien, confirmation par mot de passe demandee`);
 			return toLogin("cerise_confirm");
 		case "linked":
 			userId = resolution.userId;
 			break;
-		case "email": {
-			userId = resolution.userId;
-			const ok = await linkCeriseAccount(userId, profile);
-			if (!ok) return toLogin("cerise_ambiguous");
-			console.info(`[cerise] lien pose par adresse : cerise ${profile.id} -> user ${userId}`);
-			break;
-		}
 		case "create": {
 			// Mot de passe aléatoire jamais communiqué : le compte s'ouvre par Cerise, et un
 			// départ de la société en ferme l'accès en fermant Cerise.

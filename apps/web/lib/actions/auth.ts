@@ -12,6 +12,7 @@ import * as crypto from "node:crypto";
 // workspace vivent dans un module serveur qui n'est pas un module d'actions.
 import { createUserWithWorkspace, signInUserAndRedirect, verifyAndDecode } from "@/lib/auth-session";
 import { consumePendingCeriseLink } from "@/lib/cerise-account";
+import { CERISE_LINK_COOKIE, CERISE_LINK_FIELD } from "@common/cerise-auth";
 
 
 export async function login(
@@ -40,9 +41,11 @@ export async function login(
 		return { error: "Invalid credentials" };
 	}
 
-	// ss2i (OI 10297) : retour de Cerise sur une adresse qui n'est qu'une identité de ce
-	// compte (cookie cerise_link) : le mot de passe vient d'être vérifié, le lien se pose.
-	await consumePendingCeriseLink(user.id);
+	// ss2i (OI 10297) : premier passage par Cerise sur une adresse de ce compte (cookie
+	// cerise_link) : le mot de passe vient d'être vérifié ; le lien se pose seulement si la
+	// case « lier Cerise » est cochée et que le compte a cette adresse. Le cookie est effacé
+	// dans tous les cas.
+	await consumePendingCeriseLink(user.id, formData.get(CERISE_LINK_FIELD) === "1");
 
 	await signInUserAndRedirect(user, locale);
 
@@ -120,6 +123,7 @@ export type FetchIsSignedInResult = Awaited<ReturnType<typeof isSignedIn>>;
 export const signOut = async (redirectUrl?: string) => {
 	const cookieStore = await cookies();
 	cookieStore.delete("session");
+	cookieStore.delete(CERISE_LINK_COOKIE);
 	redirect(redirectUrl ? redirectUrl : "/auth/login");
 };
 

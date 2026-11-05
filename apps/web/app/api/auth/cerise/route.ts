@@ -24,9 +24,9 @@ export async function GET() {
 	const cookieStore = await cookies();
 	cookieStore.set(CERISE_STATE_COOKIE, state, {
 		httpOnly: true,
-		secure: process.env.NODE_ENV === "production",
+		secure: true,
 		sameSite: "lax",
-		path: "/api/auth/cerise",
+		path: "/",
 		maxAge: CERISE_STATE_TTL_SECONDS,
 	});
 

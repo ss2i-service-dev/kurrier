@@ -5,13 +5,15 @@
 //   1) logique de plage (lib/thread-selection.ts) ;
 //   2) cablage : toute liste qui rend une ligne de fil (WebmailListItem, KThreadRow) lui
 //      passe orderedThreadIds, sinon Maj+clic ne coche qu'une ligne (regression du
-//      05/11 : recherche, libelles, clients, orphelins).
+//      05/11 : recherche, libelles, clients, orphelins) ;
+//   3) Maj+clic ne surligne pas le texte des lignes : chaque ligne de fil bloque la
+//      selection de texte native sur un appui souris avec Maj (preventShiftTextSelection).
 // Lancement (depuis la racine) :
 //   node_modules/.bin/tsx apps/web/test/thread-selection.ts
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { toggleThreadSelection } from "../lib/thread-selection";
+import { preventShiftTextSelection, toggleThreadSelection } from "../lib/thread-selection";
 
 let failures = 0;
 const test = (label: string, fn: () => void) => {
@@ -78,6 +80,28 @@ test("meme fil dans deux dossiers (recherche) : plage correcte", () => {
 	s = toggleThreadSelection(s, "d", true, dup);
 	assert.deepEqual(sel(s), ["a", "b", "c", "d"]);
 });
+
+test("appui souris avec Maj : selection de texte native bloquee", () => {
+	let prevented = 0;
+	preventShiftTextSelection({ shiftKey: true, preventDefault: () => prevented++ });
+	assert.equal(prevented, 1);
+});
+
+test("appui souris sans Maj : rien n'est bloque (texte selectionnable, glisser possible)", () => {
+	let prevented = 0;
+	preventShiftTextSelection({ shiftKey: false, preventDefault: () => prevented++ });
+	assert.equal(prevented, 0);
+});
+
+// Chaque composant de ligne branche preventShiftTextSelection sur son <li>.
+for (const rel of ["components/mailbox/default/webmail-list-item.tsx", "components/k/thread-row.tsx"]) {
+	test(`la ligne ${rel} ne surligne pas le texte au Maj+clic`, () => {
+		const src = readFileSync(join(__dirname, "..", rel), "utf8");
+		const li = src.indexOf("<li");
+		assert.ok(li >= 0, "aucun <li> dans le composant");
+		assert.match(src.slice(li, li + 600), /onMouseDown=\{preventShiftTextSelection\}/, "onMouseDown={preventShiftTextSelection} absent du <li>");
+	});
+}
 
 // Cablage : chaque <WebmailListItem ...> et <KThreadRow ...> recoit orderedThreadIds.
 const webRoot = join(__dirname, "..");

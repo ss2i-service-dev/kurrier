@@ -4,6 +4,7 @@ import { ImapFlow } from "imapflow";
 import slugify from "@sindresorhus/slugify";
 import {
 	ImapBox,
+	isAllMailBox,
 	isGmailAccountFromBoxes,
 	shouldSyncBox,
 } from "./discover-gmail";
@@ -15,6 +16,7 @@ import {
 	inferKind,
 } from "./discover-helpers";
 import { ensureTrashFolder } from "./discover-trash";
+import { ensureArchiveFolder } from "./discover-archive";
 
 export const discoverMailboxes = async (
 	client: ImapFlow,
@@ -87,14 +89,24 @@ export const discoverMailboxes = async (
 
 		const existing = await findLocalByPath(identity.id, path);
 
+		// The slug of a system folder MUST be its canonical kind: the application looks for "trash",
+		// "sent", "spam"... never "deleted-items". A server that names its folders differently
+		// (Stalwart: "Deleted Items") would make deletion fail ("Mailbox not found").
+		// On Gmail, "All Mail" stands in for the archive folder (archiving a message in Gmail means
+		// removing its INBOX label: it then lives only there).
+		const kind =
+			isGmail && isAllMailBox(mbx.specialUse as string | undefined)
+				? "archive"
+				: inferKind(mbx.name, mbx.specialUse as string | undefined);
+		const slug = kind === "custom" ? slugify(mbx.name.toLowerCase()) : kind;
 		const valuesBase = {
 			ownerId: identity.ownerId,
 			workspaceId,
 			identityId: identity.id,
 			parentId,
 			name,
-			slug: slugify(mbx.name.toLowerCase()),
-			kind: inferKind(mbx.name, mbx.specialUse as string | undefined),
+			slug,
+			kind,
 			isDefault: path === "INBOX",
 			metaData: meta,
 		};
@@ -112,7 +124,10 @@ export const discoverMailboxes = async (
 					identityId: identity.id,
 					mailboxId: row.id,
 					uidValidity: box.uidValidity!,
-					lastSeenUid: 0,
+					// The regular sync downloads EVERYTHING above lastSeenUid, without a quota. At 0, a newly
+					// discovered folder would be pulled in full on the first new message, before the backfill
+					// (which sets this marker) gets to it. History is the backfill's job, under quota.
+					lastSeenUid: Math.max(0, (box.uidNext ?? 1) - 1),
 					backfillCursorUid: Math.max(0, (box.uidNext ?? 1) - 1),
 					phase: "BACKFILL",
 				});
@@ -123,7 +138,7 @@ export const discoverMailboxes = async (
 				.set({
 					parentId,
 					name,
-					slug: slugify(path.toLowerCase()),
+					slug: existing.kind === "custom" ? slugify(path.toLowerCase()) : existing.kind,
 					metaData: meta as any,
 					updatedAt: new Date(),
 				} as any)
@@ -140,7 +155,10 @@ export const discoverMailboxes = async (
 						identityId: identity.id,
 						mailboxId: existing.id,
 						uidValidity: box.uidValidity!,
-						lastSeenUid: 0,
+						// The regular sync downloads EVERYTHING above lastSeenUid, without a quota. At 0, a newly
+						// discovered folder would be pulled in full on the first new message, before the backfill
+						// (which sets this marker) gets to it. History is the backfill's job, under quota.
+						lastSeenUid: Math.max(0, (box.uidNext ?? 1) - 1),
 						backfillCursorUid: Math.max(0, (box.uidNext ?? 1) - 1),
 						phase: "BACKFILL",
 					});
@@ -175,4 +193,5 @@ export const discoverMailboxes = async (
 	}
 
 	await ensureTrashFolder(client, identity);
+	await ensureArchiveFolder(client, identity);
 };

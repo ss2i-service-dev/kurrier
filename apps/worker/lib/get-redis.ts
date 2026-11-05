@@ -40,6 +40,11 @@ const migrationWorkerEvents = new QueueEvents(
 const davWorkerQueue = new Queue("dav-worker", redisConnection);
 const davWorkerEvents = new QueueEvents("dav-worker", redisConnection);
 
+// Dedicated queue for the IMAP backfill. "smtp-worker" handles one job at a time, so a
+// long backfill running there would block deletions, archiving and flag changes behind it
+// (see server/plugins/smtp-worker.ts).
+const backfillQueue = new Queue("imap-backfill", redisConnection);
+
 export async function getRedis() {
 	await Promise.all([
 		smtpEvents.waitUntilReady(),
@@ -63,5 +68,6 @@ export async function getRedis() {
 		migrationWorkerEvents,
 		davWorkerQueue,
 		davWorkerEvents,
+		backfillQueue,
 	};
 }

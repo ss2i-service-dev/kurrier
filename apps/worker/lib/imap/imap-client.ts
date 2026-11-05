@@ -96,7 +96,9 @@ export const initSmtpClient = async (
 				user: credentials.IMAP_USERNAME,
 				pass: credentials.IMAP_PASSWORD,
 			},
-			socketTimeout: 60_000,
+			// 5 min rather than 60 s: Gmail throttles the stream heavily when approaching its
+			// daily quota, and with 60 s backfill batches were cut off midway.
+			socketTimeout: 300_000,
 			logger: {
 				error(data: any) {
 					console.error(`[IMAP:${identityId}]`, data.msg ?? data);

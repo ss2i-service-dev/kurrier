@@ -44,6 +44,12 @@ export const deltaFetch = async (
 		.from(mailboxes)
 		.where(eq(mailboxes.identityId, identityId));
 
+	// Gmail's "All Mail" (\All) goes last, so that a new message is first filed in its real
+	// folder (INBOX, Sent) and only recognized afterwards.
+	const isAllMail = (r: (typeof mailboxRows)[number]) =>
+		String((r.metaData as any)?.imap?.specialUse ?? "").toLowerCase() === "\\all";
+	mailboxRows.sort((a, b) => Number(isAllMail(a)) - Number(isAllMail(b)));
+
 	for (const row of mailboxRows) {
 		// only when fully idle
 		const [syncRow] = await db
@@ -92,6 +98,7 @@ export const deltaFetch = async (
 								uid,
 								mailboxPath: path,
 								flags: [...flags],
+								internalDate: (msg as any).internalDate ?? null,
 							},
 						},
 						seen: isSeen,
@@ -99,6 +106,23 @@ export const deltaFetch = async (
 						answered: isAnswered,
 					});
 				}
+
+				// This message is already in THIS folder in the database (move done by the app, cursor
+				// lowered below a duplicate): nothing to do. Without this early exit, the row picked below
+				// among all those sharing this Message-ID could be the Sent copy: "move detected", then the
+				// Sent copy deleted.
+				const [here] = await db
+					.select({ id: messages.id })
+					.from(messages)
+					.where(
+						and(
+							eq(messages.ownerId, ownerId),
+							eq(messages.messageId, messageId),
+							eq(messages.mailboxId, row.id),
+						),
+					)
+					.limit(1);
+				if (here) return;
 
 				const [existing] = await db
 					.select({
@@ -115,6 +139,10 @@ export const deltaFetch = async (
 					);
 
 				if (existing) {
+					// Gmail's "All Mail" (\All) also lists INBOX and Sent mail. Seeing a message known
+					// elsewhere there is not a move: without this guard, every new message would leave the INBOX
+					// for the archive.
+					if (isAllMail(row)) return;
 					if (existing.mailboxId !== row.id) {
 						console.log(
 							`[deltaFetch] Move detected for ${messageId}: ${existing.mailboxId} → ${row.id}`,
@@ -149,10 +177,9 @@ export const deltaFetch = async (
 									),
 								);
 
-							if (dup?.id) {
-								await db.delete(messages).where(eq(messages.id, m.id));
-								continue;
-							}
+							// A copy of this message is already in this folder: leave it where it is. Deleting it
+							// would often remove the Sent copy (same Message-ID as the INBOX or Archive one).
+							if (dup?.id) continue;
 
 							const updatedMeta = {
 								...(m.metaData as any),
@@ -224,6 +251,9 @@ export const deltaFetch = async (
 							uid,
 							mailboxPath: path,
 							flags: [...flags],
+							// Server-side receive date, used as the message date when the Date header is missing or
+							// malformed (see message-payload-parser).
+							internalDate: (msg as any).internalDate ?? null,
 						},
 					},
 					seen: isSeen,

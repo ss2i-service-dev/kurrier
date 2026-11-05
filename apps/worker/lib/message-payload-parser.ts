@@ -8,15 +8,16 @@ import {
 	MessageCreate,
 	MessageAttachmentCreate,
 	MessageAttachmentInsertSchema,
-	mailSubscriptions,
 	workspaces,
 } from "@db";
 import { generateSnippet, upsertMailboxThreadItem } from "@common";
 import { randomUUID } from "crypto";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql, TransactionRollbackError } from "drizzle-orm";
+import { lockOwnerThreads, mergeLinkedThreads } from "./thread-links";
 import { getRedis } from "../lib/get-redis";
 import {s3} from "../lib/create-s3-client";
 import {PutObjectCommand} from "@aws-sdk/client-s3";
+import { upsertMailSubscription } from "./mail-subscriptions";
 import {upsertWorkspaceSharedContactFromMessage} from "../lib/message-parser-contacts";
 
 const SEARCH_BATCH_SIZE = 100;
@@ -39,7 +40,6 @@ type ICSJob = {
 type RulesJob = {
 	messageId: string;
 };
-
 let searchBuffer: SearchJob[] = [];
 let webhookBuffer: WebhookJob[] = [];
 let icsBuffer: ICSJob[] = [];
@@ -56,7 +56,10 @@ async function flushBatches() {
 
 		if (searchBuffer.length) {
 			const messageIds = searchBuffer.map((job) => job.messageId);
-			const contactIds = searchBuffer.map((job) => job.contactId);
+			// Only messages attached to an existing contact push it to CardDAV.
+			const contactIds = searchBuffer
+				.map((job) => job.contactId)
+				.filter((id) => id && id !== "null");
 			const ownerId = searchBuffer[0].ownerId;
 
 			await searchIngestQueue.add(
@@ -64,11 +67,13 @@ async function flushBatches() {
 				{ messageIds },
 				{ removeOnComplete: true },
 			);
-			await davWorkerQueue.add(
-				"dav:create-contacts-batch",
-				{ contactIds: contactIds, ownerId },
-				{ removeOnComplete: true, removeOnFail: true },
-			);
+			if (contactIds.length) {
+				await davWorkerQueue.add(
+					"dav:create-contacts-batch",
+					{ contactIds: contactIds, ownerId },
+					{ removeOnComplete: true, removeOnFail: true },
+				);
+			}
 
 			searchBuffer = [];
 		}
@@ -139,10 +144,7 @@ function generateFileName(att: Attachment) {
 	return `${randomUUID()}.${ext}`;
 }
 
-export async function createOrInitializeThread(
-	parsed: ParsedMail & { ownerId: string, workspaceId: string },
-) {
-	const { ownerId, workspaceId } = parsed;
+export function parentCandidates(parsed: ParsedMail) {
 	const inReplyTo = parsed.inReplyTo?.trim() || null;
 	const refs = Array.isArray(parsed.references)
 		? parsed.references
@@ -152,8 +154,19 @@ export async function createOrInitializeThread(
 	const candidates = Array.from(
 		new Set([inReplyTo, ...refs].filter(Boolean).map((s) => String(s))),
 	);
+	return { inReplyTo, candidates };
+}
 
-	return db.transaction(async (tx) => {
+// Threads: `outerTx` lets parseAndStoreEmail choose the thread, insert the message and
+// group the linked threads in a single transaction, under the owner's lock.
+export async function createOrInitializeThread(
+	parsed: ParsedMail & { ownerId: string, workspaceId: string },
+	outerTx?: any,
+) {
+	const { ownerId, workspaceId } = parsed;
+	const { inReplyTo, candidates } = parentCandidates(parsed);
+
+	const run = async (tx: any) => {
 		let existingThread = null;
 
 		if (candidates.length > 0) {
@@ -175,7 +188,7 @@ export async function createOrInitializeThread(
 
 			if (parentMsgs.length) {
 				const chosen = inReplyTo
-					? parentMsgs.find((m) => m.messageId === inReplyTo)
+					? parentMsgs.find((m: any) => m.messageId === inReplyTo)
 					: parentMsgs[0];
 
 				if (chosen?.threadId) {
@@ -188,7 +201,7 @@ export async function createOrInitializeThread(
 			}
 		}
 
-		if (existingThread) return existingThread;
+		if (existingThread) return { ...existingThread, foundParent: true };
 
 		const [newThread] = await tx
 			.insert(threads)
@@ -199,8 +212,10 @@ export async function createOrInitializeThread(
 			})
 			.returning();
 
-		return newThread;
-	});
+		return { ...newThread, foundParent: false };
+	};
+
+	return outerTx ? run(outerTx) : db.transaction(run);
 }
 
 function getFromAddress(parsed: ParsedMail) {
@@ -227,6 +242,75 @@ function isIcsAttachment(att: Attachment) {
 /**
  * Parse raw email, create thread, insert message + attachments.
  */
+// PostgreSQL refuses the null byte in a text as well as in a jsonb (error 22021,
+// "invalid byte sequence for encoding UTF8: 0x00"). A single message containing one, mostly
+// spam, would fail its insert, and with it the whole account sync or the backfill window in
+// progress. These bytes are stripped before inserting.
+function stripNul<T>(value: T): T {
+	if (typeof value === "string") return value.replace(/\u0000/g, "") as T;
+	if (Array.isArray(value)) return value.map(stripNul) as T;
+	if (
+		value &&
+		typeof value === "object" &&
+		!(value instanceof Date) &&
+		!Buffer.isBuffer(value)
+	) {
+		const out: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(value)) out[k] = stripNul(v);
+		return out as T;
+	}
+	return value;
+}
+
+/**
+ * Threads: thread choice, message insert, grouping of linked threads (lib/thread-links.ts)
+ * and mailbox_threads row in a single transaction, under the owner's lock. A message already
+ * present (same folder, same Message-ID) cancels everything and returns null: no empty thread
+ * created for nothing.
+ */
+export async function storeMessageInThread(
+	parsed: ParsedMail,
+	decoratedParsed: Record<string, any>,
+	opts: { ownerId: string; workspaceId: string },
+): Promise<{ message: typeof messages.$inferSelect; threadId: string; merged: boolean } | null> {
+	const { ownerId, workspaceId } = opts;
+	try {
+		return await db.transaction(async (tx) => {
+			await lockOwnerThreads(tx, ownerId);
+			const thread = await createOrInitializeThread({ ...parsed, ownerId, workspaceId }, tx);
+			const messagePayload = stripNul(
+				MessageInsertSchema.parse({ ...decoratedParsed, threadId: thread.id }),
+			);
+			const [inserted] = await tx
+				.insert(messages)
+				.values(messagePayload as MessageCreate)
+				.onConflictDoNothing({
+					target: [messages.mailboxId, messages.messageId],
+				})
+				.returning();
+			if (!inserted) tx.rollback();
+			const linked = await mergeLinkedThreads(tx, {
+				ownerId,
+				messageId: inserted.messageId,
+				candidates: parentCandidates(parsed).candidates,
+				threadId: thread.id,
+				foundParent: thread.foundParent,
+			});
+			// List row written under the same lock: outside the transaction, it would collide with a
+			// concurrent merge of the same thread (deadlock seen in a parallel test).
+			await upsertMailboxThreadItem(inserted.id, tx);
+			return {
+				message: { ...inserted, threadId: linked.threadId },
+				threadId: linked.threadId,
+				merged: linked.merged,
+			};
+		});
+	} catch (err) {
+		if (err instanceof TransactionRollbackError) return null;
+		throw err;
+	}
+}
+
 export async function parseAndStoreEmail(
 	rawEmail: string,
 	opts: {
@@ -277,18 +361,31 @@ export async function parseAndStoreEmail(
 		return null;
 	}
 
-	const thread = await createOrInitializeThread({
-		...parsed,
-		ownerId,
-		workspaceId,
-		// mailboxId,
-	});
+	// Set `created_at` explicitly: the column default (now()) is the ingestion time, whereas
+	// the reader display, the thread date (`threads.last_message_date`) and the search sort
+	// are all based on `createdAt`, and a backfill of several years of mail would date
+	// everything to the same day. Use the IMAP internal date (when the server received the
+	// message, reliable), failing that the header date, failing that now. The header comes
+	// second because mailparser replaces a missing or malformed Date header with the current
+	// time without saying so; a header date more than a day in the future is ignored.
+	const internalDate = (opts.metaData as any)?.imap?.internalDate;
+	const headerDate =
+		parsed.date instanceof Date && !Number.isNaN(parsed.date.getTime()) &&
+		parsed.date.getTime() <= Date.now() + 86_400_000
+			? parsed.date
+			: null;
+	const internal =
+		internalDate && !Number.isNaN(new Date(internalDate).getTime())
+			? new Date(internalDate)
+			: null;
+	const messageDate = internal ?? headerDate ?? new Date();
 
 	const decoratedParsed = {
 		...parsed,
+		date: messageDate,
+		createdAt: messageDate,
 		mailboxId,
 		workspaceId,
-		threadId: thread.id,
 		ownerId,
 		headersJson: Object.fromEntries(parsed.headers as Map<string, any>),
 		hasAttachments: (parsed.attachments?.length ?? 0) > 0,
@@ -321,16 +418,22 @@ export async function parseAndStoreEmail(
 		(decoratedParsed as any).flagged = opts.flagged;
 	}
 
-	const messagePayload = MessageInsertSchema.parse(decoratedParsed);
-	const [message] = await db
-		.insert(messages)
-		.values(messagePayload as MessageCreate)
-		.onConflictDoNothing({
-			target: [messages.mailboxId, messages.messageId],
-		})
-		.returning();
-
-	if (!message) return null;
+	const placed = await storeMessageInThread(parsed, decoratedParsed, { ownerId, workspaceId });
+	if (!placed) return null;
+	const message = placed.message;
+	const thread = { id: placed.threadId };
+	if (placed.merged) {
+		try {
+			const { searchIngestQueue } = await getRedis();
+			await searchIngestQueue.add(
+				"refresh-thread",
+				{ threadId: thread.id },
+				{ jobId: `kurrier-refresh-thread-${thread.id}`, delay: 5_000, removeOnComplete: true, removeOnFail: true },
+			);
+		} catch (err: any) {
+			console.error("[parseAndStoreEmail] refresh-thread enqueue failed:", err?.message ?? err);
+		}
+	}
 	await db
 		.update(workspaces)
 		.set({
@@ -349,7 +452,6 @@ export async function parseAndStoreEmail(
 		fallbackOwnerId: ownerId,
 	});
 	const contactId = contactRes?.contactIdForMessage ?? null;
-	await upsertMailboxThreadItem(message.id);
 
 	const msgDate = message.createdAt ?? new Date();
 	const [t] = await db
@@ -367,7 +469,7 @@ export async function parseAndStoreEmail(
 	const seenIcsChecksums = new Set<string>();
 
 	for (const attachment of parsed.attachments ?? []) {
-		const bucket = "attachments";
+		const bucket = process.env.S3_BUCKET!;
 		const fileName = generateFileName(attachment);
 		const objectPath = `private/${ownerId}/${message.id}/${fileName}`;
 
@@ -459,87 +561,16 @@ async function ingestMailSubscriptionFromMessage(opts: {
 	parsed: ParsedMail;
 	headersJson: Record<string, any>;
 }) {
-	const { ownerId, workspaceId, parsed, headersJson } = opts;
-
-	const headers = parsed.headers as Map<string, any>;
-	const list =
-		(headers.get("list") as any) ??
-		(headersJson as any)?.list ??
-		null;
-
-	const rawListId =
-		String(headers.get("list-id") ?? (headersJson as any)?.["list-id"] ?? "")
-			.trim() || null;
-
-	const unsubscribeUrl =
-		(list?.unsubscribe?.url as string | undefined) ||
-		(list?.unsubscribe?.href as string | undefined) ||
-		null;
-
-	const unsubscribePost =
-		String(list?.["unsubscribe-post"]?.name ?? "").toLowerCase() || null;
-
-	let unsubscribeMailto: string | null = null;
-	const rawListUnsub = headers.get("list-unsubscribe") ?? (headersJson as any)?.["list-unsubscribe"];
-	if (typeof rawListUnsub === "string" && rawListUnsub.toLowerCase().includes("mailto:")) {
-		const m = rawListUnsub.match(/mailto:([^>\s,]+)/i);
-		unsubscribeMailto = (m?.[1] ?? "").trim().toLowerCase() || null;
-	}
-
-	if (!rawListId && !unsubscribeUrl && !unsubscribeMailto) return;
-
-	let subscriptionKey: string | null = null;
-
-	if (rawListId) {
-		const cleaned = rawListId
-			.replace(/^<|>$/g, "")
-			.replace(/\s+/g, "")
-			.toLowerCase();
-		subscriptionKey = cleaned ? `list-id:${cleaned}` : null;
-	} else if (unsubscribeUrl) {
-		try {
-			const u = new URL(unsubscribeUrl);
-			const p = (u.pathname || "/").replace(/\/+$/, "") || "/";
-			subscriptionKey = `${u.protocol}//${u.host}${p}`;
-		} catch {
-			subscriptionKey = null;
-		}
-	} else if (unsubscribeMailto) {
-		subscriptionKey = `mailto:${unsubscribeMailto}`;
-	} else {
-		const from = getFromAddress(parsed);
-		if (from?.email?.includes("@")) {
-			subscriptionKey = `from-domain:${from.email.split("@")[1]}`;
-		}
-	}
-
-	if (!subscriptionKey) return;
-
-	const oneClick = unsubscribePost?.includes("one-click") ?? false;
-	await db
-		.insert(mailSubscriptions)
-		.values({
-			ownerId,
-			workspaceId,
-			subscriptionKey,
-			listId: rawListId,
-			unsubscribeHttpUrl: unsubscribeUrl,
-			unsubscribeMailto,
-			oneClick,
-			lastSeenAt: new Date(),
-		} as any)
-		.onConflictDoUpdate({
-			target: [
-				mailSubscriptions.workspaceId,
-				mailSubscriptions.subscriptionKey,
-			],
-			set: {
-				listId: rawListId,
-				unsubscribeHttpUrl: unsubscribeUrl,
-				unsubscribeMailto,
-				oneClick,
-				lastSeenAt: new Date(),
-			},
+	// Extraction and key live in @common (list-unsubscribe), shared with the backfill.
+	// An error here must never lose the message that was just inserted.
+	try {
+		await upsertMailSubscription({
+			ownerId: opts.ownerId,
+			workspaceId: opts.workspaceId,
+			headers: opts.headersJson,
+			fromEmail: getFromAddress(opts.parsed)?.email ?? null,
 		});
-
+	} catch (err: any) {
+		console.error("[parseAndStoreEmail] mail subscription upsert failed:", err?.message ?? err);
+	}
 }

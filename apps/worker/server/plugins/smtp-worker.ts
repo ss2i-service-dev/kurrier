@@ -19,14 +19,52 @@ import {
 import { discoverMailboxes } from "../../lib/imap/backfill/discover/discover-mailboxes";
 import {startBackfillForIdentity} from "../../lib/imap/backfill/backfill-full";
 import {db, mailboxSync} from "@db";
-import {eq} from "drizzle-orm";
+import { gt } from "drizzle-orm";
+import { DRAFT_DELETE_JOB, DRAFT_SYNC_JOB } from "@common";
+import { deleteDraftFromImap, syncDraftToImap } from "../../lib/drafts/draft-service";
 
 export default defineNitroPlugin(async (nitroApp) => {
 	console.info("**********************SMTP-WORKER***************************");
 
 	const imapInstances = new Map<string, ImapFlow>();
 	const idleImapInstances = new Map<string, ImapFlow>();
-	const { connection, searchIngestQueue, smtpQueue } = await getRedis();
+	// The backfill has its own IMAP connection, separate from the actions'.
+	const backfillImapInstances = new Map<string, ImapFlow>();
+	const { connection, searchIngestQueue, backfillQueue } = await getRedis();
+
+	// A backfill chains windows until the day's quota is used, i.e. several hours on a large
+	// mailbox. This worker only processes one job at a time: while the backfill ran here, the
+	// mail:move, mail:set-flags and mail:delete-permanent jobs of ALL mailboxes stayed queued
+	// (the UI said "moved to Trash" and nothing moved). The backfill therefore goes to its own
+	// queue; the same jobId avoids duplicates there.
+	const enqueueBackfill = (identityId: string) =>
+		backfillQueue.add(
+			"imap:backfill-account",
+			{ identityId },
+			{
+				removeOnComplete: true,
+				removeOnFail: true,
+				jobId: `imap-backfill-account-${identityId}`,
+			},
+		);
+
+	const backfillWorker = new Worker(
+		"imap-backfill",
+		async (job) => {
+			const { identityId } = job.data as { identityId: string };
+			await startBackfillForIdentity(identityId, backfillImapInstances);
+			return { success: true };
+		},
+		// 4 simultaneous backfills; at 2, a new mailbox would wait for hours for the running
+		// backfills (mailboxes with tens of thousands of messages) to finish.
+		{ connection, concurrency: 4, lockDuration: 5 * 60 * 1000 },
+	);
+	backfillWorker.on("failed", (job, err) => {
+		console.info(`[BACKFILL] ${job?.id} has failed with ${err.message}`);
+	});
+	backfillWorker.on("error", (err) => {
+		console.info(`[BACKFILL] worker has failed with ${err.message}`);
+	});
 
 	const worker = new Worker(
 		"smtp-worker",
@@ -43,18 +81,28 @@ export default defineNitroPlugin(async (nitroApp) => {
 				if (job.data.op === "move" && !job.data.toMailboxId) {
 					throw new Error("mail:move requires toMailboxId when op === 'move'");
 				}
-				await moveMail(job.data, imapInstances);
-				await searchIngestQueue.add(
-					"refresh-thread",
-					{ threadId: job.data.threadId },
-					{
-						jobId: `refresh-${job.data.threadId}`, // collapses duplicates
-						removeOnComplete: true,
-						removeOnFail: false,
-						attempts: 3,
-						backoff: { type: "exponential", delay: 1500 },
-					},
-				);
+				// moveMail fails when some messages could not be moved over IMAP (put back in the source
+				// in the database, job retried); the index is refreshed anyway.
+				try {
+					await moveMail(job.data, imapInstances);
+				} finally {
+					const movedIds: string[] = job.data.threadIds?.length
+						? job.data.threadIds
+						: [job.data.threadId];
+					for (const threadId of movedIds) {
+						await searchIngestQueue.add(
+							"refresh-thread",
+							{ threadId },
+							{
+								jobId: `refresh-${threadId}`, // collapses duplicates
+								removeOnComplete: true,
+								removeOnFail: false,
+								attempts: 3,
+								backoff: { type: "exponential", delay: 1500 },
+							},
+						);
+					}
+				}
 			} else if (job.name === "mail:set-flags") {
 				await mailSetFlags(job.data, imapInstances);
 				await searchIngestQueue.add(
@@ -70,11 +118,16 @@ export default defineNitroPlugin(async (nitroApp) => {
 				);
 			} else if (job.name === "mail:delete-permanent") {
 				await deleteMail(job.data, imapInstances);
+			} else if (job.name === DRAFT_SYNC_JOB) {
+				// Drafts, IMAP version (see lib/drafts/draft-service.ts).
+				await syncDraftToImap(job.data, imapInstances);
+			} else if (job.name === DRAFT_DELETE_JOB) {
+				await deleteDraftFromImap(job.data, imapInstances);
 			} else if (job.name === "smtp:append:sent") {
 			} else if (job.name === "imap:backfill-account") {
-
+				// Plain relay to the backfill queue (the web app keeps posting here).
 				const { identityId } = job.data as { identityId: string };
-				await startBackfillForIdentity(identityId, imapInstances);
+				await enqueueBackfill(identityId);
 				return { success: true };
 			} else if (job.name === "imap:resume-backfills") {
 
@@ -83,17 +136,12 @@ export default defineNitroPlugin(async (nitroApp) => {
 						identityId: mailboxSync.identityId,
 					})
 					.from(mailboxSync)
-					.where(eq(mailboxSync.phase, "BACKFILL"));
+					// The realtime sync sets `phase` back to IDLE on every pass, so a resume based on the
+					// phase would find nothing after the first hour. What says that backfill remains is the
+					// cursor.
+					.where(gt(mailboxSync.backfillCursorUid, 0));
 				for (const row of rows) {
-					await smtpQueue.add(
-						"imap:backfill-account",
-						{ identityId: row.identityId },
-						{
-							removeOnComplete: true,
-							removeOnFail: true,
-							jobId: `imap-backfill-account-${row.identityId}`,
-						},
-					);
+					await enqueueBackfill(row.identityId);
 				}
 				return { success: true };
 			} else if (job.name === "imap:backfill-discover") {
@@ -141,7 +189,10 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 	await scheduler.upsertJobScheduler(
 		"imap-resume-backfills-scheduler",
-		{ every: 24 * 60 * 60 * 1000 },
+		// Every hour rather than every 24 h. An identity's daily quota expires 24 h after its first
+		// initialization, which does not coincide with the scheduler's time: with one pass per day,
+		// an identity would only resume every other day.
+		{ every: 60 * 60 * 1000 },
 		"imap:resume-backfills",
 		{},
 		{
@@ -188,10 +239,14 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 			await logoutAll("command", imapInstances);
 			await logoutAll("realtime", idleImapInstances);
+			await logoutAll("backfill", backfillImapInstances);
 			console.info("Logged out from IMAP servers");
 			try {
 				await Promise.allSettled([
 					worker?.close(),
+					// Without waiting for the running backfill to finish (it lasts hours); the job stays in
+					// the queue and resumes on restart, from its cursor.
+					backfillWorker?.close(true),
 					scheduler?.close(),
 				]);
 			} catch (err: any) {

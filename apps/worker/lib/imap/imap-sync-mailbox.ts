@@ -68,7 +68,18 @@ export async function syncMailbox(opts: {
 					source: true,
 				},
 			)) {
-				await onMessage(msg, path, identityId, workspaceId, mailboxId);
+				// A message the database refuses used to fail the whole pass, on every pass, and the
+				// following folders were never synced again.
+				try {
+					await onMessage(msg, path, identityId, workspaceId, mailboxId);
+				} catch (err: any) {
+					console.error("[imap:sync] message not stored, skipped", {
+						identityId,
+						path,
+						uid: msg.uid,
+						error: err?.cause?.message ?? err?.message ?? String(err),
+					});
+				}
 				if (msg.uid && msg.uid > maxUid) maxUid = msg.uid;
 			}
 

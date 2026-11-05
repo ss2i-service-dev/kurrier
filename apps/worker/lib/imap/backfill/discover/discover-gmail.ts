@@ -16,10 +16,10 @@ export function shouldSyncBox(box: ImapBox, isGmail: boolean): boolean {
 	if (box.flags?.has("\\Noselect")) return false;
 
 	const path = box.path.toLowerCase();
-	const su = (box.specialUse as string | undefined)?.toLowerCase() ?? "";
-
 	if (isGmail) {
-		if (su === "\\all") return false;
+		// "All Mail" (\All) is not skipped: it is the only folder that holds archived mail,
+		// which is most of a Gmail mailbox. It is registered as the archive folder, backfilled
+		// last and deduplicated by Message-ID (see backfill-full.ts).
 		if (path === "[gmail]") return false;
 		if (path === "[gmail]/important") return false;
 		if (path === "[gmail]/notes") return false;
@@ -27,4 +27,8 @@ export function shouldSyncBox(box: ImapBox, isGmail: boolean): boolean {
 	}
 
 	return true;
+}
+
+export function isAllMailBox(specialUse?: string | null): boolean {
+	return (specialUse ?? "").toLowerCase() === "\\all";
 }

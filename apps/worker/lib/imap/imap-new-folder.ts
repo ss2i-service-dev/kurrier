@@ -1,5 +1,5 @@
 import { ImapFlow } from "imapflow";
-import { db, mailboxes, mailboxSync } from "@db";
+import { db, identities, mailboxes, mailboxSync } from "@db";
 import { eq } from "drizzle-orm";
 import slugify from "@sindresorhus/slugify";
 
@@ -21,6 +21,7 @@ export async function addNewFolder(
 		identityId: string;
 		ownerId: string;
 		kind?: string;
+		workspaceId?: string;
 	},
 	client: ImapFlow,
 ) {
@@ -48,6 +49,16 @@ export async function addNewFolder(
 		delimiter = await detectDelimiter(client);
 	}
 
+	// Outside an RLS context, the workspace_id column has no default value: without it the
+	// insert fails (NOT NULL). Take it from the identity.
+	const [identity] = await db
+		.select({ workspaceId: identities.workspaceId })
+		.from(identities)
+		.where(eq(identities.id, data.identityId))
+		.limit(1);
+	const workspaceId = data.workspaceId ?? identity?.workspaceId;
+	if (!workspaceId) throw new Error("Identity not found for new folder");
+
 	const safeName = sanitizeName(data.name, delimiter);
 	const newPath = parentPath
 		? `${parentPath}${delimiter}${safeName}`
@@ -69,9 +80,14 @@ export async function addNewFolder(
 		.insert(mailboxes)
 		.values({
 			ownerId: data.ownerId,
+			workspaceId,
 			identityId: data.identityId,
+			// `String(null)` is "null": without this guard, a root folder was sent with
+			// parent_id = 'null' and the insert failed (invalid uuid).
 			parentId:
-				String(data.parentId)?.trim().length > 0 ? String(data.parentId) : null,
+				data.parentId && String(data.parentId).trim().length > 0 && data.parentId !== "none"
+					? String(data.parentId)
+					: null,
 			kind: (data.kind as any) ?? "custom",
 			name: safeName,
 			slug: slugify(safeName.toLowerCase()),

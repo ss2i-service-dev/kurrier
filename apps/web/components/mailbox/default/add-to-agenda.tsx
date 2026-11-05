@@ -1,12 +1,12 @@
 "use client";
 import React, { useEffect, useRef, useState } from "react";
-import { Button, Loader, Modal } from "@mantine/core";
+import { Button, Loader, Modal, Textarea } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { IconCalendarPlus } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { useNouvelle } from "@/components/k/ui-context";
 import { addThreadEventsToAgenda, agendaAvailable, analyzeThreadForAgenda } from "@/lib/actions/thread-agenda";
-import { type AgendaReminder, normalizeAgendaEvent } from "@common/thread-agenda";
+import { type AgendaEvent, type AgendaReminder, normalizeAgendaEvent } from "@common/thread-agenda";
 import { type AgendaRow, ConfirmStep, ProposalsStep } from "@/components/mailbox/default/add-to-agenda-steps";
 
 // ss2i : « Ajouter a l'agenda » depuis un fil ouvert (OI 10280), meme fenetre dans les deux
@@ -18,6 +18,10 @@ import { type AgendaRow, ConfirmStep, ProposalsStep } from "@/components/mailbox
 // appartient ; aucun focus n'est deplace a l'arrivee des propositions. Un bouton clique qui
 // disparait (changement d'etape) laisserait le focus dans le vide, et le verrou renverrait les
 // frappes vers l'editeur ouvert derriere : le focus est alors rendu au corps de la fenetre.
+// Rien de date dans le fil, ou un evenement de plus : la fenetre demande ce qu'il faut creer
+// (« rappel pour relancer le client jeudi ») et le LLM le met en forme a partir du fil, ou
+// l'utilisateur le saisit lui-meme (Samuel, 05/11). Un rappel horaire cree ainsi a son rappel
+// « 15 minutes avant » preselectionne : c'est ce qui a ete demande.
 
 const availability = new Map<string, Promise<boolean>>();
 
@@ -45,6 +49,15 @@ const toastPosition = () =>
 
 const plural = (n: number, one: string, many: string) => (n > 1 ? `${n} ${many}` : one);
 
+/** Prochain jour ouvre apres aujourd'hui (heure du poste), en YYYY-MM-DD. */
+function nextWorkingDay(): string {
+	const d = new Date();
+	do d.setDate(d.getDate() + 1);
+	while (d.getDay() === 0 || d.getDay() === 6);
+	const p = (n: number) => String(n).padStart(2, "0");
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 export function AddToAgenda({
 	identityPublicId,
 	threadId,
@@ -63,6 +76,10 @@ export function AddToAgenda({
 	const [mailbox, setMailbox] = useState<string>("");
 	const [rows, setRows] = useState<AgendaRow[]>([]);
 	const [saving, setSaving] = useState(false);
+	const [wish, setWish] = useState("");
+	const [asking, setAsking] = useState(false);
+	const [askOpen, setAskOpen] = useState(false);
+	const nextKey = useRef(0);
 	const analyzedFor = useRef<string | null>(null);
 	const request = useRef(0);
 	const busy = useRef(false);
@@ -84,6 +101,8 @@ export function AddToAgenda({
 		setStep("edit");
 		setError(null);
 		setRows([]);
+		setWish("");
+		setAskOpen(false);
 		analyzeThreadForAgenda({ threadId, identityPublicId })
 			.catch((e: any) => ({ ok: false as const, error: String(e?.message ?? e) }))
 			.then((res) => {
@@ -96,6 +115,7 @@ export function AddToAgenda({
 				}
 				setMailbox(res.mailbox);
 				setRows(res.events.map((e, i) => ({ ...e, key: i, checked: true })));
+				nextKey.current = res.events.length;
 				setPhase("ready");
 			});
 	};
@@ -108,6 +128,9 @@ export function AddToAgenda({
 			setPhase("idle");
 			setStep("edit");
 			setRows([]);
+			setAsking(false);
+			setWish("");
+			setAskOpen(false);
 		}
 	}, [threadId]);
 
@@ -122,6 +145,56 @@ export function AddToAgenda({
 		setRows((list) => list.map((r) => (r.key === key ? { ...r, ...patch, error: undefined } : r)));
 
 	const selected = rows.filter((r) => r.checked);
+
+	const addRows = (events: AgendaEvent[]) =>
+		setRows((list) => [
+			...list,
+			...events.map((e) => ({
+				...e,
+				key: nextKey.current++,
+				checked: true,
+				reminder: (e.allDay ? "none" : "15m") as AgendaReminder,
+			})),
+		]);
+
+	// Ce que l'utilisateur veut creer, mis en forme par le LLM a partir du fil.
+	const ask = () => {
+		const text = wish.trim();
+		if (!text || asking) return;
+		const id = ++request.current;
+		setAsking(true);
+		setError(null);
+		analyzeThreadForAgenda({ threadId, identityPublicId, request: text })
+			.catch((e: any) => ({ ok: false as const, error: String(e?.message ?? e) }))
+			.then((res) => {
+				if (id !== request.current) return;
+				setAsking(false);
+				if (!res.ok) {
+					setError(res.error);
+					return;
+				}
+				if (!res.events.length) {
+					setError("Rien n'a pu être proposé pour cette demande : précisez ce qu'il faut créer et quand.");
+					return;
+				}
+				setMailbox(res.mailbox);
+				addRows(res.events);
+				setWish("");
+				setAskOpen(false);
+				keepFocusInDialog();
+			});
+	};
+
+	// Saisie libre : un rappel au prochain jour ouvre a 9 h, a corriger dans le formulaire.
+	const addBlank = () => {
+		if (asking) return;
+		const day = nextWorkingDay();
+		addRows([{ title: wish.trim().slice(0, 255), allDay: false, start: `${day}T09:00`, end: `${day}T09:15`, sourceQuote: "" }]);
+		setWish("");
+		setAskOpen(false);
+		setError(null);
+		keepFocusInDialog();
+	};
 
 	// Etape 1 -> 2 : chaque evenement coche est verifie et mis au propre (fin par defaut...).
 	const goConfirm = () => {
@@ -193,6 +266,37 @@ export function AddToAgenda({
 	const muted = nouvelle ? "text-k-ink-3" : "text-muted-foreground";
 	const confirming = phase === "ready" && step === "confirm";
 
+	const requestBox = (
+		<div className="space-y-2">
+			<Textarea
+				label="Que voulez-vous créer ?"
+				placeholder="Ex. : un rappel pour relancer le client jeudi prochain"
+				autosize
+				minRows={2}
+				maxLength={1000}
+				data-autofocus
+				autoFocus
+				value={wish}
+				onChange={(e) => setWish(e.currentTarget.value)}
+				onKeyDown={(e) => {
+					if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+						e.preventDefault();
+						ask();
+					}
+				}}
+			/>
+			<div className="flex items-center gap-2">
+				<Button size="xs" onClick={ask} aria-disabled={!wish.trim() || asking} data-disabled={!wish.trim() || undefined}>
+					{asking ? "Préparation…" : "Proposer"}
+				</Button>
+				<Button size="xs" variant="subtle" onClick={addBlank} aria-disabled={asking}>
+					Saisir moi-même
+				</Button>
+				{asking && <Loader size="xs" />}
+			</div>
+		</div>
+	);
+
 	return (
 		<>
 			{trigger(openDialog)}
@@ -224,11 +328,25 @@ export function AddToAgenda({
 					)}
 
 					{phase === "ready" && !rows.length && (
-						<div className={`py-4 text-sm ${muted}`}>Aucun événement daté n'a été trouvé dans ce fil.</div>
+						<>
+							<div className={`pt-2 text-sm ${muted}`}>
+								Aucun événement daté n'a été trouvé dans ce fil. Voulez-vous en créer un ?
+							</div>
+							{requestBox}
+						</>
 					)}
 
 					{phase === "ready" && rows.length > 0 && step === "edit" && (
-						<ProposalsStep rows={rows} mailbox={mailbox} nouvelle={nouvelle} onChange={update} />
+						<>
+							<ProposalsStep rows={rows} mailbox={mailbox} nouvelle={nouvelle} onChange={update} />
+							{askOpen ? (
+								requestBox
+							) : (
+								<Button variant="subtle" size="xs" onClick={() => setAskOpen(true)}>
+									+ Créer un autre événement
+								</Button>
+							)}
+						</>
 					)}
 					{confirming && (
 						<ConfirmStep

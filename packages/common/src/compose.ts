@@ -1,3 +1,4 @@
+import { joinSurrogateEntities } from "./html-entities";
 // ss2i : assemblage du corps d'un message sortant (reponse, transfert, nouveau), partage
 // par le worker (send-mail.ts, qui envoie), l'editeur web (apercu de la citation) et le
 // MCP. Fonctions pures, sans dependance : ce fichier est importe cote navigateur.
@@ -422,6 +423,8 @@ export function buildQuote(
 	orig: ComposeOriginal,
 	opts: { quoteScope?: QuoteScope | null; rfcStyle?: boolean; customHtml?: string | null },
 ) {
+	// ss2i : emojis d'Outlook en paires de references de surrogates, sinon cites en « �� ».
+	if (orig.html) orig = { ...orig, html: joinSurrogateEntities(orig.html) };
 	const q =
 		opts.customHtml != null
 			? { html: opts.customHtml, text: htmlToPlain(opts.customHtml), fallbackHtml: "" }

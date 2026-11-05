@@ -5,9 +5,10 @@ import { leaveThreadToList } from "@/lib/leave-thread";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
 import slugify from "@sindresorhus/slugify";
-import { Archive, Ban, Building2, CalendarPlus, ClipboardCopy, ClipboardList, Code, Download, EllipsisVertical, Forward, Mail, Reply, ReplyAll, Trash2 } from "lucide-react";
+import { Archive, Ban, Building2, CalendarPlus, ClipboardCopy, ClipboardList, Code, Download, EllipsisVertical, Forward, Mail, Reply, ReplyAll, Sparkles, Trash2 } from "lucide-react";
 import { LinkClientPicker } from "@/components/mailbox/default/client-link-ui";
 import { AddToAgenda } from "@/components/mailbox/default/add-to-agenda";
+import { ReplyWithLore } from "@/components/mailbox/default/reply-with-lore";
 import { useIsProIdentity } from "@/lib/client-link";
 import { copyMailToClipboard } from "@/lib/mail-copy";
 import { Temporal } from "@js-temporal/polyfill";
@@ -470,6 +471,20 @@ function EmailRenderer({
 								<Tooltip label="Ajouter à l'agenda" withArrow>
 									<ActionIcon variant={"subtle"} color={"gray"} aria-label="Ajouter à l'agenda" onClick={open}>
 										<CalendarPlus size={18} />
+									</ActionIcon>
+								</Tooltip>
+							)}
+						/>
+						{/* ss2i (OI 10288) : brouillon de reponse a ce message redige par Lore, relu avant envoi. */}
+						<ReplyWithLore
+							identityPublicId={String(params.identityPublicId)}
+							threadId={String(threadId)}
+							messageId={String(message.id)}
+							messageLabel={getMessageName(message, "from") || getMessageAddress(message, "from") || undefined}
+							trigger={(open) => (
+								<Tooltip label="Répondre avec Lore" withArrow>
+									<ActionIcon variant={"subtle"} color={"gray"} aria-label="Répondre avec Lore" onClick={open}>
+										<Sparkles size={18} />
 									</ActionIcon>
 								</Tooltip>
 							)}

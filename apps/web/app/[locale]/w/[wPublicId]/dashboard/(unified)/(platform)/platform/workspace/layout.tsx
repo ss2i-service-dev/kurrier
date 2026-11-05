@@ -1,3 +1,4 @@
+import { isModernUi } from "@/lib/actions/interface-pref";
 import React, { ReactNode } from "react";
 import {Blocks} from "lucide-react";
 import { Container } from "@/components/common/containers";
@@ -12,7 +13,7 @@ type LayoutProps = {
 
 
 
-export default async function Layout({
+async function ClassicLayout({
 	children,
 }: LayoutProps) {
 
@@ -73,4 +74,10 @@ export default async function Layout({
         </Container>
 
     </>
+}
+
+// Modern interface: the page carries its own header, no inner navigation.
+export default async function Layout(props: LayoutProps) {
+	if (!(await isModernUi())) return <ClassicLayout {...props} />;
+	return <>{props.children}</>;
 }

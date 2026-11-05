@@ -1,0 +1,586 @@
+/*
+ * Visual system of the modern interface.
+ *
+ * Every color, radius and shadow choice goes through the --k-* tokens.
+ * To change the style, change these tokens, not the components.
+ * The shadcn variables (--background, --primary...) and the Mantine ones are
+ * realigned on them further down, so that screens not rebuilt (settings,
+ * platform, modals) adopt the same palette.
+ *
+ * Everything is scoped to the modern interface: <html data-ui="k">, set by the
+ * root layout when the user has chosen it (Settings > General > Interface).
+ * The classic interface is untouched.
+ * Imported in globals.css (so that Tailwind reads the @theme); the
+ * :root:root[data-ui] specificity wins over the data-theme themes.
+ */
+
+:root:root[data-ui="k"] {
+	--k-canvas: #f3f2ef;
+	--k-surface: #ffffff;
+	--k-surface-2: #f8f7f5;
+	--k-hover: #f1f0ed;
+	--k-ink: #1b1a19;
+	--k-ink-2: #57534e;
+	--k-ink-3: #8c877f;
+	--k-line: #e8e6e1;
+	--k-line-strong: #d7d3cc;
+	--k-accent: #3555d6;
+	--k-accent-hover: #2945bd;
+	--k-accent-ink: #ffffff;
+	--k-accent-soft: #ebeffc;
+	--k-accent-soft-ink: #2a45b0;
+	--k-selected: #e9edfb;
+	--k-danger: #d0453b;
+	--k-danger-soft: #fdecea;
+	--k-warn: #b86e00;
+	--k-warn-soft: #fff4e0;
+	--k-star: #e8a317;
+	--k-shadow-pane: 0 1px 2px rgb(28 25 23 / 0.04), 0 0 0 1px rgb(28 25 23 / 0.05);
+	--k-shadow-pop: 0 12px 32px -8px rgb(28 25 23 / 0.18), 0 0 0 1px rgb(28 25 23 / 0.06);
+	--k-radius-pane: 14px;
+	--k-radius: 10px;
+	--k-radius-sm: 7px;
+
+	/* shadcn realignment */
+	--radius: 0.625rem;
+	--background: var(--k-surface);
+	--foreground: var(--k-ink);
+	--card: var(--k-surface);
+	--card-foreground: var(--k-ink);
+	--popover: var(--k-surface);
+	--popover-foreground: var(--k-ink);
+	--primary: var(--k-accent);
+	--primary-foreground: var(--k-accent-ink);
+	--secondary: var(--k-hover);
+	--secondary-foreground: var(--k-ink);
+	--muted: var(--k-surface-2);
+	--muted-foreground: var(--k-ink-3);
+	--accent: var(--k-hover);
+	--accent-foreground: var(--k-ink);
+	--destructive: var(--k-danger);
+	--border: var(--k-line);
+	--input: var(--k-line-strong);
+	--ring: var(--k-accent);
+	--sidebar: var(--k-canvas);
+	--sidebar-foreground: var(--k-ink-2);
+	--sidebar-primary: var(--k-accent);
+	--sidebar-primary-foreground: var(--k-accent-ink);
+	--sidebar-accent: var(--k-hover);
+	--sidebar-accent-foreground: var(--k-ink);
+	--sidebar-border: var(--k-line);
+	--sidebar-ring: var(--k-accent);
+
+	--brand-50: #f2f5fe;
+	--brand-100: #e4eafc;
+	--brand-200: #c9d4f8;
+	--brand-300: #a2b4f2;
+	--brand-400: #7089e8;
+	--brand-500: #4d68de;
+	--brand-600: #3555d6;
+	--brand-700: #2945bd;
+	--brand-800: #243a96;
+	--brand-900: #213475;
+	--brand-950: #161f45;
+
+	/* Mantine */
+	--mantine-color-body: var(--k-surface);
+	--mantine-color-text: var(--k-ink);
+	--mantine-color-default-border: var(--k-line-strong);
+	--mantine-color-dimmed: var(--k-ink-3);
+}
+
+:root:root[data-ui="k"].dark {
+	--k-canvas: #111112;
+	--k-surface: #19191b;
+	--k-surface-2: #1f1f22;
+	--k-hover: #242428;
+	--k-ink: #ececea;
+	--k-ink-2: #a9a8a3;
+	--k-ink-3: #74736e;
+	--k-line: #2a2a2e;
+	--k-line-strong: #38383d;
+	--k-accent: #7088f5;
+	--k-accent-hover: #8a9df7;
+	--k-accent-ink: #0d1330;
+	--k-accent-soft: rgb(112 136 245 / 0.14);
+	--k-accent-soft-ink: #aab9fa;
+	--k-selected: rgb(112 136 245 / 0.16);
+	--k-danger: #ef6b61;
+	--k-danger-soft: rgb(239 107 97 / 0.14);
+	--k-warn: #f0b04a;
+	--k-warn-soft: rgb(240 176 74 / 0.14);
+	--k-star: #f2bb3c;
+	--k-shadow-pane: 0 0 0 1px rgb(255 255 255 / 0.05);
+	--k-shadow-pop: 0 16px 40px -8px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.07);
+
+	--brand-600: #7088f5;
+}
+
+@theme inline {
+	--color-k-canvas: var(--k-canvas);
+	--color-k-surface: var(--k-surface);
+	--color-k-surface-2: var(--k-surface-2);
+	--color-k-hover: var(--k-hover);
+	--color-k-ink: var(--k-ink);
+	--color-k-ink-2: var(--k-ink-2);
+	--color-k-ink-3: var(--k-ink-3);
+	--color-k-line: var(--k-line);
+	--color-k-line-strong: var(--k-line-strong);
+	--color-k-accent: var(--k-accent);
+	--color-k-accent-hover: var(--k-accent-hover);
+	--color-k-accent-ink: var(--k-accent-ink);
+	--color-k-accent-soft: var(--k-accent-soft);
+	--color-k-accent-soft-ink: var(--k-accent-soft-ink);
+	--color-k-selected: var(--k-selected);
+	--color-k-danger: var(--k-danger);
+	--color-k-danger-soft: var(--k-danger-soft);
+	--color-k-warn: var(--k-warn);
+	--color-k-warn-soft: var(--k-warn-soft);
+	--color-k-star: var(--k-star);
+	--shadow-k-pane: var(--k-shadow-pane);
+	--shadow-k-pop: var(--k-shadow-pop);
+	--radius-k-pane: var(--k-radius-pane);
+	--radius-k: var(--k-radius);
+	--radius-k-sm: var(--k-radius-sm);
+}
+
+[data-ui="k"] body {
+	background: var(--k-canvas);
+	font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+	letter-spacing: -0.006em;
+}
+
+/* Thin, discreet scrollbars (globals.css used to hide them all). */
+.k-scroll {
+	scrollbar-width: thin;
+	scrollbar-color: var(--k-line-strong) transparent;
+}
+.k-scroll::-webkit-scrollbar {
+	display: block;
+	width: 8px;
+}
+.k-scroll::-webkit-scrollbar-thumb {
+	background: var(--k-line-strong);
+	border-radius: 8px;
+	border: 2px solid var(--k-surface);
+}
+
+/* Visible, consistent keyboard focus */
+.k-focus:focus-visible,
+.k-root :focus-visible:not([contenteditable]):not(input):not(textarea) {
+	outline: 2px solid var(--k-accent);
+	outline-offset: 1px;
+	border-radius: var(--k-radius-sm);
+}
+
+/* List row: actions fade in on hover */
+.k-row .k-row-actions {
+	opacity: 0;
+	transform: translateX(4px);
+	transition: opacity 120ms ease, transform 120ms ease;
+	pointer-events: none;
+}
+.k-row:hover .k-row-actions,
+.k-row:focus-within .k-row-actions {
+	opacity: 1;
+	transform: none;
+	pointer-events: auto;
+}
+.k-row:hover .k-row-meta,
+.k-row:focus-within .k-row-meta {
+	opacity: 0;
+}
+
+@keyframes k-fade-in {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+.k-fade-in {
+	animation: k-fade-in 180ms ease-out both;
+}
+
+
+
+/* Mantine loads its styles outside any layer: its "button, input { font:
+   inherit }" rule beat the Tailwind utilities (button text sizes). In the
+   modern interface only, it is neutralized: revert-layer hands control back to
+   the layers (Tailwind utilities). Mantine components (mantine-* classes) keep
+   their own sizes. */
+[data-ui="k"] :is(button, input, textarea, select):not([class*="mantine-"]) {
+	font: revert-layer;
+}
+
+/* shadcn dialogs and menus (alert-dialog, dialog, dropdown-menu...), which already
+   inherit the variables; radius, shadow and overlay are refined here. */
+[data-ui="k"] [data-slot="alert-dialog-overlay"],
+[data-ui="k"] [data-slot="dialog-overlay"] {
+	background: rgb(20 18 16 / 0.28);
+	backdrop-filter: blur(3px);
+}
+[data-ui="k"] [data-slot="alert-dialog-content"],
+[data-ui="k"] [data-slot="dialog-content"] {
+	border-radius: var(--k-radius-pane);
+	border-color: var(--k-line);
+	box-shadow: var(--k-shadow-pop);
+}
+[data-ui="k"] [data-slot="alert-dialog-title"],
+[data-ui="k"] [data-slot="dialog-title"] {
+	font-size: 15px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+[data-ui="k"] [data-slot="alert-dialog-description"],
+[data-ui="k"] [data-slot="dialog-description"] {
+	font-size: 13.5px;
+	color: var(--k-ink-2);
+}
+[data-ui="k"] [data-slot="dropdown-menu-content"],
+[data-ui="k"] [data-slot="popover-content"],
+[data-ui="k"] [data-slot="select-content"] {
+	border-radius: 12px;
+	border-color: var(--k-line);
+	box-shadow: var(--k-shadow-pop);
+}
+[data-ui="k"] [data-slot="dropdown-menu-item"] {
+	font-size: 13px;
+	border-radius: 8px;
+}
+
+/* sonner notifications. */
+[data-ui="k"] [data-sonner-toast] {
+	--normal-bg: var(--k-ink);
+	--normal-text: var(--k-surface);
+	--normal-border: transparent;
+	border-radius: 12px;
+	border: 1px solid transparent;
+	background: var(--k-ink);
+	color: var(--k-surface);
+	box-shadow: var(--k-shadow-pop);
+	font-size: 13px;
+	font-weight: 500;
+	padding: 11px 14px;
+}
+[data-ui="k"] [data-sonner-toast] [data-description] {
+	font-size: 12.5px;
+	font-weight: 400;
+	color: color-mix(in srgb, var(--k-surface) 72%, transparent);
+}
+[data-ui="k"] [data-sonner-toast] [data-button] {
+	border-radius: 7px;
+	font-size: 12.5px;
+	font-weight: 600;
+	background: color-mix(in srgb, var(--k-surface) 16%, transparent);
+	color: var(--k-surface);
+}
+[data-ui="k"] [data-sonner-toast] [data-cancel] {
+	background: transparent;
+	color: color-mix(in srgb, var(--k-surface) 70%, transparent);
+}
+[data-ui="k"] [data-sonner-toast][data-type="error"] {
+	background: var(--k-danger);
+	color: #fff;
+}
+[data-ui="k"] [data-sonner-toast][data-type="error"] [data-description] {
+	color: rgb(255 255 255 / 0.8);
+}
+[data-ui="k"] [data-sonner-toast] [data-icon] {
+	color: inherit;
+}
+[data-ui="k"] [data-sonner-toast] [data-close-button] {
+	background: var(--k-surface);
+	color: var(--k-ink);
+	border-color: var(--k-line-strong);
+}
+
+/* ---------------------------------------------------------------------------
+   Mail editor (modern interface): formatting toolbar and text area.
+   Classes set by rich-text-editor.tsx when the modern interface is active.
+   ------------------------------------------------------------------------- */
+[data-ui="k"] .k-editor {
+	background: transparent;
+}
+[data-ui="k"] .k-format-bar {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	display: flex;
+	/* a single line, horizontal scroll if the panel is narrow */
+	flex-wrap: nowrap;
+	overflow-x: auto;
+	scrollbar-width: none;
+	align-items: center;
+	gap: 2px 4px;
+	padding: 4px 8px;
+	border: 0;
+	border-top: 1px solid var(--k-line);
+	border-bottom: 1px solid var(--k-line);
+	background: var(--k-surface-2);
+	border-radius: 0;
+}
+[data-ui="k"] .k-format-bar .mantine-RichTextEditor-controlsGroup {
+	flex-shrink: 0;
+	gap: 0;
+	padding-right: 4px;
+	border-right: 1px solid var(--k-line);
+}
+[data-ui="k"] .k-format-bar .mantine-RichTextEditor-controlsGroup:last-child {
+	border-right: 0;
+}
+[data-ui="k"] .k-format-bar .mantine-RichTextEditor-control,
+[data-ui="k"] .k-bubble .mantine-RichTextEditor-control {
+	width: 30px;
+	height: 30px;
+	min-width: 30px;
+	border: 0 !important;
+	border-radius: var(--k-radius-sm) !important;
+	background: transparent;
+	color: var(--k-ink-2);
+}
+[data-ui="k"] .k-format-bar .mantine-RichTextEditor-control:hover,
+[data-ui="k"] .k-bubble .mantine-RichTextEditor-control:hover {
+	background: var(--k-hover);
+	color: var(--k-ink);
+}
+[data-ui="k"] .k-format-bar .mantine-RichTextEditor-control[data-active],
+[data-ui="k"] .k-bubble .mantine-RichTextEditor-control[data-active] {
+	background: var(--k-accent-soft);
+	color: var(--k-accent-soft-ink);
+}
+[data-ui="k"] .k-format-bar .mantine-RichTextEditor-control svg,
+[data-ui="k"] .k-bubble .mantine-RichTextEditor-control svg {
+	width: 16px;
+	height: 16px;
+}
+
+/* Text area: rendering close to what the recipient will get. */
+[data-ui="k"] .k-editor-content,
+[data-ui="k"] .k-editor-content .ProseMirror {
+	background: transparent;
+	color: var(--k-ink);
+	font-size: 14px;
+	line-height: 1.6;
+}
+[data-ui="k"] .k-editor-content .ProseMirror {
+	padding: 14px 18px;
+	min-height: 180px;
+	outline: none;
+}
+[data-ui="k"] .k-editor-content .ProseMirror p {
+	margin: 0 0 0.6em;
+}
+[data-ui="k"] .k-editor-content .ProseMirror h1 {
+	font-size: 22px;
+	font-weight: 650;
+	line-height: 1.3;
+	margin: 0.8em 0 0.4em;
+}
+[data-ui="k"] .k-editor-content .ProseMirror h2 {
+	font-size: 18px;
+	font-weight: 650;
+	margin: 0.8em 0 0.4em;
+}
+[data-ui="k"] .k-editor-content .ProseMirror h3 {
+	font-size: 15.5px;
+	font-weight: 650;
+	margin: 0.8em 0 0.3em;
+}
+[data-ui="k"] .k-editor-content .ProseMirror ul,
+[data-ui="k"] .k-editor-content .ProseMirror ol {
+	padding-left: 1.4em;
+	margin: 0.3em 0 0.7em;
+}
+[data-ui="k"] .k-editor-content .ProseMirror ul {
+	list-style: disc;
+}
+[data-ui="k"] .k-editor-content .ProseMirror ol {
+	list-style: decimal;
+}
+[data-ui="k"] .k-editor-content .ProseMirror blockquote {
+	border-left: 3px solid var(--k-line-strong);
+	margin: 0.6em 0;
+	padding: 0.1em 0 0.1em 0.9em;
+	color: var(--k-ink-2);
+}
+[data-ui="k"] .k-editor-content .ProseMirror hr {
+	border: 0;
+	border-top: 1px solid var(--k-line-strong);
+	margin: 1em 0;
+}
+[data-ui="k"] .k-editor-content .ProseMirror a {
+	color: var(--k-accent);
+	text-decoration: underline;
+}
+[data-ui="k"] .k-editor-content .ProseMirror code {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.9em;
+	background: var(--k-hover);
+	border-radius: 4px;
+	padding: 0.1em 0.35em;
+}
+[data-ui="k"] .k-editor-content .ProseMirror mark {
+	border-radius: 2px;
+	padding: 0 1px;
+	color: inherit;
+}
+[data-ui="k"] .k-editor-content .ProseMirror p.is-editor-empty:first-child::before {
+	color: var(--k-ink-3);
+}
+
+/* Editor header fields (To, Cc, Bcc, From): frameless, like the subject. */
+[data-ui="k"] .k-editor :is(.mantine-TagsInput-input, .mantine-Select-input, .mantine-Input-input) {
+	border: 0;
+	background: transparent;
+	box-shadow: none;
+	padding-left: 4px;
+}
+[data-ui="k"] .k-editor :is(.mantine-TagsInput-input, .mantine-Select-input):focus-within {
+	box-shadow: none;
+}
+
+/* Quoted or forwarded message under the reply (modern interface): discreet, a rule
+   on the left instead of a dotted frame. The content lives in a Shadow DOM (reader
+   stylesheet, reply-quote-editor.tsx): only the .k-quote-area frame is styled here. */
+[data-ui="k"] .k-editor .k-quote {
+	padding: 10px 18px 14px;
+	color: var(--k-ink-3);
+}
+[data-ui="k"] .k-editor .k-quote > div:first-child {
+	color: var(--k-ink-3);
+	font-size: 12px;
+}
+[data-ui="k"] .k-editor .k-quote .k-quote-area {
+	border: 0;
+	border-left: 2px solid var(--k-line-strong);
+	border-radius: 0;
+	background: transparent;
+	color: var(--k-ink-2);
+	color-scheme: inherit;
+	padding: 2px 0 2px 12px;
+	font-size: 13px;
+	max-height: 260px;
+}
+[data-ui="k"] .k-editor .k-quote .k-quote-area:focus-within {
+	border-left-color: var(--k-accent);
+}
+/* Top bar of the editor (reply mode, quote scope) */
+[data-ui="k"] .k-editor .k-editor-modes .mantine-Select-input {
+	font-size: 12.5px;
+	color: var(--k-ink-2);
+	padding-left: 26px;
+}
+[data-ui="k"] .k-editor .k-editor-modes .mantine-Select-input:hover {
+	background: var(--k-hover);
+	border-radius: var(--k-radius-sm);
+}
+/* Editor footer: a single rule, even spacing, and always visible at the bottom of
+   the scrolling area (the Send button no longer ends up under the quote). */
+[data-ui="k"] .k-editor > .border-t {
+	position: sticky;
+	bottom: 0;
+	z-index: 3;
+	background: var(--k-surface);
+	border-color: var(--k-line);
+	padding: 10px 12px;
+}
+
+/* New message and anchored reply: the editor fills the whole available height
+   (full panel, or the height chosen with the handle). Each level between the area
+   and the editor becomes a flex column; the text area takes the remaining space,
+   the send bar stays at the bottom. */
+[data-ui="k"] :is(.k-compose-body, .k-reply-body) :is(div, form):has(.k-editor),
+[data-ui="k"] :is(.k-compose-body, .k-reply-body) .k-editor {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 auto;
+	min-height: 0;
+}
+[data-ui="k"] :is(.k-compose-body, .k-reply-body) .k-editor > :not(.k-editor-content):not(.mantine-RichTextEditor-content) {
+	flex-shrink: 0;
+}
+[data-ui="k"] :is(.k-compose-body, .k-reply-body) .k-editor-content {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 auto;
+	min-height: 84px;
+}
+[data-ui="k"] :is(.k-compose-body, .k-reply-body) .k-editor-content > div,
+[data-ui="k"] :is(.k-compose-body, .k-reply-body) .k-editor-content .ProseMirror {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	min-height: 100%;
+}
+[data-ui="k"] :is(.k-compose-body, .k-reply-body) .k-editor-content .ProseMirror {
+	display: block;
+}
+[data-ui="k"] .k-reply-body {
+	display: flex;
+	flex-direction: column;
+}
+
+/* Files dragged over the editor: visible drop zone. */
+[data-ui="k"] .k-editor[data-k-drop] {
+	position: relative;
+}
+[data-ui="k"] .k-editor[data-k-drop]::after {
+	content: "Drop files to attach them";
+	position: absolute;
+	inset: 6px;
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 2px dashed var(--k-accent);
+	border-radius: var(--k-radius-pane);
+	background: color-mix(in srgb, var(--k-accent-soft) 85%, transparent);
+	color: var(--k-accent-soft-ink);
+	font-size: 14px;
+	font-weight: 600;
+	pointer-events: none;
+}
+
+/* "Sidebar" button of the old headers (Contacts, Drive, Platform): pointless in
+   the shell of the modern interface. */
+[data-ui="k"] .k-root [data-sidebar="trigger"],
+[data-ui="k"] .k-root [data-sidebar="trigger"] + [data-orientation="vertical"] {
+	display: none;
+}
+
+/* Long lists: the browser skips layout and rendering of off-screen rows (threads
+   loaded on scroll stay light). */
+[data-ui="k"] .k-row {
+	content-visibility: auto;
+	contain-intrinsic-size: auto 68px;
+}
+
+/* Separator between the mails of the list: a thin rule at the bottom of each row,
+   inside the row (content-visibility clips what overflows). Hidden below and above
+   a highlighted row (hover, open, checked) so as not to cut its rounded background,
+   and after the last row of a section. */
+[data-ui="k"] .k-row::after {
+	content: "";
+	position: absolute;
+	left: 12px;
+	right: 12px;
+	bottom: 0;
+	height: 1px;
+	background: var(--k-line);
+	pointer-events: none;
+	transition: opacity 0.12s;
+}
+[data-ui="k"] .k-row:not(:has(+ .k-row))::after,
+[data-ui="k"] .k-row:is(:hover, [aria-current="true"], [data-selected="true"])::after,
+[data-ui="k"] .k-row:has(+ .k-row:is(:hover, [aria-current="true"], [data-selected="true"]))::after {
+	opacity: 0;
+}
+
+/* Signature preview in the editor: rendering close to the sent mail. */
+[data-ui="k"] .k-signature-body p { margin: 0; }
+[data-ui="k"] .k-signature-body img { max-width: 100%; height: auto; display: inline-block; }
+[data-ui="k"] .k-signature-body a { color: var(--k-accent); }

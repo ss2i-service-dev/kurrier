@@ -1,3 +1,5 @@
+"use client";
+
 import { MailboxThreadEntity } from "@db";
 import {
 	addLabelToThread,
@@ -6,6 +8,7 @@ import {
 	FetchMailboxThreadLabelsResult,
 } from "@/lib/actions/labels";
 import { LabelAssignPopover } from "@/components/dashboard/labels/label-assign-popover";
+
 
 type ThreadLabelHoverButtonsProps = {
 	mailboxThreadItem: MailboxThreadEntity;

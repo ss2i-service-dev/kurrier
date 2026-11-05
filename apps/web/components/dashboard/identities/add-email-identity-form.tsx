@@ -9,6 +9,7 @@ import { parseSecret } from "@/lib/utils";
 import { imapQuotaList } from "@schema";
 import {Checkbox, MultiSelect, Select} from "@mantine/core";
 import {FetchWorkspaceMembersResult} from "@/lib/actions/workspace";
+import { useModernUi } from "@/components/k/ui-context";
 
 function AddEmailIdentityForm({
 	onCompleted,
@@ -27,6 +28,7 @@ function AddEmailIdentityForm({
 	userDomainIdentities: FetchUserIdentitiesResult;
 	userEmailIdentities: FetchUserIdentitiesResult;
 }) {
+	const nv = useModernUi();
 	const [provider, setProvider] = React.useState<
 		FetchDecryptedSecretsResult[number] | null
 	>(null);
@@ -302,6 +304,9 @@ function AddEmailIdentityForm({
 				onSuccess={finalizeEmail}
 				fields={fields}
 				formKey={String(activeId)}
+				submitButtonProps={
+					nv ? { submitLabel: "Add address", wrapperClasses: "mt-8", fullWidth: true } : undefined
+				}
 			/>
 		</div>
 	);

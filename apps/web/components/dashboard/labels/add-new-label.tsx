@@ -10,6 +10,7 @@ import ReusableFormCustomWrapper from "@/components/common/reusable-form-custom-
 import { DEFAULT_COLORS_SWATCH } from "@common/mail-client";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import {useParams} from "next/navigation";
+import { useModernUi } from "@/components/k/ui-context";
 
 function useLabelOptions({ labels }: { labels: any[] }) {
 	const options = labels.map((l) => ({
@@ -25,6 +26,7 @@ export default function AddNewLabel({
 }: {
 	globalLabels: FetchLabelsResult;
 }) {
+	const modern = useModernUi();
 	const [opened, { open, close }] = useDisclosure(false);
 
 	const { options: labelOptions } = useLabelOptions({ labels: globalLabels });
@@ -94,9 +96,21 @@ export default function AddNewLabel({
 				/>
 			</Modal>
 
-			<ActionIcon variant="light" size="xs" onClick={open}>
-				<IconPlus size={12} />
-			</ActionIcon>
+			{modern ? (
+				<button
+					type="button"
+					onClick={open}
+					title="New label"
+					aria-label="New label"
+					className="k-focus inline-flex h-5 w-5 items-center justify-center rounded-k-sm text-k-ink-3 transition-colors hover:bg-k-hover hover:text-k-ink"
+				>
+					<IconPlus size={14} />
+				</button>
+			) : (
+				<ActionIcon variant="light" size="xs" onClick={open}>
+					<IconPlus size={12} />
+				</ActionIcon>
+			)}
 		</>
 	);
 }

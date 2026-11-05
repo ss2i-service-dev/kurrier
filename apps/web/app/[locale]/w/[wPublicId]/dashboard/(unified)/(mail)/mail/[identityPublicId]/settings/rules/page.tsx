@@ -25,9 +25,12 @@ async function Page({ params }: { params: { identityPublicId: string } }) {
 
     if (!identity) {
         return (
-            <SectionCard title="Rules" description="Create filters to automatically process incoming mail.">
+            <SectionCard
+                title={"Rules"}
+                description={"Create filters to automatically process incoming mail."}
+            >
                 <div className="text-sm text-neutral-600 dark:text-neutral-400">
-                    Identity not found.
+                    {"Identity not found."}
                 </div>
             </SectionCard>
         );
@@ -42,7 +45,7 @@ async function Page({ params }: { params: { identityPublicId: string } }) {
             description={"Create filters to automatically process incoming mail."}
         >
             <MailRulesList rules={rules} />
-            {rules.length > 0 && <Divider my={"xl"} variant={"dashed"} label={<span className={"text-sm"}>Add New Label</span>} labelPosition={"left"} />}
+            {rules.length > 0 && <Divider my={"xl"} variant={"dashed"} label={<span className={"text-sm"}>{"Add New Label"}</span>} labelPosition={"left"} />}
             <CreateMailRuleForm identityId={identity.id} action={createRule} appLabels={appLabels} />
 
         </SectionCard>

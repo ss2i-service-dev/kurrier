@@ -10,8 +10,12 @@ import { getServerEnv } from "@schema";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3 } from "@/lib/create-s3-client";
+import { isModernUi } from "@/lib/actions/interface-pref";
+import { loadKContactsData } from "@/components/k/contacts-data";
+import { fetchContactLabelsWithCounts } from "@/lib/actions/labels";
+import KContactsShell from "@/components/k/contacts-shell";
 
-export default async function ContactsLayout({
+async function ClassicContactsLayout({
 												 children,
 											 }: {
 	children: React.ReactNode;
@@ -91,5 +95,25 @@ export default async function ContactsLayout({
 				{children}
 			</ContactsShell>
 		</>
+	);
+}
+
+// Modern interface: list on the left, details on the right (components/k/contacts-shell.tsx).
+export default async function ContactsLayout(props: { children: React.ReactNode }) {
+	if (!(await isModernUi())) return <ClassicContactsLayout {...props} />;
+	const [{ allContacts, profileImages, workspacePublicId, books }, labelRows] = await Promise.all([
+		loadKContactsData(),
+		fetchContactLabelsWithCounts(),
+	]);
+	return (
+		<KContactsShell
+			contacts={allContacts}
+			profileImages={profileImages}
+			workspacePublicId={workspacePublicId}
+			books={books}
+			labels={labelRows.map((l) => ({ slug: l.slug, name: l.name }))}
+		>
+			{props.children}
+		</KContactsShell>
 	);
 }

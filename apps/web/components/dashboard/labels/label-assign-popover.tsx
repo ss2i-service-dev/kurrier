@@ -13,6 +13,7 @@ import {
 import { IconLabel, IconLabelFilled } from "@tabler/icons-react";
 import { LabelEntity } from "@db";
 import type { LabelScope } from "@schema";
+import { useModernUi } from "@/components/k/ui-context";
 
 type LabelAssignPopoverProps = {
 	title: string;
@@ -32,6 +33,7 @@ export function LabelAssignPopover({
 	selectedLabelIds,
 	onToggleLabel,
 }: LabelAssignPopoverProps) {
+	const modern = useModernUi();
 	const [opened, setOpened] = useState(false);
 	const [query, setQuery] = useState("");
 
@@ -69,15 +71,23 @@ export function LabelAssignPopover({
 							setOpened((v) => !v);
 						}}
 						variant={"transparent"}
+						aria-label="Add or remove labels"
+						className={modern ? "!text-k-ink-2 hover:!text-k-ink" : undefined}
 					>
 						<IconLabel size={22} stroke={1.5} className={"mt-1"} />
 					</ActionIcon>
 				</Tooltip>
 			</Popover.Target>
 
-			<Popover.Dropdown className="w-72 bg-popover border border-border rounded-xl p-3 shadow-lg">
+			<Popover.Dropdown
+				className={
+					modern
+						? "w-72 rounded-k border border-k-line bg-k-surface p-3 shadow-k-pop"
+						: "w-72 bg-popover border border-border rounded-xl p-3 shadow-lg"
+				}
+			>
 				<div className="flex flex-col gap-2">
-					<div className="px-0.5 text-xs font-semibold text-muted-foreground">
+					<div className={`px-0.5 text-xs font-semibold ${modern ? "text-k-ink-3" : "text-muted-foreground"}`}>
 						{title}
 					</div>
 
@@ -85,13 +95,14 @@ export function LabelAssignPopover({
 						size="xs"
 						radius="md"
 						placeholder="Search labels…"
+						aria-label="Search labels"
 						value={query}
 						onChange={(event) => setQuery(event.currentTarget.value)}
 					/>
 
 					<ScrollArea.Autosize mah={220} className="mt-1.5">
 						{filteredLabels.length === 0 ? (
-							<div className="px-1.5 py-2 text-xs text-muted-foreground">
+							<div className={`px-1.5 py-2 text-xs ${modern ? "text-k-ink-3" : "text-muted-foreground"}`}>
 								No labels found
 							</div>
 						) : (
@@ -108,9 +119,9 @@ export function LabelAssignPopover({
 												await onToggleLabel(label.id, !checked);
 											}}
 											className={[
-												"flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left",
-												"hover:bg-muted",
-												checked ? "bg-muted/70" : "",
+												"flex w-full items-center gap-2 px-2 py-1.5 text-left",
+												modern ? "rounded-k-sm text-k-ink hover:bg-k-hover" : "rounded-md hover:bg-muted",
+												checked ? (modern ? "bg-k-selected" : "bg-muted/70") : "",
 											].join(" ")}
 										>
 											<IconLabelFilled

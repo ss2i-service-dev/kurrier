@@ -5,6 +5,7 @@ import { CalendarDays, Clock, MapPin, User, CheckCircle, CircleDashed, CircleX }
 import type { CalendarEventEntity, CalendarEventAttendeeEntity, IdentityEntity } from "@db";
 import { ReusableFormButton } from "@/components/common/reusable-form-button";
 import { maybeCalendarInvite, noCalendarInvite, yesCalendarInvite } from "@/lib/actions/calendar";
+import { useModernUi } from "@/components/k/ui-context";
 
 type Props = {
     calendarEvent: CalendarEventEntity;
@@ -38,7 +39,7 @@ function fmtRange(startsAt: string, endsAt: string) {
     return `${fmtStart.format(start)} – ${fmtStart.format(end)}`;
 }
 
-function partstatLabel(partstat?: string | null) {
+function partstatLabel(partstat: string | null | undefined) {
     const v = (partstat || "").toLowerCase();
     if (v === "needs_action") return "Awaiting your response";
     if (v === "accepted") return "You accepted";
@@ -48,6 +49,7 @@ function partstatLabel(partstat?: string | null) {
 }
 
 export default function RenderInvite({ calendarEvent, attendees, identity }: Props) {
+    const modern = useModernUi();
     const selfAttendee = useMemo(() => {
         const me = (identity.value || "").trim().toLowerCase();
         return attendees.find((a) => (a.email || "").trim().toLowerCase() === me) ?? null;
@@ -76,8 +78,12 @@ export default function RenderInvite({ calendarEvent, attendees, identity }: Pro
     const attendeeId = String(selfAttendee?.id || "");
 
     return (
-        <div className="my-4 overflow-hidden rounded-2xl border border-neutral-200/70 bg-brand-100 dark:border-neutral-800 dark:bg-neutral-800">
-            <div className="flex items-start justify-between gap-4 bg-neutral-50 px-4 py-3 dark:bg-neutral-900/40">
+        <div className={modern
+            ? "my-4 overflow-hidden rounded-k border border-k-line bg-k-surface-2 text-k-ink"
+            : "my-4 overflow-hidden rounded-2xl border border-neutral-200/70 bg-brand-100 dark:border-neutral-800 dark:bg-neutral-800"}>
+            <div className={modern
+                ? "flex items-start justify-between gap-4 bg-k-surface px-4 py-3"
+                : "flex items-start justify-between gap-4 bg-neutral-50 px-4 py-3 dark:bg-neutral-900/40"}>
                 <div className="min-w-0">
                     <div className="flex items-center gap-2">
             <span className="inline-flex items-center rounded-full border border-neutral-200 bg-white px-2 py-0.5 text-xs font-medium text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-300">

@@ -1,3 +1,5 @@
+import { isModernUi } from "@/lib/actions/interface-pref";
+import { KWebhooksPage } from "@/components/k/platform/simple-pages";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import React from "react";
@@ -5,7 +7,7 @@ import {fetchUserAPIKeys, fetchUserWebhooks} from "@/lib/actions/dashboard";
 import ManageWebhooks from "@/components/dashboard/webhooks/manage-webhooks";
 import {fetchIdentityMailboxList} from "@/lib/actions/mailbox";
 
-export default async function Page() {
+async function ClassicPage() {
     const apiKeysList = await fetchUserAPIKeys();
     const webhooksList = await fetchUserWebhooks();
     const identityMailboxes = await fetchIdentityMailboxList()
@@ -34,4 +36,10 @@ export default async function Page() {
             </div>
         </>
     );
+}
+
+// Modern interface (per-user option): page rebuilt in components/k/platform.
+export default async function Page() {
+	if (!(await isModernUi())) return <ClassicPage />;
+	return <KWebhooksPage />;
 }

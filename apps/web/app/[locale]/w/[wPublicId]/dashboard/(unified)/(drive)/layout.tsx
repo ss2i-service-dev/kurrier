@@ -1,3 +1,5 @@
+import { isModernUi } from "@/lib/actions/interface-pref";
+import KAppShell from "@/components/k/app-shell";
 import { SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/ui/dashboards/unified/default/app-sidebar";
 import { DriveState } from "@schema";
@@ -10,8 +12,10 @@ import {Suspense} from "react";
 import Loading from "@/app/loading";
 import NavUserWrapper from "@/components/ui/dashboards/workspace/nav-user-wrapper";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
+import KDriveNew from "@/components/k/drive-new";
+import KDriveNav from "@/components/k/drive-nav";
 
-export default async function DriveLayout({
+async function ClassicDriveLayout({
                                               children,
                                           }: {
     children: React.ReactNode;
@@ -53,4 +57,34 @@ export default async function DriveLayout({
             </DynamicContextProvider>
         </>
     );
+}
+
+// Modern interface (per-user option): shell of the modern interface, same
+// Drive state and same content.
+export default async function DriveLayout(props: { children: React.ReactNode }) {
+	if (!(await isModernUi())) return <ClassicDriveLayout {...props} />;
+	const vols = await fetchVolumes();
+	const userId = await isSignedIn();
+	const initialState: DriveState = {
+		localVolumes: [],
+		cloudVolumes: vols,
+		driveRouteContext: null,
+		userId: String(userId?.id),
+	};
+	const workspacePublicId = await getWorkspacePublicId();
+	return (
+		<DynamicContextProvider initialState={initialState}>
+			<KAppShell
+				action={<KDriveNew />}
+				nav={
+					<KDriveNav
+						workspacePublicId={workspacePublicId}
+						volumes={vols.map((v) => ({ id: v.id, publicId: v.publicId, label: v.label || v.code }))}
+					/>
+				}
+			>
+				{props.children}
+			</KAppShell>
+		</DynamicContextProvider>
+	);
 }

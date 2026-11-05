@@ -1,3 +1,6 @@
+import { isModernUi } from "@/lib/actions/interface-pref";
+import KPane from "@/components/k/pane";
+import KSettingsShell from "@/components/k/settings-shell";
 import React, { ReactNode } from "react";
 import MailboxSearchHeader from "@/components/mailbox/mailbox-search-header";
 import {Mail} from "lucide-react";
@@ -14,7 +17,7 @@ type LayoutProps = {
 
 
 
-export default async function Layout({
+async function ClassicLayout({
 	children,
 	params,
 }: LayoutProps) {
@@ -75,4 +78,31 @@ export default async function Layout({
         </Container>
 
     </>
+}
+
+// Modern interface (per-user option): dedicated Settings screen (side navigation
+// + cards), same pages as content.
+async function ModernLayout({ children, params }: LayoutProps) {
+	const { identityPublicId } = await params;
+	const rls = await rlsClient();
+	const [identity] = await rls((tx) =>
+		tx.select().from(identities).where(eq(identities.publicId, identityPublicId)),
+	);
+	const workspacePublicId = await getWorkspacePublicId();
+	return (
+		<KPane scroll={false}>
+			<KSettingsShell
+				identityLabel={identity?.value}
+				identityPublicId={identityPublicId}
+				workspacePublicId={workspacePublicId}
+			>
+				{children}
+			</KSettingsShell>
+		</KPane>
+	);
+}
+
+export default async function Layout(props: any) {
+	if (!(await isModernUi())) return <ClassicLayout {...props} />;
+	return <ModernLayout {...props} />;
 }

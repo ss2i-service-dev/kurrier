@@ -9,6 +9,8 @@ import { ReusableForm } from "@/components/common/reusable-form";
 import { ulid } from "ulid";
 import { VerifyResult } from "@providers";
 import { parseSecret } from "@/lib/utils";
+import { useModernUi } from "@/components/k/ui-context";
+import { envLabel } from "@/components/k/platform/ui";
 
 function NewSmtpAccountForm({
 	smtpSecret,
@@ -18,6 +20,16 @@ function NewSmtpAccountForm({
 	onCompleted?: (res: VerifyResult) => void;
 }) {
 	const parsedVaultValues = parseSecret(smtpSecret);
+	const nv = useModernUi();
+	const bool = nv
+		? [
+				{ label: "Yes", value: "true" },
+				{ label: "No", value: "false" },
+			]
+		: [
+				{ label: "TRUE", value: "true" },
+				{ label: "FALSE", value: "false" },
+			];
 
 	const fields = [
 		{
@@ -38,7 +50,7 @@ function NewSmtpAccountForm({
 
 		{
 			name: "label",
-			label: (
+			label: nv ? "Account name" : (
 				<code className="rounded bg-muted/50 px-2 py-1 text-xs">
 					ACCOUNT LABEL
 				</code>
@@ -58,16 +70,13 @@ function NewSmtpAccountForm({
 			rowKey === "SMTP_SECURE" || rowKey === "SMTP_POOL"
 				? {
 						name: `required.${rowKey}`,
-						label: (
+						label: nv ? envLabel(rowKey) : (
 							<code className="rounded bg-muted/50 px-2 py-1 text-xs">
 								{rowKey}
 							</code>
 						),
 						kind: "select" as const,
-						options: [
-							{ label: "TRUE", value: "true" },
-							{ label: "FALSE", value: "false" },
-						],
+						options: bool,
 						required: false,
 						wrapperClasses: "col-span-12 sm:col-span-6",
 						props: {
@@ -81,7 +90,7 @@ function NewSmtpAccountForm({
 					}
 				: {
 						name: `required.${rowKey}`,
-						label: (
+						label: nv ? envLabel(rowKey) : (
 							<code className="rounded bg-muted/50 px-2 py-1 text-xs">
 								{rowKey}
 							</code>
@@ -113,16 +122,13 @@ function NewSmtpAccountForm({
 			rowKey === "IMAP_SECURE"
 				? {
 						name: `optional.${rowKey}`,
-						label: (
+						label: nv ? envLabel(rowKey) : (
 							<code className="rounded bg-muted/50 px-2 py-1 text-xs">
 								{rowKey}
 							</code>
 						),
 						kind: "select" as const,
-						options: [
-							{ label: "TRUE", value: "true" },
-							{ label: "FALSE", value: "false" },
-						],
+						options: bool,
 						required: false,
 						wrapperClasses: "col-span-12 sm:col-span-6",
 						props: {
@@ -136,7 +142,7 @@ function NewSmtpAccountForm({
 					}
 				: {
 						name: `optional.${rowKey}`,
-						label: (
+						label: nv ? envLabel(rowKey) : (
 							<code className="rounded bg-muted/50 px-2 py-1 text-xs">
 								{rowKey}
 							</code>

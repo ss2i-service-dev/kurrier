@@ -11,7 +11,6 @@ type LabelRowTagProps = {
 
 function LabelRowTag({ threadId, labelsByThreadId, isRead }: LabelRowTagProps) {
 	const labelThreads = labelsByThreadId[threadId] ?? [];
-
 	const { labelSlug } = useParams<{ labelSlug?: string }>();
 	const slug =
 		typeof labelSlug === "string" ? labelSlug.toLowerCase() : undefined;

@@ -5,6 +5,7 @@ import {
 import { ReusableForm } from "@/components/common/reusable-form";
 import React from "react";
 import { FormState } from "@schema";
+import { useModernUi } from "@/components/k/ui-context";
 
 function AddDomainIdentityForm({
 	onCompleted,
@@ -15,6 +16,7 @@ function AddDomainIdentityForm({
 	providerOptions: { label: string; value: string }[];
 	providerAccounts: FetchDecryptedSecretsResult;
 }) {
+	const nv = useModernUi();
 	const [provider, setProvider] = React.useState<
 		FetchDecryptedSecretsResult[number] | null
 	>(null);
@@ -94,6 +96,9 @@ function AddDomainIdentityForm({
 			action={addNewDomainIdentity}
 			onSuccess={onCompleted || undefined}
 			fields={fields}
+			submitButtonProps={
+				nv ? { submitLabel: "Add domain", wrapperClasses: "mt-6", fullWidth: true } : undefined
+			}
 		/>
 	);
 }

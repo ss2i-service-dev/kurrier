@@ -1,3 +1,5 @@
+import { isModernUi } from "@/lib/actions/interface-pref";
+import KProvidersPage from "@/components/k/platform/providers-page";
 import * as React from "react";
 import { Container } from "@/components/common/containers";
 import { PROVIDERS } from "@schema";
@@ -8,7 +10,7 @@ import { smtpAccountSecrets } from "@db";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 
-export default async function ProvidersPage() {
+async function ClassicProvidersPage() {
 	const userProviders = await syncProviders();
 
 	const smtpSecrets = await fetchDecryptedSecrets({
@@ -58,4 +60,10 @@ export default async function ProvidersPage() {
 			</div>
 		</>
 	);
+}
+
+// Modern interface (per-user option): page rebuilt in components/k/platform.
+export default async function ProvidersPage() {
+	if (!(await isModernUi())) return <ClassicProvidersPage />;
+	return <KProvidersPage />;
 }

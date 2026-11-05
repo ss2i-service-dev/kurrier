@@ -1,3 +1,5 @@
+import { isModernUi } from "@/lib/actions/interface-pref";
+import KStoragePage from "@/components/k/platform/storage-page";
 import * as React from "react";
 import { Container } from "@/components/common/containers";
 import { ProviderLabels, STORAGE_PROVIDERS } from "@schema";
@@ -14,7 +16,7 @@ import { driveVolumes, providerSecrets, smtpAccountSecrets } from "@db";
 import { parseSecret } from "@/lib/utils";
 import ProviderCardShell from "@/components/dashboard/providers/provider-card-shell";
 
-export default async function ProvidersPage() {
+async function ClassicStoragePage() {
 	const userProviders = await syncProviders();
 	const rls = await rlsClient();
 	const workspacePublicId = await getWorkspacePublicId()
@@ -97,4 +99,10 @@ export default async function ProvidersPage() {
 			</div>
 		</>
 	);
+}
+
+// Modern interface (per-user option): page rebuilt in components/k/platform.
+export default async function StoragePage() {
+	if (!(await isModernUi())) return <ClassicStoragePage />;
+	return <KStoragePage />;
 }

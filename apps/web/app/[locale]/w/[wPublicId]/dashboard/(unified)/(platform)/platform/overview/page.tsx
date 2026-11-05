@@ -1,3 +1,5 @@
+import { isModernUi } from "@/lib/actions/interface-pref";
+import KOverviewPage from "@/components/k/platform/overview-page";
 import {
 	Activity,
 	ArrowRight,
@@ -23,7 +25,7 @@ import React from "react";
 import { getWorkspacePublicId, getWorkspaceRole } from "@/lib/actions/clients";
 import { fetchWorkspace } from "@/lib/actions/workspace";
 
-export default async function Page() {
+async function ClassicPage() {
 	const { data: statsData } = await getDashboardStats();
 	const workspacePublicId = await getWorkspacePublicId();
 	const workspaceRole = await getWorkspaceRole();
@@ -561,4 +563,10 @@ function formatBytes(value: unknown) {
 
 	const digits = unit === 0 ? 0 : size < 10 ? 1 : 0;
 	return `${size.toFixed(digits)} ${units[unit]}`;
+}
+
+// Modern interface (per-user option): page rebuilt in components/k/platform.
+export default async function Page() {
+	if (!(await isModernUi())) return <ClassicPage />;
+	return <KOverviewPage />;
 }

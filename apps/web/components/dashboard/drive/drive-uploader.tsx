@@ -17,6 +17,8 @@ import {
 
 export type DriveUploaderHandle = {
 	openPicker: () => void;
+	// Imports files that were already picked (drag and drop in the modern interface)
+	enqueue: (files: File[]) => void;
 };
 
 type UploadState = "queued" | "uploading" | "done" | "error" | "canceled";
@@ -68,8 +70,11 @@ const DriveUploader = forwardRef<DriveUploaderHandle, DriveUploaderProps>(
 					if (!canUpload) return;
 					inputRef.current?.click();
 				},
+				enqueue(files: File[]) {
+					if (files.length) void enqueueFiles(files);
+				},
 			}),
-			[canUpload],
+			[canUpload, ctx],
 		);
 
 		async function startUpload(itemId: string, file: File) {
@@ -187,8 +192,7 @@ const DriveUploader = forwardRef<DriveUploaderHandle, DriveUploaderProps>(
 
 				const formData = new FormData();
 				formData.append("file", file);
-				formData.append("bucket", presign.bucket);
-				formData.append("key", presign.key);
+				formData.append("uploadToken", presign.uploadToken);
 
 				xhr.send(formData);
 			}

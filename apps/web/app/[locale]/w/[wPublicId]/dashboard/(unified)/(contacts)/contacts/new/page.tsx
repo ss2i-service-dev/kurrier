@@ -1,3 +1,5 @@
+import { isModernUi } from "@/lib/actions/interface-pref";
+import KContactForm from "@/components/k/contact-form";
 import React from "react";
 import NewContactForm from "@/components/dashboard/contacts/new-contact-form";
 import { decode } from "decode-formdata";
@@ -13,7 +15,7 @@ import { isSignedIn } from "@/lib/actions/auth";
 import { revalidatePath } from "next/cache";
 import {getRedis} from "@/lib/actions/get-redis";
 
-async function Page() {
+async function ClassicPage({ modern = false }: { modern?: boolean }) {
 	const user = await isSignedIn();
 	const publicConfig = getPublicEnv();
 	const workspacePublicId = await getWorkspacePublicId()
@@ -61,8 +63,9 @@ async function Page() {
 		});
 	};
 
+	const ContactForm = modern ? KContactForm : NewContactForm;
 	return (
-		<NewContactForm
+		<ContactForm
 			createContactAction={createContactAction}
 			user={user}
 			workspacePublicId={workspacePublicId}
@@ -71,4 +74,8 @@ async function Page() {
 	);
 }
 
-export default Page;
+
+// Modern interface: same server action, form in the modern style.
+export default async function Page() {
+	return <ClassicPage modern={await isModernUi()} />;
+}

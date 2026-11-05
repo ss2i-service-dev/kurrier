@@ -10,8 +10,10 @@ import { IconLabelFilled } from "@tabler/icons-react";
 import { PAGE_SIZE } from "@common/mail-client";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
 import WebmailListLabelSearch from "@/components/mailbox/default/webmail-list-label-search";
+import { isModernUi } from "@/lib/actions/interface-pref";
+import { KPager } from "@/components/k/section";
 
-export default async function LabelPage({
+async function ClassicLabelPage({
 	params,
 	searchParams,
 }: {
@@ -91,4 +93,63 @@ export default async function LabelPage({
 			/>
 		</div>
 	);
+}
+
+// Modern interface (per-user option): same data, different presentation.
+async function ModernLabelPage({
+	params,
+	searchParams,
+}: {
+	params: { mailboxSlug: string; identityPublicId: string; labelSlug: string };
+	searchParams: Record<string, string | string[] | undefined>;
+}) {
+	const { identityPublicId, mailboxSlug, labelSlug } = await params;
+	const resolvedSearchParams = await searchParams;
+	const publicConfig = await getPublicEnv();
+	const page = Math.max(1, Number((resolvedSearchParams.page as string | undefined) ?? 1));
+	const { activeMailbox, mailboxSync } = await fetchMailbox(identityPublicId, mailboxSlug);
+	const identityMailboxes = await fetchIdentityMailboxList();
+	const globalLabels = await fetchLabelsByIdentityPublicId({ identityPublicId, scope: "thread" });
+	const { threads: mailboxThreads, total } = await fetchMailboxThreadsByLabel(identityPublicId, mailboxSlug, labelSlug, page);
+	const labelsByThreadId = await fetchMailboxThreadLabels(mailboxThreads);
+	const label = globalLabels.find((l) => l.slug === labelSlug);
+	const workspacePublicId = await getWorkspacePublicId();
+	const name = label?.name ?? labelSlug;
+
+	return (
+		<div className="k-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
+			<WebmailListLabelSearch
+				mailboxThreads={mailboxThreads}
+				publicConfig={publicConfig}
+				activeMailbox={activeMailbox}
+				workspacePublicId={workspacePublicId}
+				identityPublicId={identityPublicId}
+				mailboxSync={mailboxSync ?? undefined}
+				identityMailboxes={identityMailboxes}
+				globalLabels={globalLabels}
+				labelsByThreadId={labelsByThreadId}
+				kTitle={
+					<span className="inline-flex items-center gap-2">
+						<IconLabelFilled size={18} color={String(label?.colorBg)} />
+						{name}
+					</span>
+				}
+				kEmptyTitle="No messages with this label"
+				kEmptyText={`No thread in "${activeMailbox.name}" has the label "${name}".`}
+			/>
+			<KPager
+				page={page}
+				total={total}
+				pageSize={PAGE_SIZE}
+				href={(n) => `/w/${workspacePublicId}/dashboard/mail/${identityPublicId}/${mailboxSlug}/label/${labelSlug}?page=${n}`}
+			/>
+		</div>
+	);
+}
+
+export default async function LabelPage(props: {
+	params: { mailboxSlug: string; identityPublicId: string; labelSlug: string };
+	searchParams: Record<string, string | string[] | undefined>;
+}) {
+	return (await isModernUi()) ? <ModernLabelPage {...props} /> : <ClassicLabelPage {...props} />;
 }

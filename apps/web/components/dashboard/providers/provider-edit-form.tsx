@@ -8,6 +8,8 @@ import {
 } from "@/lib/actions/dashboard";
 import { parseSecret } from "@/lib/utils";
 import { VerifyResult } from "@providers";
+import { useModernUi } from "@/components/k/ui-context";
+import { envLabel } from "@/components/k/platform/ui";
 
 function ProviderEditForm({
 	spec,
@@ -21,6 +23,7 @@ function ProviderEditForm({
 	decryptedSecret: FetchDecryptedSecretsResult[number];
 }) {
 	const decryptedValues = parseSecret(decryptedSecret);
+	const nv = useModernUi();
 
 	const fields = [
 		{
@@ -41,7 +44,7 @@ function ProviderEditForm({
 		},
 		...spec.requiredEnv.map((row: string) => ({
 			name: `required.${row}`,
-			label: (
+			label: nv ? envLabel(row) : (
 				<code className="rounded bg-muted/50 px-2 py-1 text-xs">{row}</code>
 			),
 			required: true,
@@ -59,6 +62,11 @@ function ProviderEditForm({
 			fields={fields}
 			onSuccess={onCompleted}
 			action={upsertProviderAccount}
+			submitButtonProps={
+				nv
+					? { submitLabel: "Save", wrapperClasses: "mt-6", fullWidth: true }
+					: undefined
+			}
 		/>
 	);
 }

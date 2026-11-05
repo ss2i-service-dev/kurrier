@@ -5,8 +5,10 @@ import DriveTopBar from "@/components/dashboard/drive/drive-top-bar";
 import { normalizeWithinPath } from "@/lib/actions/drive";
 import { isSignedIn } from "@/lib/actions/auth";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
+import { isModernUi } from "@/lib/actions/interface-pref";
+import KDriveHeader from "@/components/k/drive-header";
 
-export default async function DriveSegmentsLayout({
+async function ClassicDriveSegmentsLayout({
                                                       children,
                                                       params,
                                                   }: {
@@ -32,6 +34,27 @@ export default async function DriveSegmentsLayout({
             <main>
                 <section className="">{children}</section>
             </main>
+        </>
+    );
+}
+
+// Modern interface (per-user option): header with breadcrumb and actions, then
+// the content.
+export default async function DriveSegmentsLayout(props: {
+    children: React.ReactNode;
+    params: Record<any, any>;
+}) {
+    if (!(await isModernUi())) return <ClassicDriveSegmentsLayout {...props} />;
+
+    const { segments } = await props.params;
+    const ctx = await normalizeWithinPath(segments ?? []);
+    const user = await isSignedIn();
+    const workspacePublicId = await getWorkspacePublicId();
+
+    return (
+        <>
+            <KDriveHeader ctx={ctx} userId={String(user?.id)} workspacePublicId={workspacePublicId} />
+            <div className="flex min-h-0 flex-1 flex-col">{props.children}</div>
         </>
     );
 }

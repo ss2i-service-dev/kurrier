@@ -1,10 +1,12 @@
+import { isModernUi } from "@/lib/actions/interface-pref";
+import { KApiKeysPage } from "@/components/k/platform/simple-pages";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import React from "react";
 import ManageApiKeys from "@/components/dashboard/api-keys/manage-api-keys";
 import { fetchUserAPIKeys } from "@/lib/actions/dashboard";
 
-export default async function Page() {
+async function ClassicPage() {
 	const apiKeysList = await fetchUserAPIKeys();
 	return (
 		<>
@@ -22,4 +24,10 @@ export default async function Page() {
 			</div>
 		</>
 	);
+}
+
+// Modern interface (per-user option): page rebuilt in components/k/platform.
+export default async function Page() {
+	if (!(await isModernUi())) return <ClassicPage />;
+	return <KApiKeysPage />;
 }

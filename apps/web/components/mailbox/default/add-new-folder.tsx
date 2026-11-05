@@ -65,7 +65,7 @@ export default function AddNewFolder({
 				/>
 			</Modal>
 
-			<ActionIcon size={10} onClick={open}>
+			<ActionIcon size={10} onClick={open} aria-label="New folder">
 				<Plus />
 			</ActionIcon>
 		</>

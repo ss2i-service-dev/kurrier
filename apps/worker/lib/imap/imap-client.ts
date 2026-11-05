@@ -45,7 +45,15 @@ function safeReconnect(
 export const initSmtpClient = async (
 	identityId: string,
 	imapInstances: Map<string, ImapFlow>,
+	// ss2i (OI 10346) : false pour le client IDLE, que imap-idle-sync.ts reconnecte lui-meme
+	// (scheduleReconnect, balayage imap:realtime-recovery) ; safeReconnect en rouvrait un second en
+	// parallele, sans IDLE, qui pouvait prendre la place du bon dans la table.
+	{ reconnect = true }: { reconnect?: boolean } = {},
 ) => {
+	const retry = () => {
+		if (reconnect) safeReconnect(identityId, imapInstances);
+	};
+
 	try {
 		const existing = imapInstances.get(identityId);
 		if (existing && existing.authenticated && existing.usable) {
@@ -61,7 +69,7 @@ export const initSmtpClient = async (
 		}
 	} catch (err) {
 		console.error(`[IMAP:${identityId}] Existing instance check failed`, err);
-		safeReconnect(identityId, imapInstances);
+		retry();
 		return;
 	}
 
@@ -115,7 +123,7 @@ export const initSmtpClient = async (
 			retryCounts.set(identityId, 0);
 		} catch (err) {
 			console.error(`[IMAP:${identityId}] connect() failed:`, err);
-			safeReconnect(identityId, imapInstances);
+			retry();
 			return;
 		}
 
@@ -129,9 +137,12 @@ export const initSmtpClient = async (
 					throw new Error("Client not usable");
 				}
 			} catch (err) {
-				console.error(`[IMAP:${identityId}] NOOP failed:`, err);
 				clearInterval(noopInterval);
-				safeReconnect(identityId, imapInstances);
+				// ss2i (OI 10346) : client IDLE deja ferme (arret, remplacement) : rien a faire.
+				if (!reconnect && !client.usable) return;
+				console.error(`[IMAP:${identityId}] NOOP failed:`, err);
+				if (reconnect) safeReconnect(identityId, imapInstances);
+				else client.close();
 			}
 		}, 5 * 60 * 1000);
 
@@ -141,9 +152,10 @@ export const initSmtpClient = async (
 				client.removeAllListeners();
 				client.logout().catch(() => {});
 			} catch {}
-			imapInstances.delete(identityId);
+			// ss2i (OI 10346) : ne retirer que ce client, un plus recent a pu le remplacer.
+			if (imapInstances.get(identityId) === client) imapInstances.delete(identityId);
 			console.warn(`[IMAP:${identityId}] Disconnected (${reason})`);
-			safeReconnect(identityId, imapInstances);
+			retry();
 		};
 
 		client.once("close", () => cleanup("close"));
@@ -155,7 +167,7 @@ export const initSmtpClient = async (
 		return client;
 	} catch (err) {
 		console.error(`[IMAP:${identityId}] init failed`, err);
-		safeReconnect(identityId, imapInstances);
+		retry();
 		return;
 	}
 };

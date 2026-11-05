@@ -20,6 +20,7 @@ import { useHiddenThreads } from "@/lib/pending-moves";
 import { useLinkedThreads } from "@/lib/client-link";
 import type { SelectAllScope } from "@/lib/actions/select-all";
 import { useNouvelle } from "@/components/k/ui-context";
+import { useListReturn } from "@/lib/list-return";
 import KThreadListStatic, { type KStaticListProps } from "@/components/k/thread-list-static";
 
 type WebListProps = {
@@ -86,9 +87,11 @@ function ClassicWebmailListLabelSearch({
     // ss2i : ordre affiche des fils, pour la selection par plage (Maj+clic).
     // Test apps/web/test/thread-selection.ts (regression du 05/11/2026).
     const orderedThreadIds = mailboxThreads.map((t) => String(t.threadId));
+    // ss2i : position de la liste et repere du dernier fil consulte au retour d'un fil.
+    const { ref: listRef, lastViewedId } = useListReturn(pathname, orderedThreadIds);
 
     return (
-        <div className={onThread ? "hidden" : ""}>
+        <div ref={listRef} className={onThread ? "hidden" : ""}>
             <DynamicContextProvider
                 initialState={{
                     selectedThreadIds: new Set(),
@@ -125,6 +128,7 @@ function ClassicWebmailListLabelSearch({
                                         identityPublicId={identityPublicId}
                                         mailboxSync={mailboxSync ?? undefined}
                                         labelsByThreadId={labelsByThreadId}
+                                        lastViewed={String(mailboxThreadItem.threadId) === lastViewedId}
                                     />
                                 ) : (
                                     <WebmailListItem
@@ -139,6 +143,7 @@ function ClassicWebmailListLabelSearch({
                                         globalLabels={globalLabels}
                                         labelsByThreadId={labelsByThreadId}
                                         orderedThreadIds={orderedThreadIds}
+                                        lastViewed={String(mailboxThreadItem.threadId) === lastViewedId}
                                     />
                                 ),
                             )}

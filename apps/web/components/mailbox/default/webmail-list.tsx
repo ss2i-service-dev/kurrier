@@ -18,6 +18,7 @@ import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-ite
 import { usePathname } from "next/navigation";
 import {use} from "react";
 import { useHiddenThreads } from "@/lib/pending-moves";
+import { useListReturn } from "@/lib/list-return";
 import { anySendTracked, isSendingDraft, useSendRefresh } from "@/components/mailbox/default/draft-send-status";
 import { IconSend } from "@tabler/icons-react";
 
@@ -59,6 +60,11 @@ export default function WebmailList({
 	// en tete, a part des brouillons : on ne doit pas les prendre pour des brouillons.
 	const isDraftsBox = activeMailbox.kind === "drafts";
 	const sending = isDraftsBox ? mailboxThreads.filter((t) => isSendingDraft(t.draftSend)) : [];
+	// ss2i : position de la liste et repere du dernier fil consulte au retour d'un fil.
+	const { ref: listRef, lastViewedId } = useListReturn(
+		pathname,
+		mailboxThreads.map((t) => String(t.threadId)),
+	);
 	const drafts = isDraftsBox ? mailboxThreads.filter((t) => !isSendingDraft(t.draftSend)) : mailboxThreads;
 
 	const renderItem = (mailboxThreadItem: (typeof mailboxThreads)[number]) =>
@@ -72,6 +78,7 @@ export default function WebmailList({
 										identityPublicId={identityPublicId}
 										mailboxSync={mailboxSync ?? undefined}
 										labelsByThreadId={labelsByThreadId}
+										lastViewed={String(mailboxThreadItem.threadId) === lastViewedId}
 									/>
 								) : (
 									<WebmailListItem
@@ -86,6 +93,7 @@ export default function WebmailList({
 										mailboxSync={mailboxSync ?? undefined}
 										globalLabels={globalLabels}
 										labelsByThreadId={labelsByThreadId}
+										lastViewed={String(mailboxThreadItem.threadId) === lastViewedId}
 									/>
 								);
 
@@ -93,7 +101,7 @@ export default function WebmailList({
 	useSendRefresh(anySendTracked(mailboxThreads.map((t) => t.draftSend)));
 
 	return (
-		<div className={onThread ? "hidden" : ""} data-ss2i-mail-list="">
+		<div ref={listRef} className={onThread ? "hidden" : ""} data-ss2i-mail-list="">
 			<DynamicContextProvider
 				initialState={{
 					selectedThreadIds: new Set(),

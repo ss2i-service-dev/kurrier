@@ -25,15 +25,19 @@ type Props = {
 	identityPublicId: string;
 	mailboxSync: MailboxSyncEntity | undefined;
 	labelsByThreadId: FetchMailboxThreadLabelsResult;
+	// ss2i : dernier fil consulte (repere au retour du fil, lib/list-return.ts).
+	lastViewed?: boolean;
 };
 
 import { DraftSendBadge, DraftTimesLabel, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
+import { LAST_VIEWED_CLASS } from "@/lib/list-return";
 export default function WebmailListItemMobile({
 	mailboxThreadItem,
 	activeMailbox,
 	identityPublicId,
 	mailboxSync,
 	labelsByThreadId,
+	lastViewed = false,
 }: Props) {
 	const showSnippet = useShowSnippet();
 	const router = useRouter();
@@ -135,6 +139,7 @@ export default function WebmailListItemMobile({
 				"grid-cols-[auto_1fr_auto] md:grid-cols-[auto_auto_minmax(16rem,1fr)_minmax(10rem,2fr)_auto]",
 				"items-start gap-3 px-3 py-3 transition-colors hover:bg-muted/50",
 				isRead ? "bg-muted/50" : "font-semibold",
+				lastViewed ? LAST_VIEWED_CLASS : "",
 				activeMailbox.kind === "drafts" && isSendingDraft(mailboxThreadItem.draftSend)
 					? "!bg-sky-50 dark:!bg-sky-950/40 shadow-[inset_3px_0_0_0_rgb(2,132,199)]"
 					: "",

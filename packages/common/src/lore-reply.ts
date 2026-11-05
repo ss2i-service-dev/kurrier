@@ -25,6 +25,29 @@ export const LORE_TIMEOUT_MS = 130_000;
 export class LoreError extends Error {}
 
 /** Variables du service web absentes (bouton expliqué au lieu d'un appel voué à l'échec). */
+/**
+ * Compte Lore au nom duquel rediger (X-Lore-Act-As). Le compte courrier peut avoir une autre
+ * adresse que le compte Lore (samuel@ss2i.ca dans courrier, samuel@ss2i-digital.fr dans Lore,
+ * 05/11/2026) : on prend l'identite pro du fil, sinon la premiere identite pro de l'utilisateur,
+ * sinon l'adresse du compte.
+ */
+export function loreActAs(input: {
+	accountEmail: string;
+	threadIdentity?: string | null;
+	identities: (string | null | undefined)[];
+	proDomains: string[];
+}): string {
+	const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase();
+	const isPro = (v: string) => {
+		const at = v.lastIndexOf("@");
+		return at > 0 && input.proDomains.includes(v.slice(at + 1));
+	};
+	const thread = norm(input.threadIdentity);
+	if (thread && isPro(thread)) return thread;
+	const pro = input.identities.map(norm).filter((v) => v && isPro(v)).sort();
+	return pro[0] ?? norm(input.accountEmail);
+}
+
 export function loreConfigMissing(env: { LORE_URL?: string; LORE_APP_TOKEN?: string }): string[] {
 	return (["LORE_URL", "LORE_APP_TOKEN"] as const).filter((k) => !env[k]?.trim());
 }

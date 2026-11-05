@@ -19,6 +19,7 @@ import {
 	LoreError,
 	type LoreThreadMessage,
 	clipLoreText,
+	loreActAs,
 	loreConfigMissing,
 	loreDraftBody,
 	loreDraftRecipients,
@@ -85,7 +86,14 @@ const ok200 = JSON.stringify({
 
 async function main() {
 	// --- Requete -------------------------------------------------------------------------
-	await test("requete : forme du contrat, boite en minuscules, locale fr, sans consigne", () => {
+	await test("act-as : identite pro du fil, sinon premiere identite pro, sinon compte", () => {
+	const pro = ["ss2i-digital.fr", "ss2i-services.fr"];
+	assert.equal(loreActAs({ accountEmail: "samuel@ss2i.ca", threadIdentity: "contact@life.olibrio.fr", identities: ["contact@life.olibrio.fr", "Samuel@SS2i-digital.fr", "sam.legros@gmail.com"], proDomains: pro }), "samuel@ss2i-digital.fr");
+	assert.equal(loreActAs({ accountEmail: "samuel@ss2i.ca", threadIdentity: "hugo@ss2i-services.fr", identities: ["samuel@ss2i-digital.fr"], proDomains: pro }), "hugo@ss2i-services.fr");
+	assert.equal(loreActAs({ accountEmail: "Jb@ss2i.ca", threadIdentity: "x@gmail.com", identities: ["x@gmail.com"], proDomains: pro }), "jb@ss2i.ca");
+});
+
+await test("requete : forme du contrat, boite en minuscules, locale fr, sans consigne", () => {
 		const r = loreReplyRequest({
 			mailbox: " Samuel@SS2i-Digital.fr ",
 			subject: "Devis",

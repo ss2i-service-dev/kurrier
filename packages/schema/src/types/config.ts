@@ -56,6 +56,11 @@ export const ZServerConfig = z.object({
 	GRAPH_CLIENT_ID: z.string().optional(),
 	GRAPH_CLIENT_SECRET: z.string().optional(),
 	BRIDGE_MAILBOXES: z.string().optional(),
+	// ss2i : « Répondre avec Lore » depuis un fil (OI 10288). LORE_URL : racine de Lore (POST
+	// ${LORE_URL}/api/v1/mail/reply-draft) ; LORE_APP_TOKEN : jeton d'application de courrier
+	// chez Lore. Sans l'un des deux, la fenêtre du bouton dit ce qui manque.
+	LORE_URL: z.string().optional(),
+	LORE_APP_TOKEN: z.string().optional(),
 });
 
 /** Safe to expose to the browser */

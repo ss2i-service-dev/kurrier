@@ -3,9 +3,10 @@
 // arriere-plan et on passe aussitot au fil suivant (ou a la liste).
 import React, { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Archive, ArrowLeft, Building2, CalendarPlus, ChevronDown, ChevronUp, ClipboardList, Mail, Trash2, X } from "lucide-react";
+import { Archive, ArrowLeft, Building2, CalendarPlus, ChevronDown, ChevronUp, ClipboardList, Mail, Sparkles, Trash2, X } from "lucide-react";
 import { LinkClientPicker } from "@/components/mailbox/default/client-link-ui";
 import { AddToAgenda } from "@/components/mailbox/default/add-to-agenda";
+import { ReplyWithLore } from "@/components/mailbox/default/reply-with-lore";
 import { copyMailToClipboard } from "@/lib/mail-copy";
 import KIconButton from "@/components/k/icon-button";
 import SnoozeMail from "@/components/k/snooze";
@@ -160,6 +161,16 @@ export default function ThreadToolbar({
 				trigger={(open) => (
 					<KIconButton label="Ajouter à l'agenda…" onClick={open}>
 						<CalendarPlus />
+					</KIconButton>
+				)}
+			/>
+			{/* ss2i (OI 10288) : brouillon de reponse au dernier message redige par Lore, relu avant envoi. */}
+			<ReplyWithLore
+				identityPublicId={identityPublicId}
+				threadId={String(threadId)}
+				trigger={(open) => (
+					<KIconButton label="Répondre avec Lore" onClick={open}>
+						<Sparkles />
 					</KIconButton>
 				)}
 			/>

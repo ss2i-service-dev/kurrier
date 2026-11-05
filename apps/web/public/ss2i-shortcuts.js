@@ -32,7 +32,9 @@
     ["next", ["j", "ArrowDown"], "Fil suivant", () => nouvelle() && voisin(1), "liste"],
     ["prev", ["k", "ArrowUp"], "Fil precedent", () => nouvelle() && voisin(-1), "liste"],
     ["close", ["Escape"], "Fermer le fil ouvert", () => fermer()],
-    ["send", ["Ctrl+Enter"], "Envoyer le message en cours", () => cliquer("Send")],
+    // Jamais depuis une fenetre sans editeur (consigne de « Repondre avec Lore »...) : le
+    // bouton Send trouve serait celui d'un brouillon ouvert derriere, envoye a l'aveugle.
+    ["send", ["Ctrl+Enter"], "Envoyer le message en cours", () => !dansUneFenetreSansEditeur() && cliquer("Send")],
   ];
 
   const config = () => window.__ss2iShortcutsConfig || null;
@@ -230,6 +232,11 @@
     if (!a || a === document.body || a === document.documentElement) return true;
     if (dansUneSaisie(a)) return false;
     return !a.matches('button, a[href], select, summary, [role="button"], [role="menuitem"], [role="option"], [role="tab"], [role="checkbox"], [role="switch"], [role="slider"], input');
+  };
+  // Focus dans une fenetre qui n'a pas d'editeur de mail (Ctrl+Entree n'y envoie rien).
+  const dansUneFenetreSansEditeur = () => {
+    const a = document.activeElement;
+    return !!(a && a.closest && a.closest('[role="dialog"]:not(:has(.ProseMirror))'));
   };
   // Menus, listes deroulantes, fenetres : leur clavier leur appartient.
   const dansUnePopup = (el) =>

@@ -1,12 +1,13 @@
 "use client";
 import React from "react";
-import { Mail, MailOpen, Paperclip, Trash2 } from "lucide-react";
+import { Archive, Mail, MailOpen, Paperclip, Trash2 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { MailboxEntity, MailboxSyncEntity } from "@db";
 import {
 	FetchMailboxThreadsResult,
 	markAsRead,
 	markAsUnread,
+	archiveThread,
 	moveToTrash,
 	toggleStar,
 } from "@/lib/actions/mailbox";
@@ -24,13 +25,19 @@ type Props = {
 	globalLabels: FetchLabelsResult;
 	labelsByThreadId: FetchMailboxThreadLabelsResult;
 	workspacePublicId?: string;
+	// Displayed order of the threads, for range selection (Shift+click).
+	// Required: a list that omits it breaks Shift+click.
+	orderedThreadIds: string[];
 };
 import { Temporal } from "@js-temporal/polyfill";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
-import { toast } from "sonner";
+import { preventShiftTextSelection, toggleThreadSelection } from "@/lib/thread-selection";
+import { moveWithUndo } from "@/lib/pending-moves";
 import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 import ThreadLabelHoverButtons from "@/components/dashboard/labels/thread-label-hover-buttons";
 import SnoozeMail from "@/components/mailbox/default/snooze-mail";
+import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
+import { DraftSendBadge, DraftTimesLabel, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
 
 export default function WebmailListItem({
 	mailboxThreadItem,
@@ -39,8 +46,10 @@ export default function WebmailListItem({
 	mailboxSync,
 	globalLabels,
 	labelsByThreadId,
-	workspacePublicId
+	workspacePublicId,
+	orderedThreadIds,
 }: Props) {
+	const showSnippet = useShowSnippet();
 	function formatDateLabel(input?: string | number | Date) {
 		const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 		if (!input) return "";
@@ -145,7 +154,13 @@ export default function WebmailListItem({
 	const pathname = usePathname();
 	const isOnSnoozedPage = pathname.split("/").includes("snoozed");
 
-	const openThread = async () => {
+	// Once at least one thread is selected we are in selection mode: a click on
+	// the row toggles it instead of opening the thread (Shift+click = range).
+	const openThread = async (e?: React.MouseEvent) => {
+		if ((state?.selectedThreadIds?.size ?? 0) > 0) {
+			toggleSelection(!!e?.shiftKey);
+			return;
+		}
 		const url = pathname.match("/dashboard/mail")
 			? `/w/${workspacePublicId}/dashboard/mail/${identityPublicId}/${activeMailbox.slug}/threads/${mailboxThreadItem.threadId}`
 			: `/mail/${identityPublicId}/${activeMailbox.slug}/threads/${mailboxThreadItem.threadId}`;
@@ -189,51 +204,75 @@ export default function WebmailListItem({
 		return shown.join(", ") + suffix;
 	}
 
-	const allNames = getAllNames(mailboxThreadItem.participants);
+	// In the Drafts folder, show the recipients ("To: ...") rather than the sender.
+	const isDrafts = activeMailbox.kind === "drafts";
+	const allNames = isDrafts
+		? `To: ${getAllNames({ to: mailboxThreadItem.participants?.to, cc: mailboxThreadItem.participants?.cc, bcc: mailboxThreadItem.participants?.bcc }) || "(no recipient)"}`
+		: getAllNames(mailboxThreadItem.participants);
 
 	const canMarkAsRead = mailboxThreadItem.unreadCount > 0;
 	const canMarkAsUnread =
 		mailboxThreadItem.messageCount > 0 && mailboxThreadItem.unreadCount === 0;
 
-	const isUnread = mailboxThreadItem.unreadCount > 0;
-	const isRead = mailboxThreadItem.unreadCount === 0;
+	// In Trash, no read / unread distinction (no bold, no icon).
+	const isTrash = activeMailbox.kind === "trash";
+	const isUnread = !isTrash && mailboxThreadItem.unreadCount > 0;
+	const isRead = !isUnread;
 
 	const { state, setState } = useDynamicContext<{
 		selectedThreadIds: Set<string>;
+		lastSelectedThreadId?: string;
 	}>();
+
+	// Shift+click applies the clicked checkbox's state to the whole range since
+	// the last clicked checkbox, like Gmail (lib/thread-selection.ts, tested).
+	const toggleSelection = (shiftKey: boolean) => {
+		const id = mailboxThreadItem.threadId;
+		setState((prev) => toggleThreadSelection(prev, id, shiftKey, orderedThreadIds));
+	};
 
 	return (
 		<>
 			<li
+				onMouseDown={preventShiftTextSelection}
 				className={[
 					"relative group grid cursor-pointer",
 					// "grid-cols-[auto_auto_minmax(16rem,1fr)_minmax(10rem,2fr)_auto]",
 					"grid-cols-[auto_auto_20rem_minmax(10rem,2fr)_auto]",
 					// "grid-cols-[auto_auto_minmax(8rem,12rem)_minmax(10rem,2fr)_auto]",
-					"items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/50",
+					"items-center gap-3 pl-6 pr-3 py-2 transition-colors hover:bg-muted/50",
 					isRead ? "bg-muted/50" : "font-semibold",
+					// Pending send: Outbox row (tint and left rule), not a draft.
+					isDrafts && isSendingDraft(mailboxThreadItem.draftSend)
+						? "!bg-sky-50 dark:!bg-sky-950/40 shadow-[inset_3px_0_0_0_rgb(2,132,199)]"
+						: "",
 					`pr-[${ACTIONS_W}]`,
 				].join(" ")}
 			>
-				<div className="flex items-center">
+				{/* The whole checkbox cell is clickable (row height, overflowing to the
+				    left), not only the 16 px box. The box no longer captures the mouse;
+				    from the keyboard (space), onChange still toggles it. */}
+				<div
+					className={
+						isOnSnoozedPage
+							? "flex items-center"
+							: "flex items-center self-stretch -my-2 -ml-6 pl-6 pr-2 cursor-pointer"
+					}
+					onClick={(e) => {
+						if (isOnSnoozedPage) return;
+						e.stopPropagation();
+						toggleSelection(e.shiftKey);
+					}}
+				>
 					{!isOnSnoozedPage && (
 						<input
 							type="checkbox"
-							onChange={(e) => {
-								const newSet = new Set(state?.selectedThreadIds);
-								if (e.target.checked) {
-									newSet.add(mailboxThreadItem.threadId);
-								} else {
-									newSet.delete(mailboxThreadItem.threadId);
-								}
-								setState({ selectedThreadIds: newSet });
-							}}
-							checked={state?.selectedThreadIds?.has(
+							onChange={() => toggleSelection(false)}
+							checked={!!state?.selectedThreadIds?.has(
 								mailboxThreadItem.threadId,
 							)}
 							aria-label={`Select thread ${mailboxThreadItem.subject}`}
-							className="h-4 w-4 rounded border-muted-foreground/40"
-							onClick={(e) => e.stopPropagation()}
+							className="h-4 w-4 rounded border-muted-foreground/40 pointer-events-none"
 						/>
 					)}
 				</div>
@@ -276,18 +315,29 @@ export default function WebmailListItem({
 						labelsByThreadId={labelsByThreadId}
 						isRead={isRead}
 					/>
+					{isDrafts && <DraftSendBadge state={mailboxThreadItem.draftSend} />}
 					<span className="truncate">{mailboxThreadItem.subject}</span>
-					<span className="mx-1 text-muted-foreground">–</span>
-					<span className="truncate text-muted-foreground font-normal">
-						{mailboxThreadItem.previewText}
-					</span>
+					{showSnippet && (
+						<>
+							<span className="mx-1 text-muted-foreground">–</span>
+							<span className="truncate text-muted-foreground font-normal">
+								{mailboxThreadItem.previewText}
+							</span>
+						</>
+					)}
 					{mailboxThreadItem.hasAttachments && (
 						<Paperclip className="ml-1 hidden h-4 w-4 text-muted-foreground md:inline" />
+					)}
+					{isDrafts && (
+						<DraftTimesLabel
+							times={mailboxThreadItem.draftTimes}
+							className="ml-auto pl-2 text-xs font-normal text-muted-foreground"
+						/>
 					)}
 				</div>
 
 				<div className="ml-auto flex items-center gap-2 pl-2">
-					{mailboxThreadItem.unreadCount > 0 ? (
+					{isUnread ? (
 						<Mail className="h-4 w-4 text-primary md:hidden" />
 					) : (
 						<MailOpen className="h-4 w-4 text-muted-foreground md:hidden" />
@@ -355,16 +405,34 @@ export default function WebmailListItem({
 						activeMailboxId={activeMailbox.id}
 					/>
 
+					{activeMailbox.kind !== "archive" && (
+						<button
+							onClick={() => {
+								const id = String(mailboxThreadItem.threadId);
+								moveWithUndo({
+									mailboxId: activeMailbox.id,
+									threadIds: [id],
+									message: "Archived",
+									run: () => archiveThread(id, activeMailbox.id, !!mailboxSync, true),
+									failure: "Archive failed",
+								});
+							}}
+							className="rounded p-1 hover:bg-muted"
+							title="Archive"
+						>
+							<Archive className="h-4 w-4" />
+						</button>
+					)}
 					<button
-						onClick={async () => {
-							await moveToTrash(
-								mailboxThreadItem.threadId,
-								activeMailbox.id,
-								!!mailboxSync,
-								true,
-							);
-							toast.success("Messages moved to Trash", {
-								position: "bottom-left",
+						onClick={() => {
+							// The row leaves the list on click, the server follows (see lib/pending-moves).
+							const id = String(mailboxThreadItem.threadId);
+							moveWithUndo({
+								mailboxId: activeMailbox.id,
+								threadIds: [id],
+								message: activeMailbox.kind === "trash" ? "Deleted forever" : "Moved to Trash",
+								run: () => moveToTrash(id, activeMailbox.id, !!mailboxSync, true),
+								failure: "Delete failed",
 							});
 						}}
 						className="rounded p-1 hover:bg-muted"

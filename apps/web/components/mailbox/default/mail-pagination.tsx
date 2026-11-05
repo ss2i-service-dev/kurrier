@@ -1,7 +1,7 @@
 "use client";
 import React, {use, useEffect, useState} from "react";
 import { Pagination } from "@mantine/core";
-import { useParams, usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {FetchMailboxResult} from "@/lib/actions/mailbox";
 
 function MailPagination({
@@ -24,7 +24,8 @@ function MailPagination({
 	const [activePage, setPage] = useState(page || 1);
 	const router = useRouter();
 	const pathname = usePathname();
-	const params = useParams();
+	// Real URL path: useParams keeps the old threadId (the parallel @thread route is preserved).
+	const onThread = /\/threads\/[^/]+/.test(pathname ?? "");
 
 	const updatePageNumber = async (number: number) => {
 		if (number < 1) return;
@@ -41,7 +42,7 @@ function MailPagination({
 	};
 
 	return (
-		<div className={params?.threadId ? "hidden" : ""}>
+		<div className={onThread ? "hidden" : ""}>
 			<Pagination
 				value={activePage}
 				onChange={updatePageNumber}

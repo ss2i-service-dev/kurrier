@@ -7,26 +7,36 @@ import {
 	CommandSeparator,
 } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
-import { Search, Paperclip } from "lucide-react";
+import { Search, Paperclip, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { IconStar, IconStarFilled } from "@tabler/icons-react";
 import type { ThreadHit } from "@schema";
+import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
 import { initSearch } from "@/lib/actions/mailbox";
 import { useRouter } from 'next/navigation'
+import { selectedPageText } from "@/lib/page-selection";
 
 const DEBOUNCE_MS = 250;
 
 export default function MailboxSearch({
 										  publicId,
-										  mailboxSlug,
+										  mailboxSlug: requestedSlug,
 										  workspacePublicId,
+										  modern = false,
 									  }: {
 	publicId: string;
-	mailboxSlug: string;
+	mailboxSlug?: string;
 	workspacePublicId: string;
+	// Trigger button styled for the modern interface (per-user option).
+	modern?: boolean;
 }) {
 
+	// Pages without a folder (settings, scheduled, snoozed) have no mailboxSlug
+	// (URL .../undefined/search, server error "Mailbox not found"): the search then
+	// starts from the identity's Inbox.
+	const mailboxSlug = !requestedSlug || requestedSlug === "undefined" ? "inbox" : requestedSlug;
+	const showSnippet = useShowSnippet();
 	const [open, setOpen] = React.useState(false);
 	const [query, setQuery] = React.useState("");
 	const [hasAttachment, setHasAttachment] = React.useState(false);
@@ -38,16 +48,43 @@ export default function MailboxSearch({
 	const [totalThreads, setTotalThreads] = React.useState(0);
 	const [totalMessages, setTotalMessages] = React.useState(0);
 
+	// Text selected in the page = prefilled query, selected in the field (onFocus):
+	// Enter runs the search, a keystroke or Backspace replaces it, the cross clears it.
+	// The text is read on mouse down, before the click drops the selection; with the
+	// keyboard ("/", Ctrl+K) the selection is still there when the dialog opens.
+	const openRef = React.useRef(open);
+	openRef.current = open;
+	const pressedSelection = React.useRef<string | null>(null);
+	const inputRef = React.useRef<HTMLInputElement | null>(null);
+
+	const openWithSelection = React.useCallback((captured?: string | null) => {
+		const text = captured ?? selectedPageText();
+		if (text) setQuery(text);
+		setOpen(true);
+	}, []);
+
+	const triggerProps = {
+		onMouseDown: () => {
+			pressedSelection.current = selectedPageText();
+		},
+		onClick: () => {
+			const captured = pressedSelection.current;
+			pressedSelection.current = null;
+			openWithSelection(captured);
+		},
+	};
+
 	React.useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
 				e.preventDefault();
-				setOpen((v) => !v);
+				if (openRef.current) setOpen(false);
+				else openWithSelection();
 			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, []);
+	}, [openWithSelection]);
 
 	React.useEffect(() => {
 		const q = query.trim();
@@ -114,21 +151,47 @@ export default function MailboxSearch({
 
 	return (
 		<>
+			{modern ? (
+				<button
+					type="button"
+					{...triggerProps}
+					data-k-action="search"
+					className="k-focus flex h-9 w-full items-center gap-2 rounded-k bg-k-hover px-3 text-k-ink-3 transition-colors hover:text-k-ink-2"
+				>
+					<Search className="h-4 w-4" />
+					<span className="flex-1 text-left text-[13.5px]">Search</span>
+					<kbd className="rounded border border-k-line-strong bg-k-surface px-1.5 font-mono text-[11px] leading-5">/</kbd>
+				</button>
+			) : (
 			<button
 				type="button"
-				onClick={() => setOpen(true)}
+				{...triggerProps}
 				className="flex w-full items-center gap-2 rounded-lg border bg-background px-4 py-2.5 text-muted-foreground hover:bg-muted/30"
 			>
 				<Search className="h-4 w-4 opacity-60" />
 				<span className="text-sm">Search this mailbox (⌘K)</span>
 			</button>
+			)}
 
-			<CommandDialog open={open} onOpenChange={setOpen}>
+			<CommandDialog
+				open={open}
+				onOpenChange={setOpen}
+				title={"Command Palette"}
+				description={"Search for a command to run..."}
+				// The close cross overlapped the input; Escape closes, the input's cross clears the query.
+				showCloseButton={false}
+			>
+				<div className="relative">
 				<CommandInput
+					ref={inputRef}
+					className="pr-9"
 					autoFocus
-					placeholder="Search mail…"
+					placeholder={"Search mail…"}
 					value={query}
 					onValueChange={setQuery}
+					// Previous query selected on open: a new keystroke replaces it instead of
+					// appending to it, the arrow keys still allow refining it.
+					onFocus={(e) => e.currentTarget.select()}
 					onKeyDown={(e) => {
 						if (e.key !== "Enter") return;
 						e.preventDefault();
@@ -138,6 +201,23 @@ export default function MailboxSearch({
 						);
 					}}
 				/>
+				{query && (
+					<button
+						type="button"
+						aria-label={"Clear search"}
+						title={"Clear search"}
+						data-k="search-clear"
+						onMouseDown={(e) => e.preventDefault()}
+						onClick={() => {
+							setQuery("");
+							inputRef.current?.focus();
+						}}
+						className="absolute right-3 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+					>
+						<X className="h-4 w-4" />
+					</button>
+				)}
+				</div>
 
 				<div className="sticky top-0 z-10 flex flex-wrap gap-2 border-b bg-background px-4 py-2">
 					<Badge
@@ -147,7 +227,7 @@ export default function MailboxSearch({
 						}`}
 						variant={hasAttachment ? "default" : "secondary"}
 					>
-						Has attachment
+						{"Has attachment"}
 					</Badge>
 
 					<Badge
@@ -157,7 +237,7 @@ export default function MailboxSearch({
 						}`}
 						variant={onlyUnread ? "default" : "secondary"}
 					>
-						Unread only
+						{"Unread only"}
 					</Badge>
 
 					<Badge
@@ -167,7 +247,7 @@ export default function MailboxSearch({
 						}`}
 						variant={isStarred ? "default" : "secondary"}
 					>
-						Starred only
+						{"Starred only"}
 					</Badge>
 				</div>
 
@@ -180,7 +260,7 @@ export default function MailboxSearch({
 				<div className="max-h-[60vh] overflow-auto px-2 pb-2">
 					{items.length === 0 && !loading ? (
 						<div className="px-4 py-8 text-center text-sm text-muted-foreground">
-							No results found.
+							{"No results found."}
 						</div>
 					) : (
 						<ul className="space-y-2">
@@ -218,7 +298,7 @@ export default function MailboxSearch({
 											)}
 										</div>
 
-										{t.snippet && (
+										{showSnippet && t.snippet && (
 											<div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
 												{t.snippet}
 											</div>
@@ -266,11 +346,11 @@ export default function MailboxSearch({
 					<div className="flex items-center gap-2 text-sm text-muted-foreground">
 						<Search className="h-4 w-4 opacity-70" />
 						<span>
-							All search results for{" "}
+							{"All search results for"}{" "}
 							<span className="font-medium text-foreground">{`‘${query || ""}’`}</span>
 						</span>
 					</div>
-					<div className="text-xs text-muted-foreground">Press ENTER</div>
+					<div className="text-xs text-muted-foreground">{"Press ENTER"}</div>
 				</div>
 			</CommandDialog>
 		</>

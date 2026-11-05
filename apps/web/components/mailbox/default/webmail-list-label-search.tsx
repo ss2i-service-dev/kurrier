@@ -15,7 +15,11 @@ import WebmailListItem from "@/components/mailbox/default/webmail-list-item";
 import { DynamicContextProvider } from "@/hooks/use-dynamic-context";
 import { useMediaQuery } from "@mantine/hooks";
 import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-item-mobile";
-import { useParams } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { useHiddenThreads } from "@/lib/pending-moves";
+import type { SelectAllScope } from "@/lib/actions/select-all";
+import { useModernUi } from "@/components/k/ui-context";
+import KThreadListStatic, { type KStaticListProps } from "@/components/k/thread-list-static";
 
 type WebListProps = {
     mailboxThreads: FetchMailboxThreadsResult;
@@ -27,10 +31,25 @@ type WebListProps = {
     labelsByThreadId: FetchMailboxThreadLabelsResult;
     workspacePublicId?: string;
     mailboxSync?: MailboxSyncEntity;
+    // Virtual folder: each thread keeps its own mailbox for opening and actions;
+    // activeMailbox then only serves the header and the context.
+    mailboxById?: Record<string, MailboxEntity>;
+    // "Select all" beyond the page (search only for now).
+    selectAllScope?: SelectAllScope;
+    totalThreads?: number;
+    // View that also shows archived threads: archiving does not remove them from it.
+    keepArchived?: boolean;
 };
 
-export default function WebmailListLabelSearch({
-                                        mailboxThreads,
+// Modern interface (per-user option): same data, rendered by the modern list.
+// The classic list (below) is unchanged.
+export default function WebmailListLabelSearch(props: WebListProps & Pick<KStaticListProps, "kTitle" | "kEmptyTitle" | "kEmptyText">) {
+    const modern = useModernUi();
+    return modern ? <KThreadListStatic {...(props as KStaticListProps)} /> : <ClassicWebmailListLabelSearch {...props} />;
+}
+
+function ClassicWebmailListLabelSearch({
+                                        mailboxThreads: serverThreads,
                                         identityPublicId,
                                         mailboxSync,
                                         activeMailbox,
@@ -39,12 +58,31 @@ export default function WebmailListLabelSearch({
                                         globalLabels,
                                         workspacePublicId,
                                         labelsByThreadId,
+                                        mailboxById,
+                                        selectAllScope,
+                                        totalThreads,
+                                        keepArchived,
                                     }: WebListProps) {
+    const mailboxOf = (mailboxId: string) => mailboxById?.[mailboxId] ?? activeMailbox;
+    // Like webmail-list, threads being moved away (trash, archive...) disappear
+    // from the list on click.
+    const isHidden = useHiddenThreads({ keepArchived });
+    const mailboxThreads = serverThreads.filter(
+        (t) =>
+            !isHidden(String(t.mailboxId), String(t.threadId)),
+    );
     const isMobile = useMediaQuery("(max-width: 768px)");
-    const params = useParams();
+    // Actual URL path, not useParams: after a search started from an open thread,
+    // the preserved @thread slot keeps the old threadId and the results list stayed hidden.
+    const pathname = usePathname();
+    const onThread = /\/threads\/[^/]+/.test(pathname ?? "");
+
+    // Displayed order of the threads, for range selection (Shift+click).
+    // Test: apps/web/test/thread-selection.ts.
+    const orderedThreadIds = mailboxThreads.map((t) => String(t.threadId));
 
     return (
-        <div className={params?.threadId ? "hidden" : ""}>
+        <div className={onThread ? "hidden" : ""}>
             <DynamicContextProvider
                 initialState={{
                     selectedThreadIds: new Set(),
@@ -65,6 +103,8 @@ export default function WebmailListLabelSearch({
                             publicConfig={publicConfig}
                             identityMailboxes={identityMailboxes}
                             activeMailbox={activeMailbox}
+                            selectAllScope={selectAllScope}
+                            totalThreads={totalThreads}
                         />
 
                         <ul role="list" className={`divide-y rounded-4xl`}>
@@ -75,7 +115,7 @@ export default function WebmailListLabelSearch({
                                             mailboxThreadItem.threadId + mailboxThreadItem.mailboxId
                                         }
                                         mailboxThreadItem={mailboxThreadItem}
-                                        activeMailbox={activeMailbox}
+                                        activeMailbox={mailboxOf(mailboxThreadItem.mailboxId)}
                                         identityPublicId={identityPublicId}
                                         mailboxSync={mailboxSync ?? undefined}
                                         labelsByThreadId={labelsByThreadId}
@@ -87,11 +127,12 @@ export default function WebmailListLabelSearch({
                                         }
                                         mailboxThreadItem={mailboxThreadItem}
                                         workspacePublicId={workspacePublicId}
-                                        activeMailbox={activeMailbox}
+                                        activeMailbox={mailboxOf(mailboxThreadItem.mailboxId)}
                                         identityPublicId={identityPublicId}
                                         mailboxSync={mailboxSync ?? undefined}
                                         globalLabels={globalLabels}
                                         labelsByThreadId={labelsByThreadId}
+                                        orderedThreadIds={orderedThreadIds}
                                     />
                                 ),
                             )}

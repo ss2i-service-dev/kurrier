@@ -114,8 +114,7 @@ export function toSearchDoc(
 
 		subject: msg.subject ?? "",
 		snippet,
-		text: msg.text ?? "",
-		html: msg.html ?? "",
+		text: (msg.text ?? "").slice(0, 4000),
 
 		fromName: msg.fromName ?? "",
 		fromEmail,

@@ -13,8 +13,11 @@ export const messagesSearchSchema: CollectionCreateSchema = {
 		{ name: "mailboxSlug", type: "string", facet: true },
 
 		{ name: "subject", type: "string" },
-		{ name: "text", type: "string" },
-		{ name: "html", type: "string" },
+		// The text is kept for display but no longer indexed, and the HTML is no longer
+		// sent at all. Typesense keeps the index in memory (2 to 3 times the indexed
+		// size): with a mailbox of several tens of GB, indexing every message body would
+		// exceed the server RAM. Search covers the subject, snippet, sender and participants.
+		{ name: "text", type: "string", index: false, optional: true },
 		{ name: "snippet", type: "string" },
 
 		{ name: "fromName", type: "string" },

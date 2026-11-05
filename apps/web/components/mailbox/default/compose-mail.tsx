@@ -42,6 +42,8 @@ export default function ComposeMail({
 	const [appeared, setAppeared] = useState(false);
 	const [minimized, setMinimized] = useState(false);
 	const [expanded, setExpanded] = useState(false);
+	// Composer hidden but still mounted during the undo-send window.
+	const [parked, setParked] = useState(false);
 	const [sentMailboxId, setSentMailboxId] = useState<string>();
 	const [showEditorMode, setShowEditorMode] = useState<string>("compose");
 	const editorRef = useRef<EmailEditorHandle>(null);
@@ -57,14 +59,21 @@ export default function ComposeMail({
 	};
 
 	useEffect(() => {
-		if (!open) return;
+		if (!open || parked) return;
 		fetchSentMailbox();
 
 		const t = setTimeout(() => setAppeared(true), 16);
 		const prev = document.body.style.overflow;
 		document.body.style.overflow = "hidden";
 
-		const onEsc = (e: KeyboardEvent) => e.key === "Escape" && handleClose();
+		// Typing lock (public/keyboard-shortcuts.js): Escape while typing does not
+		// close the window, only the suggestion list if one is open.
+		const onEsc = (e: KeyboardEvent) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			const el = e.target as HTMLElement | null;
+			if (el?.isContentEditable || (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+			handleClose();
+		};
 		window.addEventListener("keydown", onEsc);
 
 		return () => {
@@ -72,7 +81,7 @@ export default function ComposeMail({
 			document.body.style.overflow = prev;
 			window.removeEventListener("keydown", onEsc);
 		};
-	}, [open]);
+	}, [open, parked]);
 
 	const handleOpen = () => {
 		setOpen(true);
@@ -83,6 +92,7 @@ export default function ComposeMail({
 	const handleClose = () => {
 		setOpen(false);
 		setAppeared(false);
+		setParked(false);
 	};
 
 	return (
@@ -100,6 +110,7 @@ export default function ComposeMail({
 
 			{!open ? null : (
 				<Portal>
+					<div className={parked ? "hidden" : "contents"}>
 					<div
 						className={[
 							"fixed inset-0",
@@ -145,6 +156,7 @@ export default function ComposeMail({
 									}
 									showEditorMode={showEditorMode}
 									handleClose={handleClose}
+									onParkedChange={setParked}
 								/>
 							</div>
 						</div>
@@ -201,11 +213,13 @@ export default function ComposeMail({
 										message={null}
 										showEditorMode={showEditorMode}
 										handleClose={handleClose}
+										onParkedChange={setParked}
 									/>
 								</div>
 							</div>
 						</div>
 					)}
+					</div>
 				</Portal>
 			)}
 		</>

@@ -221,6 +221,23 @@ export async function upsertMailboxThreadItem(
 			},
 		});
 
+	// A sent reply bumps the thread in the other folders it lives in (Inbox, custom
+	// folders), as Gmail and Outlook do. Without it the message only counts for Sent
+	// and the thread keeps its place in the list. Also applies to a reply sent from
+	// another client (phone) and read back by the IMAP sync.
+	if (mbx.kind === "sent" && lastActivityAt) {
+		await dbh.execute(sql`
+			update mailbox_threads mt
+			set last_activity_at = ${new Date(lastActivityAt as any).toISOString()}::timestamptz, updated_at = now()
+			from mailboxes m
+			where mt.mailbox_id = m.id
+			  and mt.thread_id = ${msg.threadId}::uuid
+			  and mt.mailbox_id <> ${mbx.id}::uuid
+			  and coalesce(m.kind::text, '') not in ('sent', 'drafts', 'trash', 'spam')
+			  and mt.last_activity_at < ${new Date(lastActivityAt as any).toISOString()}::timestamptz
+		`);
+	}
+
 	return { threadId: msg.threadId, mailboxId: mbx.id };
 }
 

@@ -13,7 +13,9 @@ import {
 	index,
 	bigint,
 	numeric,
+	doublePrecision,
 	primaryKey,
+	check,
 	pgSchema
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -1667,7 +1669,8 @@ export const mailSubscriptions = pgTable(
         updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     },
     (t) => [
-		uniqueIndex("uniq_mail_subscriptions_workspace_key").on(t.workspaceId, t.subscriptionKey),
+		// Per user (migration 007), otherwise two users of the same workspace would fight over the row.
+		uniqueIndex("uniq_mail_subscriptions_workspace_key").on(t.workspaceId, t.ownerId, t.subscriptionKey),
 		index("idx_mail_subscriptions_status").on(t.ownerId, t.status),
 		index("idx_mail_subscriptions_last_seen").on(t.ownerId, t.lastSeenAt),
 		...workspaceCrudPolicies(t, "mail_subscriptions"),
@@ -1846,5 +1849,191 @@ export const authAccounts = pgTable(
 		),
 
 		...workspaceCrudPolicies(t, "auth_accounts"),
+	],
+).enableRLS();
+
+// Built-in OAuth 2.1 server for the mail MCP. These tables are only read and written
+// through the admin connection (web for /oauth/*, worker for /api/kurrier/mcp): RLS is
+// enabled without a policy, so the "kurrier" role (RLS) sees nothing. Tokens and codes
+// are stored hashed (sha256).
+export const mcpOauthClients = pgTable(
+	"mcp_oauth_clients",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		clientId: text("client_id").notNull(),
+		clientSecretHash: text("client_secret_hash"),
+		clientName: text("client_name").notNull(),
+		redirectUris: jsonb("redirect_uris").$type<string[]>().notNull(),
+		tokenEndpointAuthMethod: text("token_endpoint_auth_method")
+			.notNull()
+			.default("none"),
+		grantTypes: jsonb("grant_types").$type<string[]>().notNull(),
+		responseTypes: jsonb("response_types").$type<string[]>().notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [uniqueIndex("ux_mcp_oauth_clients_client_id").on(t.clientId)],
+).enableRLS();
+
+export const mcpOauthAuthorizationCodes = pgTable(
+	"mcp_oauth_authorization_codes",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		codeHash: text("code_hash").notNull(),
+		clientId: uuid("client_id")
+			.references(() => mcpOauthClients.id, { onDelete: "cascade" })
+			.notNull(),
+		userId: uuid("user_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull(),
+		redirectUri: text("redirect_uri").notNull(),
+		codeChallenge: text("code_challenge").notNull(),
+		codeChallengeMethod: text("code_challenge_method").notNull().default("S256"),
+		scope: text("scope"),
+		resource: text("resource"),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [
+		uniqueIndex("ux_mcp_oauth_codes_code_hash").on(t.codeHash),
+		index("ix_mcp_oauth_codes_expires").on(t.expiresAt),
+	],
+).enableRLS();
+
+export const mcpOauthAccessTokens = pgTable(
+	"mcp_oauth_access_tokens",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		tokenHash: text("token_hash").notNull(),
+		refreshTokenHash: text("refresh_token_hash").notNull(),
+		clientId: uuid("client_id")
+			.references(() => mcpOauthClients.id, { onDelete: "cascade" })
+			.notNull(),
+		userId: uuid("user_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull(),
+		scope: text("scope"),
+		expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+		refreshTokenExpiresAt: timestamp("refresh_token_expires_at", {
+			withTimezone: true,
+		}).notNull(),
+		revoked: boolean("revoked").notNull().default(false),
+		revokedAt: timestamp("revoked_at", { withTimezone: true }),
+		lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+	},
+	(t) => [
+		uniqueIndex("ux_mcp_oauth_tokens_token_hash").on(t.tokenHash),
+		uniqueIndex("ux_mcp_oauth_tokens_refresh_hash").on(t.refreshTokenHash),
+		index("ix_mcp_oauth_tokens_user").on(t.userId),
+		index("ix_mcp_oauth_tokens_expires").on(t.expiresAt),
+	],
+).enableRLS();
+
+// Recipient suggestions ranked by real usage (migration 005). Per-user aggregates, fed
+// by the worker (recipient_ingest) and read by the editor.
+export const recipientStats = pgTable(
+	"recipient_stats",
+	{
+		ownerId: uuid("owner_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull(),
+		email: text("email").notNull(),
+		name: text("name"),
+		count: integer("count").notNull().default(0),
+		score: doublePrecision("score").notNull().default(0),
+		lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull(),
+	},
+	(t) => [
+		primaryKey({ columns: [t.ownerId, t.email] }),
+		pgPolicy("recipient_stats_select_owner", {
+			for: "select",
+			to: "kurrier",
+			using: sql`${t.ownerId} = ${authUid}`,
+		}),
+	],
+).enableRLS();
+
+export const recipientPairs = pgTable(
+	"recipient_pairs",
+	{
+		ownerId: uuid("owner_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull(),
+		email: text("email").notNull(),
+		other: text("other").notNull(),
+		count: integer("count").notNull().default(0),
+		score: doublePrecision("score").notNull().default(0),
+		lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull(),
+	},
+	(t) => [
+		primaryKey({ columns: [t.ownerId, t.email, t.other] }),
+		pgPolicy("recipient_pairs_select_owner", {
+			for: "select",
+			to: "kurrier",
+			using: sql`${t.ownerId} = ${authUid}`,
+		}),
+	],
+).enableRLS();
+
+export const recipientIngested = pgTable(
+	"recipient_ingested",
+	{
+		ownerId: uuid("owner_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull(),
+		messageId: text("message_id").notNull(),
+	},
+	(t) => [primaryKey({ columns: [t.ownerId, t.messageId] })],
+).enableRLS();
+
+
+// Blocked senders (migration 007). Per user, valid across all their identities.
+// kind = address (exact address) or domain (domain and subdomains), value in lowercase.
+export const blockedSenders = pgTable(
+	"blocked_senders",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		ownerId: uuid("owner_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull()
+			.default(authUid),
+		workspaceId: uuid("workspace_id")
+			.references(() => workspaces.id, { onDelete: "cascade" })
+			.notNull()
+			.default(authWorkspaceId),
+		kind: text("kind").notNull(),
+		value: text("value").notNull(),
+		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+	},
+	(t) => [
+		uniqueIndex("uniq_blocked_senders_owner_value").on(t.ownerId, t.kind, t.value),
+		check("blocked_senders_kind_check", sql`${t.kind} IN ('address', 'domain')`),
+		pgPolicy("blocked_senders_select_owner", {
+			for: "select",
+			to: "kurrier",
+			using: sql`${t.ownerId} = ${authUid}`,
+		}),
+		pgPolicy("blocked_senders_insert_owner", {
+			for: "insert",
+			to: "kurrier",
+			withCheck: sql`${t.ownerId} = ${authUid} AND ${t.workspaceId} = ${authWorkspaceId}`,
+		}),
+		pgPolicy("blocked_senders_delete_owner", {
+			for: "delete",
+			to: "kurrier",
+			using: sql`${t.ownerId} = ${authUid}`,
+		}),
 	],
 ).enableRLS();

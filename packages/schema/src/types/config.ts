@@ -30,6 +30,8 @@ export const ZServerConfig = z.object({
 	S3_ACCESS_KEY: z.string("S3_ACCESS_KEY must be present"),
 	S3_SECRET_KEY: z.string("S3_SECRET_KEY must be present"),
 	S3_FORCE_PATH_STYLE: z.string("S3_FORCE_PATH_STYLE must be present"),
+	// Time zone used for quote attribution dates (default UTC).
+	MAIL_TIMEZONE: z.string().optional(),
 });
 
 /** Safe to expose to the browser */
@@ -37,6 +39,10 @@ export const ZPublicConfig = z.object({
 	WEB_URL: z.string("WEB_URL must be present"),
 	DOCS_URL: z.string().optional(),
 	DAV_URL: z.string("DAV_URL must be present"),
+	// Public origin of the MCP endpoint and its OAuth endpoints (default WEB_URL).
+	MCP_PUBLIC_ORIGIN: z.string().optional(),
+	// Same time zone, for the quote preview in the editor.
+	MAIL_TIMEZONE: z.string().optional(),
 	DISABLE_SIGNUP: z.string().optional().transform((val) => val === "true").default(false),
 });
 

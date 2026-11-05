@@ -66,7 +66,12 @@ export async function validateApiKey(event: H3Event) {
 	}
 
 	const token = auth.replace("Bearer ", "").trim();
+	return validateApiKeyToken(token);
+}
 
+// Validates an API key from its value alone, for callers that already extracted the token
+// (the MCP endpoint). Same checks as the header-based path.
+export async function validateApiKeyToken(token: string) {
 	const parts = token.split(".");
 	if (parts.length < 2) {
 		throw createError({
@@ -105,6 +110,13 @@ export async function validateApiKey(event: H3Event) {
 			statusMessage: "API key has been revoked",
 		});
 	}
+	// An expired key is refused everywhere.
+	if (key.expiresAt && new Date(key.expiresAt).getTime() < Date.now()) {
+		throw createError({
+			statusCode: 401,
+			statusMessage: "API key has expired",
+		});
+	}
 
 	const [secretMeta] = await db
 		.select()
@@ -119,8 +131,16 @@ export async function validateApiKey(event: H3Event) {
 		});
 	}
 
+	// The stored value is {"rawKey": ...} (see addApiKey): comparing against String(vault)
+	// would yield "[object Object]" and reject every key.
 	const actualSecret = await getSecretAdmin(secretMeta.id);
-	if (!actualSecret?.vault || !safeEqual(String(actualSecret.vault), token)) {
+	let rawKey = "";
+	try {
+		rawKey = String(JSON.parse(String(actualSecret?.vault?.decrypted_secret ?? "{}"))?.rawKey ?? "");
+	} catch {
+		rawKey = "";
+	}
+	if (!rawKey || !safeEqual(rawKey, token)) {
 		throw createError({
 			statusCode: 401,
 			statusMessage: "Invalid API key",
@@ -129,7 +149,7 @@ export async function validateApiKey(event: H3Event) {
 
 	return {
 		apiKey: key,
-		secret: actualSecret.vault,
+		secret: rawKey,
 		ownerId: key.ownerId,
 	};
 }

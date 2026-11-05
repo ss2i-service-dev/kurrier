@@ -20,7 +20,8 @@ import {
 	viewLabel,
 } from "@common/outlook-calendar";
 import type { OutlookCategory } from "@common/outlook-graph";
-import { type CalendarSource, type OutlookCalendarBox, type SourceRef, moveOutlookEvent, outlookCategories, outlookSources } from "@/lib/actions/outlook-calendar";
+import { type CalendarSource, type OutlookCalendarBox, type SourceRef, moveOutlookEvent, outlookCategories } from "@/lib/actions/outlook-calendar";
+import { agendaRead, cachedSources, prefetchEvents, storeSources } from "@/components/outlook-calendar/agenda-api";
 import CalendarGrid, { type MoveTarget } from "@/components/outlook-calendar/calendar-grid";
 import CalendarToolbar from "@/components/outlook-calendar/calendar-toolbar";
 import { useOutlookEvents } from "@/components/outlook-calendar/use-outlook-events";
@@ -33,7 +34,9 @@ const refOf = (s: CalendarSource): SourceRef => (s.kind === "own" ? { kind: "own
 
 export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookCalendarBox[]; nouvelle: boolean }) {
 	const st = useAgendaState();
-	const { view, anchor, boxId, newEvent, loaded, sources, extra, version, tz } = st;
+	const { view, anchor, boxId, newEvent, loaded, extra, version, tz } = st;
+	// Agendas d'une autre boite (changement de boite) : pas melanges a celle-ci.
+	const sources = st.sourcesBox === boxId ? st.sources : [];
 	const [categories, setCategories] = useState<OutlookCategory[]>([]);
 	const [sourcesError, setSourcesError] = useState<string | null>(null);
 	const [editor, setEditor] = useState<EditorTarget | null>(null);
@@ -47,23 +50,40 @@ export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookC
 		agendaStore.init(boxes.map((b) => b.identityPublicId));
 	}, [boxes]);
 
-	// Agendas de la boite et des collegues, relus sur Graph (droits compris).
+	// Agendas de la boite et des collegues, relus sur Graph (droits compris). Affichage immediat
+	// des derniers connus ; puis, en parallele, les agendas de la boite (rapides : la grille part
+	// aussitot) et ceux des collegues (droits de partage, lents).
 	const extraKey = extra.join(",");
 	useEffect(() => {
 		if (!loaded || !boxId) return;
 		let alive = true;
-		outlookSources({ identityPublicId: boxId, extra })
-			.catch((e: unknown) => ({ ok: false as const, error: String((e as Error)?.message ?? e) }))
-			.then((res) => {
-				if (!alive) return;
-				if (!res.ok) {
-					setSourcesError(res.error);
-					agendaStore.setSources([]);
-					return;
-				}
-				setSourcesError(null);
-				agendaStore.setSources(res.sources);
-			});
+		const known = cachedSources(boxId);
+		if (known?.length && !agendaStore.sourcesFor(boxId)) agendaStore.setSources(known, boxId);
+		let own: CalendarSource[] | null = null;
+		let colleagues: CalendarSource[] | null = null;
+		const publish = () => {
+			if (!alive || !own) return;
+			// Collegues pas encore relus : ceux deja connus restent affiches.
+			const others = colleagues ?? (known ?? []).filter((s) => s.kind === "colleague");
+			const all = [...own, ...others];
+			agendaStore.setSources(all, boxId);
+			if (colleagues) storeSources(boxId, all);
+		};
+		const fail = (e: string) => {
+			if (!alive) return;
+			setSourcesError(e);
+			if (!known?.length) agendaStore.setSources([], boxId);
+		};
+		void agendaRead<{ sources: CalendarSource[] }>("sources", { identityPublicId: boxId, colleagues: false }).then((res) => {
+			if (!res.ok) return fail(res.error);
+			setSourcesError(null);
+			own = res.sources;
+			publish();
+		});
+		void agendaRead<{ sources: CalendarSource[] }>("sources", { identityPublicId: boxId, extra, colleaguesOnly: true }).then((res) => {
+			colleagues = res.ok ? res.sources : [];
+			publish();
+		});
 		return () => {
 			alive = false;
 		};
@@ -88,6 +108,18 @@ export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookC
 	const list = useMemo(() => viewDays(view, anchor), [view, anchor]);
 	const { events: raw, loading, error, reload, patchLocal } = useOutlookEvents(loaded && sources.length ? boxId : undefined, list[0], list.length, refs, version, tz);
 	const byKey = useMemo(() => new Map(sources.map((s) => [s.key, s])), [sources]);
+
+	// Periodes precedente et suivante lues d'avance : les fleches sont instantanees.
+	useEffect(() => {
+		if (loading || !boxId || !refs.length) return;
+		const t = setTimeout(() => {
+			for (const dir of [1, -1] as const) {
+				const days = viewDays(view, stepView(view, anchor, dir));
+				prefetchEvents(boxId, days[0], days.length, refs, tz);
+			}
+		}, 400);
+		return () => clearTimeout(t);
+	}, [loading, boxId, refs, view, anchor, tz]);
 	const catColor = useMemo(() => new Map(categories.map((c) => [c.name, c.color])), [categories]);
 	// Comme Outlook : un evenement de mes agendas prend la couleur de sa premiere categorie.
 	const events = useMemo(
@@ -204,6 +236,16 @@ export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookC
 						)
 					}
 				/>
+				{/* Lecture en cours : barre fine (et message tant que rien n'est encore affiche). */}
+				{(loading || !sources.length) && !shownError && (
+					<div className="relative mt-2 h-0.5 overflow-hidden rounded bg-black/5 dark:bg-white/10" aria-hidden>
+						<div className={`absolute inset-y-0 w-1/3 animate-[k-agenda-load_1.1s_ease-in-out_infinite] rounded ${nouvelle ? "bg-k-accent" : "bg-primary"}`} />
+						<style>{"@keyframes k-agenda-load{0%{left:-33%}100%{left:100%}}"}</style>
+					</div>
+				)}
+				{!raw.length && (loading || !sources.length) && !shownError && (
+					<div className={`mt-1.5 text-[12px] ${muted}`}>Lecture de l'agenda Outlook…</div>
+				)}
 				{shownError && (
 					<div className="mt-2 rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-sm text-red-800" role="alert">
 						{shownError}

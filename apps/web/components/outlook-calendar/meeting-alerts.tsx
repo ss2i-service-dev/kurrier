@@ -13,7 +13,8 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Video, X } from "lucide-react";
 import { safeTimeZone, utcToZoned } from "@common/outlook-calendar";
 import type { DueReminder } from "@common/outlook-graph";
-import { dismissOutlookReminder, outlookCalendarBoxes, outlookDueReminders, snoozeOutlookReminder } from "@/lib/actions/outlook-calendar";
+import { dismissOutlookReminder, outlookCalendarBoxes, snoozeOutlookReminder } from "@/lib/actions/outlook-calendar";
+import { agendaRead } from "@/components/outlook-calendar/agenda-api";
 
 const FETCH_MS = 2 * 60_000;
 const TICK_MS = 5_000;
@@ -116,13 +117,19 @@ export default function MeetingAlerts() {
 
 	const fetchDue = useCallback(async () => {
 		if (!box.current) {
-			const boxes = await outlookCalendarBoxes().catch(() => []);
-			if (!boxes.length) return false;
+			// Boite deja choisie dans l'agenda : pas d'appel de plus (le serveur la verifie).
 			const saved = read("ss2i.agenda.box");
-			box.current = boxes.find((b) => b.identityPublicId === saved)?.identityPublicId ?? boxes[0].identityPublicId;
+			if (saved) box.current = saved;
+			else {
+				const boxes = await outlookCalendarBoxes().catch(() => []);
+				if (!boxes.length) return false;
+				box.current = boxes[0].identityPublicId;
+			}
 		}
-		const res = await outlookDueReminders({ identityPublicId: box.current, tz: tz() }).catch(() => null);
-		if (res?.ok) due.current = res.reminders;
+		// Route en parallele (pas une action serveur : elle ne retarde pas le reste de la page).
+		const res = await agendaRead<{ reminders: DueReminder[] }>("reminders", { identityPublicId: box.current, tz: tz() });
+		if (res.ok) due.current = res.reminders;
+		else if (/introuvable|n'est pas une boîte/i.test(res.error)) box.current = null;
 		tick();
 		return true;
 	}, [tick]);
@@ -130,15 +137,19 @@ export default function MeetingAlerts() {
 	useEffect(() => {
 		let alive = true;
 		let fetchTimer: ReturnType<typeof setInterval> | undefined;
-		void fetchDue().then((ok) => {
-			if (!alive || !ok) return;
-			fetchTimer = setInterval(() => document.visibilityState === "visible" && void fetchDue(), FETCH_MS);
-		});
+		// Premiere lecture un peu apres l'ouverture : la page passe d'abord.
+		const first = setTimeout(() => {
+			void fetchDue().then((ok) => {
+				if (!alive || !ok) return;
+				fetchTimer = setInterval(() => document.visibilityState === "visible" && void fetchDue(), FETCH_MS);
+			});
+		}, 2_500);
 		const tickTimer = setInterval(tick, TICK_MS);
 		const onFocus = () => void fetchDue();
 		window.addEventListener("focus", onFocus);
 		return () => {
 			alive = false;
+			clearTimeout(first);
 			if (fetchTimer) clearInterval(fetchTimer);
 			clearInterval(tickTimer);
 			window.removeEventListener("focus", onFocus);

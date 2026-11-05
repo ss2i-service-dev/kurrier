@@ -1,23 +1,17 @@
 "use client";
-// ss2i : evenements Outlook d'une periode pour des agendas donnes. Cache par boite, periode
-// et agendas le temps de la page (les fleches qui reviennent en arriere ne relisent pas
-// Graph). Outlook reste la source : relecture toutes les 60 s quand l'onglet est visible, au
-// retour sur l'onglet, et apres chaque ecriture (version de agenda-store).
+// ss2i : evenements Outlook d'une periode pour des agendas donnes. Affichage immediat de ce
+// qui est en cache (meme d'une visite precedente de la page, sessionStorage), puis relecture
+// si la copie a plus de 60 s ; requetes identiques partagees (grille, barre laterale). Outlook
+// reste la source : relecture toutes les 60 s quand l'onglet est visible, au retour sur
+// l'onglet, et apres chaque ecriture (version de agenda-store).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { addDays } from "@common/thread-agenda";
 import type { CalendarEvent } from "@common/outlook-calendar";
-import { type SourceRef, fetchOutlookEvents } from "@/lib/actions/outlook-calendar";
-
-const cache = new Map<string, { at: number; events: CalendarEvent[]; errors?: string[] }>();
-const FRESH_MS = 60_000;
-
-const refKey = (s: SourceRef) => (s.kind === "own" ? `own:${s.calendarId ?? "default"}` : `colleague:${s.owner}`);
+import type { SourceRef } from "@/lib/actions/outlook-calendar";
+import { FRESH_MS, cachedEvents, eventsKey, invalidateEvents, loadEvents } from "@/components/outlook-calendar/agenda-api";
 
 export function useOutlookEvents(identityPublicId: string | undefined, from: string, days: number, sources?: SourceRef[], version = 0, tz?: string) {
-	const to = addDays(from, days);
-	const srcKey = sources ? sources.map(refKey).sort().join(",") : "default";
-	const key = identityPublicId ? `${identityPublicId}|${from}|${to}|${srcKey}|${tz ?? ""}` : "";
-	const [events, setEvents] = useState<CalendarEvent[]>(() => cache.get(key)?.events ?? []);
+	const key = identityPublicId ? eventsKey(identityPublicId, from, days, sources, tz) : "";
+	const [events, setEvents] = useState<CalendarEvent[]>(() => (key ? (cachedEvents(key)?.events ?? []) : []));
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const req = useRef(0);
@@ -32,7 +26,7 @@ export function useOutlookEvents(identityPublicId: string | undefined, from: str
 				setError(null);
 				return;
 			}
-			const hit = cache.get(key);
+			const hit = cachedEvents(key);
 			if (hit) setEvents(hit.events);
 			if (hit && !force && Date.now() - hit.at < FRESH_MS) {
 				setError(hit.errors?.join(" ") ?? null);
@@ -40,25 +34,22 @@ export function useOutlookEvents(identityPublicId: string | undefined, from: str
 			}
 			const id = ++req.current;
 			setLoading(true);
-			fetchOutlookEvents({ identityPublicId, from, to, sources: sourcesRef.current, tz })
-				.catch((e: unknown) => ({ ok: false as const, error: String((e as Error)?.message ?? e) }))
-				.then((res) => {
-					if (id !== req.current) return;
-					setLoading(false);
-					if (!res.ok) {
-						setError(res.error);
-						return;
-					}
-					setError(res.errors?.join(" ") ?? null);
-					cache.set(key, { at: Date.now(), events: res.events, errors: res.errors });
-					setEvents(res.events);
-				});
+			void loadEvents(identityPublicId, from, days, sourcesRef.current, tz).then((res) => {
+				if (id !== req.current) return;
+				setLoading(false);
+				if (!res.ok) {
+					setError(res.error);
+					return;
+				}
+				setError(res.errors?.join(" ") ?? null);
+				setEvents(res.events);
+			});
 		},
-		[identityPublicId, key, from, to, tz],
+		[identityPublicId, key, from, days, tz],
 	);
 
 	useEffect(() => {
-		if (!cache.has(key)) setEvents([]);
+		if (!cachedEvents(key)) setEvents([]);
 		load(false);
 	}, [key, load]);
 
@@ -67,7 +58,7 @@ export function useOutlookEvents(identityPublicId: string | undefined, from: str
 	useEffect(() => {
 		if (version === lastVersion.current) return;
 		lastVersion.current = version;
-		for (const k of cache.keys()) if (k.startsWith(`${identityPublicId}|`)) cache.delete(k);
+		if (identityPublicId) invalidateEvents(identityPublicId);
 		load(true);
 	}, [version, identityPublicId, load]);
 
@@ -76,7 +67,7 @@ export function useOutlookEvents(identityPublicId: string | undefined, from: str
 		const tick = () => document.visibilityState === "visible" && load(true);
 		const t = setInterval(tick, FRESH_MS);
 		const onFocus = () => {
-			const hit = cache.get(key);
+			const hit = cachedEvents(key);
 			if (!hit || Date.now() - hit.at > 15_000) load(true);
 		};
 		window.addEventListener("focus", onFocus);
@@ -87,7 +78,7 @@ export function useOutlookEvents(identityPublicId: string | undefined, from: str
 	}, [key, load]);
 
 	const reload = useCallback(() => {
-		for (const k of cache.keys()) if (k.startsWith(`${identityPublicId}|`)) cache.delete(k);
+		if (identityPublicId) invalidateEvents(identityPublicId);
 		load(true);
 	}, [identityPublicId, load]);
 

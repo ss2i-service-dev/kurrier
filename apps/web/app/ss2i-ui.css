@@ -497,8 +497,10 @@
 [data-ui="ss2i"] :is(.k-compose-body, .k-reply-body) .k-editor {
 	display: flex;
 	flex-direction: column;
-	flex: 1 1 auto;
-	min-height: 0;
+	/* grandit avec le texte sans jamais retrecir sous son contenu : sinon un long
+	   texte (colle) debordait de la zone et passait sous la signature ; c'est le
+	   panneau qui defile */
+	flex: 1 0 auto;
 }
 [data-ui="ss2i"] :is(.k-compose-body, .k-reply-body) .k-editor > :not(.k-editor-content):not(.mantine-RichTextEditor-content) {
 	flex-shrink: 0;
@@ -506,7 +508,7 @@
 [data-ui="ss2i"] :is(.k-compose-body, .k-reply-body) .k-editor-content {
 	display: flex;
 	flex-direction: column;
-	flex: 1 1 auto;
+	flex: 1 0 auto;
 	min-height: 84px;
 }
 [data-ui="ss2i"] :is(.k-compose-body, .k-reply-body) .k-editor-content > div,

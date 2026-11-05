@@ -635,6 +635,11 @@ const ev = (id: string, start: string, end: string, extra: Partial<CalendarEvent
 		assert.match(editor, /<SchedulingAssistant/);
 		assert.match(editor, /<TeamsOptionsModal/);
 		assert.match(src("apps/web/components/outlook-calendar/month-grid.tsx"), /onDrop=/);
+		// lectures par la route (en parallele), pas par les actions serveur qui passent une par une
+		const route = src("apps/web/app/api/outlook-calendar/route.ts");
+		assert.match(route, /fetchOutlookEvents\(/);
+		assert.match(src("apps/web/components/outlook-calendar/use-outlook-events.ts"), /loadEvents\(/);
+		assert.doesNotMatch(src("apps/web/components/outlook-calendar/use-outlook-events.ts"), /fetchOutlookEvents/);
 	});
 
 	if (failures) {

@@ -26,8 +26,9 @@ type State = {
 	newEvent: NewEventRequest | null;
 	detail: DetailRequest | null;
 	loaded: boolean;
-	/** Agendas de la boite et des collegues (relus sur Graph par la page). */
+	/** Agendas de la boite et des collegues (relus sur Graph par la page), et leur boite. */
 	sources: CalendarSource[];
+	sourcesBox?: string;
 	/** Cles des agendas masques (les collegues sont masques tant qu'on ne les coche pas). */
 	hidden: string[];
 	shownColleagues: string[];
@@ -125,8 +126,12 @@ export const agendaStore = {
 		write(BOX_KEY, boxId);
 		set({ boxId });
 	},
-	setSources(sources: CalendarSource[]) {
-		set({ sources });
+	setSources(sources: CalendarSource[], boxId?: string) {
+		set({ sources, sourcesBox: boxId ?? state.sourcesBox });
+	},
+	/** Agendas deja charges pour cette boite (null si autre boite ou rien). */
+	sourcesFor(boxId: string): CalendarSource[] | null {
+		return state.sourcesBox === boxId && state.sources.length ? state.sources : null;
 	},
 	/** Agenda affiche ? Ceux de la boite le sont par defaut, ceux des collegues non. */
 	isShown(key: string): boolean {

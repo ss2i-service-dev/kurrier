@@ -119,12 +119,13 @@ async function boxAddress(identityPublicId: string): Promise<string> {
 	return address;
 }
 
-// Droit sur l'agenda d'un collegue, relu sur Graph au plus toutes les 5 minutes.
+// Droit sur l'agenda d'un collegue, relu sur Graph au plus toutes les 30 minutes (calendarPermissions
+// repond en 2 s environ : c'etait l'essentiel du temps d'ouverture de l'agenda).
 const roles = new Map<string, { at: number; role: CalendarRole }>();
 async function roleFor(cfg: GraphConfig | null, owner: string, me: string): Promise<CalendarRole> {
 	const k = `${me}>${owner}`;
 	const hit = roles.get(k);
-	if (hit && Date.now() - hit.at < 5 * 60_000) return hit.role;
+	if (hit && Date.now() - hit.at < 30 * 60_000) return hit.role;
 	const role = demo.on() ? demo.role(owner, me) : await calendarRole(cfg as GraphConfig, owner, me);
 	roles.set(k, { at: Date.now(), role });
 	return role;
@@ -180,11 +181,22 @@ export async function outlookCalendarBoxes(): Promise<OutlookCalendarBox[]> {
  * ceux des collegues partages avec elle, plus les collegues ajoutes dans courrier (`extra`)
  * s'ils partagent leur agenda.
  */
-export async function outlookSources(input: { identityPublicId: string; extra?: string[] }): Promise<Result<{ mailbox: string; sources: CalendarSource[] }>> {
+export async function outlookSources(input: {
+	identityPublicId: string;
+	extra?: string[];
+	/** false : seulement les agendas de la boite (rapide) ; les collegues viennent a part. */
+	colleagues?: boolean;
+	/** true : seulement les collegues. */
+	colleaguesOnly?: boolean;
+}): Promise<Result<{ mailbox: string; sources: CalendarSource[] }>> {
 	try {
 		const me = await boxAddress(input.identityPublicId);
 		const cfg = demo.on() ? null : graphConfig();
-		const own = demo.on() ? demo.calendars() : await listCalendars(cfg as GraphConfig, me);
+		// Agendas de la boite et agendas partages : lus en meme temps.
+		const [own, sharedList] = await Promise.all([
+			input.colleaguesOnly ? Promise.resolve([]) : demo.on() ? Promise.resolve(demo.calendars()) : listCalendars(cfg as GraphConfig, me),
+			input.colleagues === false ? Promise.resolve([]) : demo.on() ? Promise.resolve(demo.shared()) : sharedCalendarOwners(cfg as GraphConfig, me),
+		]);
 		const sources: CalendarSource[] = own.map((c) => ({
 			kind: "own" as const,
 			calendarId: c.id,
@@ -196,15 +208,19 @@ export async function outlookSources(input: { identityPublicId: string; extra?: 
 			editable: c.canEdit,
 			isDefault: c.isDefault,
 		}));
-		const shared = demo.on() ? demo.shared() : await sharedCalendarOwners(cfg as GraphConfig, me);
+		if (input.colleagues === false) return { ok: true, mailbox: me, sources };
+		const shared = sharedList;
 		const extra = (Array.isArray(input.extra) ? input.extra : [])
 			.map((a) => String(a).trim().toLowerCase())
 			.filter((a) => EMAIL_RE.test(a) && a !== me && !shared.some((s) => s.address === a))
 			.slice(0, 30)
 			.map((address) => ({ address, name: address }));
+		// Droits de chaque collegue lus en parallele (2 s chacun sur Graph).
+		const all = [...shared, ...extra];
+		const roleList = await Promise.all(all.map((c) => roleFor(cfg, c.address, me).catch(() => "none" as CalendarRole)));
 		let i = 0;
-		for (const c of [...shared, ...extra]) {
-			const role = await roleFor(cfg, c.address, me).catch(() => "none" as CalendarRole);
+		for (const [n, c] of all.entries()) {
+			const role = roleList[n];
 			if (role === "none") continue;
 			sources.push({
 				kind: "colleague",

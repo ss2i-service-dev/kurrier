@@ -117,15 +117,20 @@ function dayTitle(date: string, today: string): string {
  * d'horaire faites par un participant (reunions que j'organise) et invitations sans reponse.
  * Un clic ouvre la fiche, ou se trouvent les boutons.
  */
-function ToDo({ nouvelle }: { nouvelle: boolean }) {
-	const t = theme(nouvelle);
-	const { boxId, loaded, sources, version, tz } = useAgendaState();
-	const today = todayInParis(new Date(), tz);
+/** Mes agendas sur 14 jours a partir d'aujourd'hui : une lecture partagee par « A traiter » et « A venir ». */
+function useOwnUpcoming(boxId: string | undefined, ready: boolean, sources: CalendarSource[], version: number, tz: string, today: string) {
 	const refs = useMemo(
 		() => sources.filter((s) => s.kind === "own").map((s) => ({ kind: "own" as const, calendarId: s.kind === "own" ? s.calendarId : undefined })),
 		[sources],
 	);
-	const { events } = useOutlookEvents(loaded && sources.length ? boxId : undefined, today, 14, refs, version, tz);
+	return useOutlookEvents(ready && refs.length ? boxId : undefined, today, 14, refs, version, tz);
+}
+
+function ToDo({ nouvelle }: { nouvelle: boolean }) {
+	const t = theme(nouvelle);
+	const { boxId, loaded, sources, sourcesBox, version, tz } = useAgendaState();
+	const today = todayInParis(new Date(), tz);
+	const { events } = useOwnUpcoming(boxId, loaded && sourcesBox === boxId, sources, version, tz, today);
 	const nowMin = minutesNowInParis(new Date(), tz);
 	const now = `${today}T${String(Math.floor(nowMin / 60)).padStart(2, "0")}:${String(nowMin % 60).padStart(2, "0")}`;
 	const items = events
@@ -176,14 +181,12 @@ function ToDo({ nouvelle }: { nouvelle: boolean }) {
 
 function Upcoming({ nouvelle }: { nouvelle: boolean }) {
 	const t = theme(nouvelle);
-	const { boxId, loaded, sources, hidden, version, tz } = useAgendaState();
+	const { boxId, loaded, sources, sourcesBox, hidden, version, tz } = useAgendaState();
 	const today = todayInParis(new Date(), tz);
-	// Mes agendas affiches seulement (pas ceux des collegues).
-	const refs = useMemo(
-		() => sources.filter((s) => s.kind === "own" && !hidden.includes(s.key)).map((s) => ({ kind: "own" as const, calendarId: s.kind === "own" ? s.calendarId : undefined })),
-		[sources, hidden],
-	);
-	const { events, error } = useOutlookEvents(loaded && sources.length ? boxId : undefined, today, 7, refs, version, tz);
+	// Meme lecture que « A traiter » (une seule requete), filtree ici : mes agendas affiches, 7 jours.
+	const own = useOwnUpcoming(boxId, loaded && sourcesBox === boxId, sources, version, tz, today);
+	const error = own.error;
+	const events = own.events.filter((e) => !hidden.includes(e.sourceKey ?? "") && e.start.slice(0, 10) < addDays(today, 7));
 	const nowMin = minutesNowInParis(new Date(), tz);
 	const now = `${today}T${String(Math.floor(nowMin / 60)).padStart(2, "0")}:${String(nowMin % 60).padStart(2, "0")}`;
 	const next = events

@@ -8,6 +8,8 @@ import { useNouvelle } from "@/components/k/ui-context";
 import { addThreadEventsToAgenda, agendaAvailable, analyzeThreadForAgenda } from "@/lib/actions/thread-agenda";
 import { type AgendaEvent, type AgendaReminder, normalizeAgendaEvent } from "@common/thread-agenda";
 import { type AgendaRow, ConfirmStep, ProposalsStep } from "@/components/mailbox/default/add-to-agenda-steps";
+import { placeEvent } from "@common/outlook-calendar";
+import PlanningPanel from "@/components/outlook-calendar/planning-panel";
 
 // ss2i : « Ajouter a l'agenda » depuis un fil ouvert (OI 10280), meme fenetre dans les deux
 // interfaces, en francais dans les deux. Le fil est analyse a l'ouverture (propositions du
@@ -22,6 +24,10 @@ import { type AgendaRow, ConfirmStep, ProposalsStep } from "@/components/mailbox
 // (« rappel pour relancer le client jeudi ») et le LLM le met en forme a partir du fil, ou
 // l'utilisateur le saisit lui-meme (Samuel, 05/11). Un rappel horaire cree ainsi a son rappel
 // « 15 minutes avant » preselectionne : c'est ce qui a ete demande.
+// Planification (Hugo, 05/11) : a l'etape 1, la fenetre s'elargit et montre a droite deux
+// semaines de l'agenda Outlook (PlanningPanel) ; la proposition encadree se place d'un clic
+// sur un creneau, en gardant sa duree.
+
 
 const availability = new Map<string, Promise<boolean>>();
 
@@ -79,6 +85,7 @@ export function AddToAgenda({
 	const [wish, setWish] = useState("");
 	const [asking, setAsking] = useState(false);
 	const [askOpen, setAskOpen] = useState(false);
+	const [activeKey, setActiveKey] = useState<number | null>(null);
 	const nextKey = useRef(0);
 	const analyzedFor = useRef<string | null>(null);
 	const request = useRef(0);
@@ -115,6 +122,7 @@ export function AddToAgenda({
 				}
 				setMailbox(res.mailbox);
 				setRows(res.events.map((e, i) => ({ ...e, key: i, checked: true })));
+				setActiveKey(res.events.length ? 0 : null);
 				nextKey.current = res.events.length;
 				setPhase("ready");
 			});
@@ -146,7 +154,9 @@ export function AddToAgenda({
 
 	const selected = rows.filter((r) => r.checked);
 
-	const addRows = (events: AgendaEvent[]) =>
+	const addRows = (events: AgendaEvent[]) => {
+		// La nouvelle proposition devient celle que l'agenda place.
+		if (events.length) setActiveKey(nextKey.current);
 		setRows((list) => [
 			...list,
 			...events.map((e) => ({
@@ -156,6 +166,10 @@ export function AddToAgenda({
 				reminder: (e.allDay ? "none" : "15m") as AgendaReminder,
 			})),
 		]);
+	};
+
+	const place = (key: number, date: string, minutes: number | null) =>
+		setRows((list) => list.map((r) => (r.key === key ? { ...r, ...placeEvent(r, date, minutes), error: undefined } : r)));
 
 	// Ce que l'utilisateur veut creer, mis en forme par le LLM a partir du fil.
 	const ask = () => {
@@ -265,6 +279,8 @@ export function AddToAgenda({
 
 	const muted = nouvelle ? "text-k-ink-3" : "text-muted-foreground";
 	const confirming = phase === "ready" && step === "confirm";
+	// Etape 1 avec propositions : agenda Outlook a cote (fenetre elargie).
+	const planning = phase === "ready" && rows.length > 0 && step === "edit";
 
 	const requestBox = (
 		<div className="space-y-2">
@@ -300,7 +316,13 @@ export function AddToAgenda({
 	return (
 		<>
 			{trigger(openDialog)}
-			<Modal opened={opened} onClose={close} size="lg" title={confirming ? "Confirmer l'ajout à l'agenda" : "Ajouter à l'agenda"}>
+			<Modal
+				opened={opened}
+				onClose={close}
+				size={planning ? "100%" : "xl"}
+				styles={planning ? { content: { maxWidth: 1400 } } : undefined}
+				title={confirming ? "Confirmer l'ajout à l'agenda" : "Ajouter à l'agenda"}
+			>
 				<div ref={bodyRef} tabIndex={-1} className="space-y-3 outline-none">
 					{phase === "loading" && (
 						<div className={`flex items-center gap-2 py-6 text-sm ${muted}`} role="status">
@@ -336,17 +358,37 @@ export function AddToAgenda({
 						</>
 					)}
 
-					{phase === "ready" && rows.length > 0 && step === "edit" && (
-						<>
-							<ProposalsStep rows={rows} mailbox={mailbox} nouvelle={nouvelle} onChange={update} />
-							{askOpen ? (
-								requestBox
-							) : (
-								<Button variant="subtle" size="xs" onClick={() => setAskOpen(true)}>
-									+ Créer un autre événement
-								</Button>
-							)}
-						</>
+					{planning && (
+						<div className="flex flex-col gap-3 md:grid md:h-[min(72vh,760px)] md:grid-cols-[minmax(320px,380px)_1fr]">
+							<div className="flex min-h-0 flex-col gap-2">
+								<ProposalsStep
+									rows={rows}
+									mailbox={mailbox}
+									nouvelle={nouvelle}
+									onChange={update}
+									activeKey={activeKey}
+									onActivate={setActiveKey}
+									planning
+								/>
+								{askOpen ? (
+									requestBox
+								) : (
+									<Button className="self-start" variant="subtle" size="xs" onClick={() => setAskOpen(true)}>
+										+ Créer un autre événement
+									</Button>
+								)}
+							</div>
+							<div className="h-[60vh] min-h-0 md:h-auto">
+								<PlanningPanel
+									identityPublicId={identityPublicId}
+									proposals={rows}
+									activeKey={activeKey}
+									nouvelle={nouvelle}
+									onPlace={place}
+									onActivate={setActiveKey}
+								/>
+							</div>
+						</div>
 					)}
 					{confirming && (
 						<ConfirmStep

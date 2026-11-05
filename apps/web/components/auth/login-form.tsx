@@ -28,6 +28,7 @@ export function LoginForm({
 	...props
 }: React.ComponentProps<"div"> & {oidc?: {
 		googleEnabled?: boolean;
+		ceriseEnabled?: boolean;
 	} }  & {dict: Dictionary}) {
 	const [formState, formAction, isPending] = useActionState<
 		FormState,
@@ -39,12 +40,20 @@ export function LoginForm({
 			<Card>
 				<CardHeader className="text-center">
 					<CardTitle className="text-xl">{dict.auth.welcomeBack}</CardTitle>
-					<CardDescription>Login with your Google account</CardDescription>
-					{oidc?.googleEnabled ? (
+					{/* ss2i (OI 10297) : Cerise à côté du mot de passe, les deux restent ouverts. */}
+					{oidc?.ceriseEnabled && (
+						<Button fullWidth variant="filled" color="red" className="w-full" href={"/api/auth/cerise"} component="a" data-testid="login-cerise">
+							Se connecter avec Cerise
+						</Button>
+					)}
+					{oidc?.googleEnabled && (
 						<Button fullWidth variant="default" className="w-full" href={"/api/auth/oidc/google"} component="a" leftSection={<IconBrandGoogle/>}>
 							Login with Google
 						</Button>
-					) : <div className={'text-sm text-center'}>No third-party authentication methods are currently enabled.</div>}
+					)}
+					{(oidc?.ceriseEnabled || oidc?.googleEnabled) && (
+						<CardDescription>ou avec ton adresse et ton mot de passe courrier</CardDescription>
+					)}
 				</CardHeader>
 
 				<CardContent>

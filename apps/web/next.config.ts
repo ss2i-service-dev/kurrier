@@ -9,16 +9,14 @@ const nextConfig: NextConfig = {
 		proxyClientMaxBodySize: "10gb",
 	},
 	// cacheComponents: true,
+	// /_next/image is excluded from the proxy.ts matcher, so it sits outside the session guard; hostname "**"
+	// made it an open proxy (any http(s) URL, internal network included). Only the avatar hosts of the code
+	// remain: Gravatar and the placehold.co fallback. Contact avatars (signed S3 URLs) go through next/image
+	// as `unoptimized`: not through the optimizer, so not in this list. Test apps/web/test/image-hosts.ts.
 	images: {
 		remotePatterns: [
-			{
-				protocol: "https",
-				hostname: "**",
-			},
-			{
-				protocol: "http",
-				hostname: "**",
-			},
+			{ protocol: "https", hostname: "www.gravatar.com", pathname: "/avatar/**" },
+			{ protocol: "https", hostname: "placehold.co" },
 		],
 	},
 	async rewrites() {

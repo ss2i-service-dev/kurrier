@@ -7,6 +7,7 @@
 // citation peut porter un echange anterieur au fil.
 import { stripQuotedHtml, stripQuotedText } from "@common/compose";
 import { toast } from "sonner";
+import { joinSurrogateEntities } from "@common/html-entities";
 import { fetchMessagesForCopy, type CopyAddress, type CopyMessage } from "@/lib/actions/mail-copy";
 
 const BLOCK = new Set([
@@ -16,7 +17,7 @@ const BLOCK = new Set([
 ]);
 
 export function htmlToText(html: string): string {
-	const doc = new DOMParser().parseFromString(html, "text/html");
+	const doc = new DOMParser().parseFromString(joinSurrogateEntities(html), "text/html");
 	doc.querySelectorAll("script, style, head, title, meta, noscript, template").forEach((n) => n.remove());
 	let out = "";
 	const nl = (n = 1) => {

@@ -7,7 +7,7 @@ import {
 	CommandSeparator,
 } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
-import { Search, Paperclip } from "lucide-react";
+import { Search, Paperclip, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { IconStar, IconStarFilled } from "@tabler/icons-react";
@@ -15,6 +15,7 @@ import type { ThreadHit } from "@schema";
 import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
 import { initSearch } from "@/lib/actions/mailbox";
 import { useRouter } from 'next/navigation'
+import { selectedPageText } from "@/lib/page-selection";
 
 const DEBOUNCE_MS = 250;
 
@@ -49,16 +50,43 @@ export default function MailboxSearch({
 	const [totalThreads, setTotalThreads] = React.useState(0);
 	const [totalMessages, setTotalMessages] = React.useState(0);
 
+	// ss2i : texte selectionne dans la page = requete pre-remplie, selectionnee dans le champ
+	// (onFocus) : Entree lance la recherche, une frappe ou Retour arriere la remplace, la croix
+	// la vide. Le texte est lu a l'appui de la souris, avant que le clic ne defasse la selection ;
+	// au clavier (« / », Ctrl+K) la selection est encore la au moment de l'ouverture.
+	const openRef = React.useRef(open);
+	openRef.current = open;
+	const pressedSelection = React.useRef<string | null>(null);
+	const inputRef = React.useRef<HTMLInputElement | null>(null);
+
+	const openWithSelection = React.useCallback((captured?: string | null) => {
+		const text = captured ?? selectedPageText();
+		if (text) setQuery(text);
+		setOpen(true);
+	}, []);
+
+	const triggerProps = {
+		onMouseDown: () => {
+			pressedSelection.current = selectedPageText();
+		},
+		onClick: () => {
+			const captured = pressedSelection.current;
+			pressedSelection.current = null;
+			openWithSelection(captured);
+		},
+	};
+
 	React.useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
 				e.preventDefault();
-				setOpen((v) => !v);
+				if (openRef.current) setOpen(false);
+				else openWithSelection();
 			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, []);
+	}, [openWithSelection]);
 
 	React.useEffect(() => {
 		const q = query.trim();
@@ -128,7 +156,7 @@ export default function MailboxSearch({
 			{nouvelle ? (
 				<button
 					type="button"
-					onClick={() => setOpen(true)}
+					{...triggerProps}
 					data-k-action="search"
 					className="k-focus flex h-9 w-full items-center gap-2 rounded-k bg-k-hover px-3 text-k-ink-3 transition-colors hover:text-k-ink-2"
 				>
@@ -139,7 +167,7 @@ export default function MailboxSearch({
 			) : (
 			<button
 				type="button"
-				onClick={() => setOpen(true)}
+				{...triggerProps}
 				className="flex w-full items-center gap-2 rounded-lg border bg-background px-4 py-2.5 text-muted-foreground hover:bg-muted/30"
 			>
 				<Search className="h-4 w-4 opacity-60" />
@@ -152,8 +180,13 @@ export default function MailboxSearch({
 				onOpenChange={setOpen}
 				title={k("Command Palette", "Recherche dans le courrier")}
 				description={k("Search for a command to run...", "Saisissez votre recherche, puis appuyez sur Entrée.")}
+				// ss2i : la croix de fermeture tombait sur le champ ; Echap ferme, la croix du champ vide la requete.
+				showCloseButton={false}
 			>
+				<div className="relative">
 				<CommandInput
+					ref={inputRef}
+					className="pr-9"
 					autoFocus
 					placeholder={k("Search mail…", "Rechercher dans le courrier…")}
 					value={query}
@@ -170,6 +203,23 @@ export default function MailboxSearch({
 						);
 					}}
 				/>
+				{query && (
+					<button
+						type="button"
+						aria-label={k("Clear search", "Effacer la recherche")}
+						title={k("Clear search", "Effacer la recherche")}
+						data-ss2i="search-clear"
+						onMouseDown={(e) => e.preventDefault()}
+						onClick={() => {
+							setQuery("");
+							inputRef.current?.focus();
+						}}
+						className="absolute right-3 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+					>
+						<X className="h-4 w-4" />
+					</button>
+				)}
+				</div>
 
 				<div className="sticky top-0 z-10 flex flex-wrap gap-2 border-b bg-background px-4 py-2">
 					<Badge

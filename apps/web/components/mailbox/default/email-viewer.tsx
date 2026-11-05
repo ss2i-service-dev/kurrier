@@ -10,6 +10,7 @@ import { adaptEmailToDark } from "@/components/k/dark-email";
 import { setRemoteImagesForContact } from "@/lib/actions/contact-images";
 import { toast } from "sonner";
 import { useK } from "@/components/k/ui-context";
+import { joinSurrogateEntities } from "@common/html-entities";
 
 // ss2i : partage avec la citation modifiable (reply-quote-editor), meme rendu que le lecteur.
 export const BASE_CSS = `
@@ -273,7 +274,8 @@ export default function EmailViewer({
 
 		const rawHtml =
 			message.html && message.html.trim()
-				? message.html
+				? // ss2i : emojis d'Outlook en paires de references de surrogates (« �� » sinon).
+					joinSurrogateEntities(message.html)
 				: // ss2i : mail en texte seul ; classe dédiée pour garder retours à la ligne et
 					// alignements (la règle générale `white-space: normal !important` les écrasait),
 					// adresses web rendues cliquables.

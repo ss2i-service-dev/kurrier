@@ -5,7 +5,11 @@
 // qu'on a arretes ; (c) un idle() qui rend la main aussitot ne tourne pas en boucle ; (d) plus de
 // reconnexion apres stopRealtimeForIdentity ; (e) jamais deux clients IDLE pour une identite ;
 // (f) une erreur de deltaFetch ou de la base sur exists, flags et expunge ne laisse pas de promesse
-// rejetee non geree ; (g) plus de reconnexion une fois l'arret du worker commence.
+// rejetee non geree ; (g) plus de reconnexion une fois l'arret du worker commence ; (h) chaque
+// IDLE etabli (demarrage, reconnexion) rattrape par deltaFetch les messages arrives pendant la
+// coupure (ImapFlow n'emet pas exists au SELECT) ; (i) un serveur qui accepte la connexion puis
+// coupe aussitot ne fait pas reconnecter sans fin (le compteur ne repart a zero qu'apres une
+// connexion qui a tenu).
 // Base de test : voir mcp-test-env.ts :
 //   MCP_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55460/kurrier_test \
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/imap-idle-lifecycle.ts
@@ -16,6 +20,7 @@ import { eq } from "drizzle-orm";
 import { EventEmitter } from "node:events";
 import type { ImapFlow } from "imapflow";
 import * as realtime from "../lib/imap/imap-idle-sync";
+import { deltaFetch } from "../lib/imap/imap-delta-fetch";
 
 const { realtimeDeps, startRealtimeForIdentity, stopRealtimeForIdentity } = realtime;
 // Absents avant OI 10346 : lus sans les importer nommement pour que le test reste executable.
@@ -40,6 +45,7 @@ class FakeIdle extends EventEmitter {
 	idling = false;
 	idleCalls = 0;
 	immediate = false; // idle() rend la main aussitot, comme ImapFlow deja en IDLE
+	flap = false; // le serveur coupe des que l'IDLE commence
 	private stopIdle?: (err?: Error) => void;
 	async getMailboxLock(path: string) {
 		return { path, release() {} };
@@ -49,6 +55,10 @@ class FakeIdle extends EventEmitter {
 		// Garde-fou : une boucle sans pause ne doit pas bloquer le test.
 		if (this.idleCalls > 1000) this.drop();
 		if (!this.usable) return Promise.reject(noConnection());
+		if (this.flap) {
+			this.drop();
+			return Promise.reject(noConnection());
+		}
 		if (this.immediate) return Promise.resolve(false);
 		this.idling = true;
 		return new Promise((resolve, reject) => {
@@ -114,12 +124,21 @@ const clock = new Clock();
 const known = new Set<string>(); // identites dont le faux serveur accepte la connexion
 const refused = new Set<string>(); // serveur injoignable pour ces identites
 const immediateIdle = new Set<string>(); // identites dont idle() rend la main aussitot
+const flapping = new Set<string>(); // serveur qui coupe chaque connexion des l'IDLE
+const catchUps = new Map<string, number[]>(); // instants des appels a deltaFetch (rattrapage, exists)
 const attempts = new Map<string, number[]>(); // instants (horloge simulee) des ouvertures tentees
 const opened = new Map<string, FakeIdle[]>();
 let openDelayMs = 0;
 
 realtimeDeps.setTimeout = clock.setTimeout;
 realtimeDeps.clearTimeout = clock.clearTimeout;
+realtimeDeps.now = () => clock.now;
+// deltaFetch sur le client de commandes : compte les appels ; le vrai pour l'identite de (f), dont
+// la base rejette l'identifiant, pour verifier qu'aucune promesse rejetee ne reste non geree.
+realtimeDeps.deltaFetch = async (identityId: string, cmd: Map<string, ImapFlow>) => {
+	catchUps.set(identityId, [...(catchUps.get(identityId) ?? []), clock.now]);
+	if (identityId === "rt-f-pas-un-uuid") await deltaFetch(identityId, cmd);
+};
 realtimeDeps.openClient = async (identityId: string, map: Map<string, ImapFlow>) => {
 	// Comme initSmtpClient : le client de la table s'il est sain, sinon une nouvelle connexion.
 	const existing = map.get(identityId) as unknown as FakeIdle | undefined;
@@ -130,6 +149,7 @@ realtimeDeps.openClient = async (identityId: string, map: Map<string, ImapFlow>)
 	if (!known.has(identityId) || refused.has(identityId)) return undefined;
 	const client = new FakeIdle();
 	client.immediate = immediateIdle.has(identityId);
+	client.flap = flapping.has(identityId);
 	opened.set(identityId, [...(opened.get(identityId) ?? []), client]);
 	map.set(identityId, client as unknown as ImapFlow);
 	return client as unknown as ImapFlow;
@@ -138,6 +158,7 @@ realtimeDeps.openClient = async (identityId: string, map: Map<string, ImapFlow>)
 const idleMap = new Map<string, ImapFlow>();
 const cmdMap = new Map<string, ImapFlow>();
 const tries = (id: string) => attempts.get(id)?.length ?? 0;
+const fetches = (id: string) => catchUps.get(id)?.length ?? 0;
 const live = (id: string) => (opened.get(id) ?? []).filter((c) => c.usable && c.idling).length;
 const last = (id: string) => (opened.get(id) ?? []).at(-1);
 const start = (id: string) => startRealtimeForIdentity(id, idleMap, cmdMap);
@@ -263,13 +284,14 @@ async function main() {
 		assert(live(dead) === 1, "(b) le balayage relance un client mort apres le plafond");
 		assert(tries(healthy) === triesHealthy && live(healthy) === 1, "(b) le balayage ignore un client sain");
 		assert(tries(waiting) === triesWaiting, "(b) le balayage laisse faire une reconnexion deja programmee");
+		await clock.advance(2 * 60 * 1000); // la connexion reprise tient deux minutes
 		const t1 = clock.now;
 		last(dead)!.drop();
 		await settle();
 		await clock.advance(5000);
 		assert(
 			(attempts.get(dead) ?? []).at(-1) === t1 + 5000 && live(dead) === 1,
-			"(b) apres une reprise reussie, la reconnexion repart a 5 s",
+			"(b) apres une reprise qui a tenu, la reconnexion repart a 5 s",
 		);
 		await stopRealtimeForIdentity(healthy, idleMap, cmdMap);
 		const triesStopped = tries(healthy);
@@ -277,6 +299,31 @@ async function main() {
 		await settle(100);
 		assert(tries(healthy) === triesStopped, "(b) le balayage ne relance pas une identite arretee");
 	}
+
+	// (h) Rattrapage : l'IDLE ne voit pas ce qui est arrive pendant la coupure, deltaFetch le fait.
+	known.add("rt-h");
+	await start("rt-h");
+	await settle();
+	assert(fetches("rt-h") === 1, `(h) un rattrapage des que l'IDLE est etabli (${fetches("rt-h")})`);
+	await clock.advance(60 * 1000);
+	const tDrop = clock.now;
+	last("rt-h")!.drop();
+	await settle();
+	await clock.advance(5000);
+	assert(
+		live("rt-h") === 1 && fetches("rt-h") === 2 && catchUps.get("rt-h")!.at(-1) === tDrop + 5000,
+		`(h) un rattrapage apres la reconnexion (${fetches("rt-h")} appels)`,
+	);
+	await stopRealtimeForIdentity("rt-h", idleMap, cmdMap);
+
+	// (i) Serveur qui accepte la connexion puis coupe aussitot : pas de reconnexion toutes les 5 s.
+	known.add("rt-i");
+	flapping.add("rt-i");
+	await start("rt-i");
+	await settle();
+	await clock.advance(30 * 60 * 1000);
+	assert(tries("rt-i") <= 6, `(i) un serveur qui coupe aussitot ne fait pas reconnecter sans fin (${tries("rt-i")} ouvertures en 30 min)`);
+	await stopRealtimeForIdentity("rt-i", idleMap, cmdMap);
 
 	// (g) Arret du worker : la reconnexion programmee est annulee, plus aucun demarrage.
 	known.add("rt-g");

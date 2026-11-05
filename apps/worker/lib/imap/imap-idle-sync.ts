@@ -1,11 +1,15 @@
 import { db, identities, mailboxes, mailboxThreads, messages } from "@db";
 import { and, eq, isNotNull, sql } from "drizzle-orm";
-import { initSmtpClient } from "./imap-client";
+import { imapAuthSuspended, initSmtpClient, resetImapAuthFailures } from "./imap-client";
 import type { FlagsEvent, ImapFlow } from "imapflow";
 import { deltaFetch } from "../../lib/imap/imap-delta-fetch";
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BACKOFFS_MS = [5000, 10000, 20000, 40000, 80000];
+// ss2i (OI 10346) : duree au-dela de laquelle une connexion IDLE est jugee saine et remet le
+// compteur de reconnexion a zero quand elle tombe. Le remettre a zero des le verrou INBOX faisait
+// reconnecter toutes les 5 s, sans fin, sur un serveur qui accepte la connexion puis coupe.
+const HEALTHY_CONNECTION_MS = 60_000;
 
 const reconnectAttempts = new Map<string, number>();
 const reconnectTimers = new Map<string, unknown>();
@@ -15,14 +19,17 @@ const stoppedIdentities = new Set<string>();
 // en meme temps : sans ce garde, chacun ouvrait sa connexion et deux IDLE tournaient.
 const startingIdentities = new Set<string>();
 
-// ss2i (OI 10346) : ouverture du client IDLE et minuteries, seuls points que le test
-// apps/worker/test/imap-idle-lifecycle.ts remplace (faux ImapFlow, horloge simulee).
+// ss2i (OI 10346) : ouverture du client IDLE, minuteries, horloge et deltaFetch, seuls points que
+// les tests apps/worker/test/imap-idle-*.ts remplacent (faux ImapFlow, horloge simulee).
 // reconnect: false : c'est ce module qui reconnecte le client IDLE, pas safeReconnect.
 export const realtimeDeps = {
 	openClient: (identityId: string, idleImapInstances: Map<string, ImapFlow>) =>
 		initSmtpClient(identityId, idleImapInstances, { reconnect: false }),
 	setTimeout: (fn: () => void, ms: number): unknown => setTimeout(fn, ms),
 	clearTimeout: (timer: unknown) => clearTimeout(timer as NodeJS.Timeout),
+	now: () => Date.now(),
+	deltaFetch: (identityId: string, imapInstances: Map<string, ImapFlow>) =>
+		deltaFetch(identityId, imapInstances),
 };
 
 let realtimeShuttingDown = false;
@@ -234,7 +241,7 @@ function attachRealtimeEventHandlers(
 			return;
 		}
 
-		void deltaFetch(identityId, imapInstances).catch((err) => {
+		void realtimeDeps.deltaFetch(identityId, imapInstances).catch((err) => {
 			console.error(
 				`[realtime:${identityId}] delta fetch after EXISTS failed`,
 				err,
@@ -343,6 +350,15 @@ function scheduleReconnect(
 	}
 
 	if (reconnectTimers.has(identityId)) {
+		return;
+	}
+
+	// ss2i (OI 10346) : mot de passe refuse, ne pas retenter seul (bannissement Stalwart).
+	if (imapAuthSuspended(identityId)) {
+		console.error(
+			`[realtime:${identityId}] IMAP authentication refused; automatic reconnect suspended ` +
+			"until a successful connection or imap:start-idle",
+		);
 		return;
 	}
 
@@ -458,6 +474,7 @@ async function startRealtimeSyncForIdentity(
 	let lock: Awaited<
 		ReturnType<ImapFlow["getMailboxLock"]>
 	> | null = null;
+	let establishedAt: number | undefined;
 
 	try {
 		lock = await client.getMailboxLock("INBOX");
@@ -475,10 +492,16 @@ async function startRealtimeSyncForIdentity(
 			imapInstances,
 		);
 
-		/*
-		 * A connection which successfully entered realtime is healthy.
-		 */
-		reconnectAttempts.set(identityId, 0);
+		establishedAt = realtimeDeps.now();
+
+		// ss2i (OI 10346) : ImapFlow n'emet pas exists au SELECT ; ce qui est arrive pendant la
+		// coupure (ou pendant le redemarrage du worker) n'etait vu qu'au message suivant.
+		void realtimeDeps.deltaFetch(identityId, imapInstances).catch((err) => {
+			console.error(
+				`[realtime:${identityId}] catch-up delta fetch failed`,
+				err,
+			);
+		});
 
 		await idleForever(
 			identityId,
@@ -503,6 +526,16 @@ async function startRealtimeSyncForIdentity(
 
 		if (idleImapInstances.get(identityId) === client) {
 			idleImapInstances.delete(identityId);
+		}
+
+		/*
+		 * A connection which stayed up long enough was healthy.
+		 */
+		if (
+			establishedAt !== undefined &&
+			realtimeDeps.now() - establishedAt >= HEALTHY_CONNECTION_MS
+		) {
+			reconnectAttempts.set(identityId, 0);
 		}
 
 		client.removeAllListeners();
@@ -541,6 +574,7 @@ export async function startRealtimeForIdentity(
 	 * A reconnect does not alter stop/start state.
 	 */
 	if (!isReconnect) {
+		resetImapAuthFailures(identityId);
 		stoppedIdentities.delete(identityId);
 		reconnectAttempts.set(identityId, 0);
 		clearReconnectTimer(identityId);
@@ -669,9 +703,12 @@ export async function stopRealtimeForIdentity(
 	idleImapInstances.delete(identityId);
 	imapInstances.delete(identityId);
 
+	// ss2i (OI 10346) : sans ses ecouteurs (sinon safeReconnect rouvrirait), une RST du serveur
+	// pendant le LOGOUT leverait une erreur 'error' que personne n'ecoute.
 	if (idleClient) {
 		try {
 			idleClient.removeAllListeners();
+			idleClient.on("error", () => {});
 			await idleClient.logout();
 		} catch {
 			try {
@@ -683,6 +720,7 @@ export async function stopRealtimeForIdentity(
 	if (cmdClient && cmdClient !== idleClient) {
 		try {
 			cmdClient.removeAllListeners();
+			cmdClient.on("error", () => {});
 			await cmdClient.logout();
 		} catch {
 			try {
@@ -774,10 +812,12 @@ export const recoverOfflineRealtime = async (
 			continue;
 		}
 
-		// ss2i (OI 10346) : reconnexion deja programmee ou ouverture en cours, on la laisse faire.
+		// ss2i (OI 10346) : reconnexion deja programmee ou ouverture en cours, on la laisse faire ;
+		// mot de passe refuse, on ne retente pas (bannissement Stalwart).
 		if (
 			reconnectTimers.has(identity.id) ||
-			startingIdentities.has(identity.id)
+			startingIdentities.has(identity.id) ||
+			imapAuthSuspended(identity.id)
 		) {
 			continue;
 		}

@@ -3,16 +3,33 @@
 // qu'apres un redemarrage du serveur plus long que la premiere tentative de reconnexion, l'IDLE
 // repart seul (la seconde tentative aboutit), sur une seule connexion (safeReconnect n'en ouvre
 // pas une seconde en parallele), et que rien ne se reconnecte apres stopRealtimeForIdentity.
-// Dure environ 35 s. Base de test : voir mcp-test-env.ts :
+// Puis, avec des delais de reconnexion divises par 100 : un mot de passe refuse
+// (NO [AUTHENTICATIONFAILED]) ne fait pas retenter le LOGIN sans fin (Stalwart bannit l'IP source
+// apres 100 echecs par jour, toutes boites confondues) ; une connexion reussie de l'identite leve
+// la suspension, comme un imap:start-idle explicite ; une RST du serveur pendant le LOGOUT de
+// stopRealtimeForIdentity ne laisse pas d'erreur non geree.
+// Dure environ 45 s. Base de test : voir mcp-test-env.ts :
 //   MCP_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55460/kurrier_test \
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/imap-idle-reconnect.ts
 import { assert } from "./mcp-test-env";
 import { createUserFixture } from "./mcp-fixtures";
 import { createSecretAdmin, db, identities, smtpAccounts, smtpAccountSecrets } from "@db";
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull, ne } from "drizzle-orm";
 import net from "node:net";
 import type { ImapFlow } from "imapflow";
-import { startRealtimeForIdentity, stopRealtimeForIdentity } from "../lib/imap/imap-idle-sync";
+import {
+	realtimeDeps,
+	recoverOfflineRealtime,
+	startRealtimeForIdentity,
+	stopRealtimeForIdentity,
+} from "../lib/imap/imap-idle-sync";
+import { initSmtpClient } from "../lib/imap/imap-client";
+
+const uncaught: unknown[] = [];
+process.on("uncaughtException", (err) => {
+	console.error("UNCAUGHT", err);
+	uncaught.push(err);
+});
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -21,6 +38,9 @@ class FakeImapServer {
 	sockets = new Set<net.Socket>();
 	connections = 0;
 	idles = 0;
+	logins = 0;
+	refuseLogin = false; // mot de passe refuse
+	resetOnLogout = false; // RST au lieu de repondre au LOGOUT
 	private server?: net.Server;
 	constructor(readonly port: number) {}
 	get live() {
@@ -54,6 +74,10 @@ class FakeImapServer {
 					if (cmd === "CAPABILITY") {
 						send("* CAPABILITY IMAP4rev1 IDLE");
 						send(`${tag} OK CAPABILITY completed`);
+					} else if (cmd === "LOGIN") {
+						this.logins++;
+						if (this.refuseLogin) send(`${tag} NO [AUTHENTICATIONFAILED] Authentication failed.`);
+						else send(`${tag} OK LOGIN completed`);
 					} else if (cmd === "LIST") {
 						send('* LIST (\\HasNoChildren) "/" INBOX');
 						send(`${tag} OK LIST completed`);
@@ -67,6 +91,8 @@ class FakeImapServer {
 						this.idles++;
 						idleTag = tag;
 						send("+ idling");
+					} else if (cmd === "LOGOUT" && this.resetOnLogout) {
+						socket.resetAndDestroy();
 					} else if (cmd === "LOGOUT") {
 						send("* BYE logging out");
 						send(`${tag} OK LOGOUT completed`);
@@ -95,17 +121,17 @@ const waitFor = async (cond: () => boolean, ms: number) => {
 	return cond();
 };
 
-async function main() {
-	const port = await new Promise<number>((resolve) => {
+const freePort = () =>
+	new Promise<number>((resolve) => {
 		const probe = net.createServer().listen(0, "127.0.0.1", () => {
 			const p = (probe.address() as net.AddressInfo).port;
 			probe.close(() => resolve(p));
 		});
 	});
-	const imap = new FakeImapServer(port);
-	await imap.listen();
 
-	const f = await createUserFixture("rt-reel");
+// Identite dont le compte IMAP pointe sur le faux serveur local.
+const imapIdentity = async (tag: string, port: number) => {
+	const f = await createUserFixture(tag);
 	const secret = await createSecretAdmin({
 		ownerId: f.user.id,
 		workspaceId: f.workspace.id,
@@ -126,6 +152,20 @@ async function main() {
 		.insert(smtpAccountSecrets)
 		.values({ accountId: account.id, secretId: secret.id, workspaceId: f.workspace.id });
 	await db.update(identities).set({ smtpAccountId: account.id }).where(eq(identities.id, f.identity.id));
+	return f.identity.id;
+};
+
+async function main() {
+	const imap = new FakeImapServer(await freePort());
+	await imap.listen();
+	const f = { identity: { id: await imapIdentity("rt-reel", imap.port) } };
+
+	// Le rattrapage (deltaFetch sur le client de commandes) ouvrirait une seconde connexion : compte
+	// a part, pour que le serveur ne voie que le client IDLE.
+	let catchUps = 0;
+	realtimeDeps.deltaFetch = async () => {
+		catchUps++;
+	};
 
 	const idleMap = new Map<string, ImapFlow>();
 	const cmdMap = new Map<string, ImapFlow>();
@@ -145,11 +185,65 @@ async function main() {
 		`une seule connexion rouverte (${imap.connections - connectionsBefore} ouvertes, ${imap.live} vivantes)`,
 	);
 
+	assert(catchUps === 2, `rattrapage au demarrage puis apres la reprise (${catchUps})`);
+
 	await stopRealtimeForIdentity(f.identity.id, idleMap, cmdMap);
 	const afterStop = imap.connections;
 	await sleep(7000);
 	assert(imap.connections === afterStop && imap.live === 0, "plus de reconnexion apres stop");
 	await imap.stop();
+
+	// Mot de passe refuse. Les identites laissees par d'autres tests dans la base sont arretees pour
+	// que le balayage ne vise que celle-ci ; reconnexions programmees divisees par 100.
+	const authImap = new FakeImapServer(await freePort());
+	authImap.refuseLogin = true;
+	await authImap.listen();
+	const authId = await imapIdentity("rt-auth", authImap.port);
+	const others = await db
+		.select({ id: identities.id })
+		.from(identities)
+		.where(and(isNotNull(identities.smtpAccountId), ne(identities.id, authId)));
+	for (const row of others) await stopRealtimeForIdentity(row.id, new Map(), new Map());
+	realtimeDeps.setTimeout = (fn, ms) => setTimeout(fn, ms / 100);
+
+	await startRealtimeForIdentity(authId, idleMap, cmdMap);
+	await sleep(3000); // 5 + 10 + 20 + 40 + 80 s divises par 100
+	for (let i = 0; i < 3; i++) {
+		await recoverOfflineRealtime(idleMap, cmdMap); // trois balayages : 30 min en production
+		await sleep(300);
+	}
+	assert(authImap.logins <= 3, `mot de passe refuse : 3 LOGIN au plus, balayages compris (${authImap.logins})`);
+	assert(authImap.live === 0, `connexions refusees refermees (${authImap.live} encore ouvertes)`);
+
+	// Mot de passe corrige : le balayage ne retente pas seul ; une connexion reussie de l'identite
+	// (action de l'utilisateur sur le client de commandes) leve la suspension.
+	authImap.refuseLogin = false;
+	const loginsSuspended = authImap.logins;
+	await recoverOfflineRealtime(idleMap, cmdMap);
+	await sleep(300);
+	assert(authImap.logins === loginsSuspended, `suspendu : le balayage ne retente pas (${authImap.logins - loginsSuspended})`);
+	const cmd = await initSmtpClient(authId, cmdMap);
+	assert(cmd?.authenticated, "connexion de commandes reussie");
+	await recoverOfflineRealtime(idleMap, cmdMap);
+	assert(await waitFor(() => authImap.idles === 1, 3000), "apres une connexion reussie, le balayage relance l'IDLE");
+
+	// RST pendant le LOGOUT de stopRealtimeForIdentity (clients IDLE et de commandes).
+	authImap.resetOnLogout = true;
+	await stopRealtimeForIdentity(authId, idleMap, cmdMap);
+	await sleep(300);
+	assert(uncaught.length === 0, `RST pendant le LOGOUT : pas d'erreur non geree (${uncaught.length})`);
+	authImap.resetOnLogout = false;
+
+	// imap:start-idle explicite apres une suspension : l'identite repart.
+	authImap.refuseLogin = true;
+	await startRealtimeForIdentity(authId, idleMap, cmdMap);
+	await sleep(3000);
+	authImap.refuseLogin = false;
+	const idlesBefore = authImap.idles;
+	await startRealtimeForIdentity(authId, idleMap, cmdMap);
+	assert(await waitFor(() => authImap.idles === idlesBefore + 1, 3000), "un imap:start-idle explicite leve la suspension");
+	await stopRealtimeForIdentity(authId, idleMap, cmdMap);
+	await authImap.stop();
 }
 
 main()

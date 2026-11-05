@@ -212,6 +212,25 @@ Champs :
 - notes : une à trois lignes de contexte utile tirées du fil (qui, quoi, contact), sans rien ajouter, sinon vide.
 - sourceQuote : la phrase exacte du fil qui donne la date, recopiée telle quelle (200 caractères au plus).`;
 
+// Aucun evenement date trouve, ou un evenement de plus voulu : l'utilisateur dit ce qu'il veut
+// creer (« rappel pour relancer le client jeudi »), le LLM le met en forme a partir du fil
+// (Samuel, 05/11 : « il faut demander si on veut en creer un, et ce qu'on veut creer »).
+export const AGENDA_REQUEST_PROMPT = `Cette fois, l'utilisateur dit lui-même ce qu'il veut créer dans son agenda, dans « Demande de l'utilisateur » à la fin du message. Propose exactement ce qu'il demande (en général un seul événement), et rien d'autre du fil.
+
+Règles propres à cette demande (elles priment sur les règles ci-dessus) :
+- Une date relative de la demande (« demain », « jeudi », « dans une semaine », « lundi prochain ») se résout par rapport à la date du jour, pas à celle des messages.
+- Sans date dans la demande : le prochain jour ouvré (lundi à vendredi) après la date du jour.
+- Un rappel, une relance, un appel ou une tâche à faire sans heure donnée : à 09:00, fin à 09:15. Ailleurs, sans heure : journée entière.
+- title : ce qu'il faut faire et avec qui, tiré du fil (« Relancer Franck Martin : devis serveur »), 60 caractères au plus.
+- notes : une à trois lignes utiles tirées du fil pour faire l'action (objet, dernier échange, contact).
+- sourceQuote : vide.`;
+
+/** Message envoye au LLM : le fil, puis la demande de l'utilisateur s'il y en a une. */
+export function agendaUserContent(transcript: string, request?: string | null): string {
+	const r = request?.trim();
+	return r ? `${transcript}\n\n===== Demande de l'utilisateur =====\n${r.slice(0, 1000)}` : transcript;
+}
+
 export const AGENDA_SCHEMA = {
 	type: "object",
 	properties: {
@@ -295,14 +314,15 @@ export type AnthropicConfig = { apiKey: string; model?: string; fetchImpl?: type
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Evenements dates proposes pour le texte d'un fil (agendaTranscript). */
-export async function extractAgendaEvents(cfg: AnthropicConfig, transcript: string): Promise<AgendaEvent[]> {
+/** Evenements dates proposes pour le texte d'un fil (agendaTranscript), ou ce que demande l'utilisateur (request). */
+export async function extractAgendaEvents(cfg: AnthropicConfig, transcript: string, request?: string | null): Promise<AgendaEvent[]> {
 	const doFetch = cfg.fetchImpl ?? fetch;
+	const asked = !!request?.trim();
 	const payload = JSON.stringify({
 		model: cfg.model ?? AGENDA_MODEL,
 		max_tokens: 16000,
-		system: AGENDA_SYSTEM_PROMPT,
-		messages: [{ role: "user", content: transcript }],
+		system: asked ? `${AGENDA_SYSTEM_PROMPT}\n\n${AGENDA_REQUEST_PROMPT}` : AGENDA_SYSTEM_PROMPT,
+		messages: [{ role: "user", content: agendaUserContent(transcript, request) }],
 		output_config: { effort: "medium", format: { type: "json_schema", schema: AGENDA_SCHEMA } },
 	});
 	let res: Response | null = null;

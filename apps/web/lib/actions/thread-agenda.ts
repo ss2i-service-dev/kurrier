@@ -111,7 +111,12 @@ export async function agendaAvailable(identityPublicId: string): Promise<boolean
 }
 
 /** Propositions d'evenements pour le fil (rien n'est cree). */
-export async function analyzeThreadForAgenda(input: { threadId: string; identityPublicId: string }): Promise<AgendaAnalysis> {
+export async function analyzeThreadForAgenda(input: {
+	threadId: string;
+	identityPublicId: string;
+	/** Ce que l'utilisateur veut creer, quand le fil ne donne pas (ou pas seul) l'evenement. */
+	request?: string;
+}): Promise<AgendaAnalysis> {
 	try {
 		const { address } = await threadMailbox(input.identityPublicId, input.threadId);
 		const cfg = agendaConfig(address);
@@ -122,7 +127,8 @@ export async function analyzeThreadForAgenda(input: { threadId: string; identity
 			mailbox: address,
 			messages: rows.map((m) => ({ from: addressLabel(m.from), date: m.date, text: m.text, html: m.html })),
 		});
-		const events = await extractAgendaEvents({ apiKey: cfg.apiKey }, transcript);
+		const request = typeof input.request === "string" ? input.request.trim().slice(0, 1000) : "";
+		const events = await extractAgendaEvents({ apiKey: cfg.apiKey }, transcript, request);
 		return { ok: true, mailbox: address, events };
 	} catch (err) {
 		return failure("analyse", err);

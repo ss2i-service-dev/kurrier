@@ -9,6 +9,8 @@
 import assert from "node:assert/strict";
 import {
 	AGENDA_MODEL,
+	AGENDA_REQUEST_PROMPT,
+	agendaUserContent,
 	ALL_DAY_REMINDERS,
 	AgendaError,
 	type AgendaMessage,
@@ -305,6 +307,24 @@ async function main() {
 		assert.equal(urls.filter((u) => u.includes("login.microsoftonline.com")).length, 1);
 	});
 
+	await test("demande de l'utilisateur : ajoutee apres le fil, consignes propres dans le prompt systeme", async () => {
+		const bodies: any[] = [];
+		const fetchImpl = (async (_url: string, init: RequestInit) => {
+			bodies.push(JSON.parse(String(init.body)));
+			return json(200, { stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ events: [] }) }] });
+		}) as unknown as typeof fetch;
+		await extractAgendaEvents({ apiKey: "k", fetchImpl }, "le fil", "  rappel pour relancer le client jeudi  ");
+		await extractAgendaEvents({ apiKey: "k", fetchImpl }, "le fil", "   ");
+		await extractAgendaEvents({ apiKey: "k", fetchImpl }, "le fil");
+		assert.equal(bodies[0].messages[0].content, "le fil\n\n===== Demande de l'utilisateur =====\nrappel pour relancer le client jeudi");
+		assert.ok(bodies[0].system.includes(AGENDA_REQUEST_PROMPT));
+		for (const b of bodies.slice(1)) {
+			assert.equal(b.messages[0].content, "le fil");
+			assert.ok(!b.system.includes(AGENDA_REQUEST_PROMPT));
+		}
+		assert.equal(agendaUserContent("f", "x".repeat(2000)).length, "f\n\n===== Demande de l'utilisateur =====\n".length + 1000);
+	});
+
 	// --- Essai reel (cle locale seulement) ------------------------------------------------
 
 	const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
@@ -321,6 +341,23 @@ async function main() {
 			assert.equal(events[0].start, "2026-12-07");
 			assert.equal(events[0].end, "2026-12-11");
 			assert.match(events[0].title, /stagiaire/i);
+		});
+
+		await test("LLM reel : fil sans date + « rappel pour relancer le client jeudi prochain » donne un rappel le 12/11 a 9 h", async () => {
+			const transcript = agendaTranscript({
+				subject: "Devis renouvellement serveur",
+				mailbox: "samuel@ss2i-digital.fr",
+				messages: [{ from: "Franck Martin <f.martin@exemple.fr>", date: "2026-11-03T08:30:00Z", text: "Bonjour,\nMerci pour le devis, je le regarde avec la direction et je reviens vers vous.\nCordialement,\nFranck Martin" }],
+				now: new Date("2026-11-05T09:00:00Z"),
+			});
+			assert.deepEqual(await extractAgendaEvents({ apiKey }, transcript), []);
+			const events = await extractAgendaEvents({ apiKey }, transcript, "un rappel pour relancer le client jeudi prochain");
+			console.log("      ", JSON.stringify(events));
+			assert.equal(events.length, 1);
+			assert.equal(events[0].allDay, false);
+			assert.equal(events[0].start, "2026-11-12T09:00");
+			assert.match(events[0].title, /relanc/i);
+			assert.match(events[0].title, /Martin|devis/i);
 		});
 	}
 

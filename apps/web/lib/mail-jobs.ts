@@ -60,3 +60,20 @@ export const clearImapClients = async (identityId: string) => {
 		},
 	);
 };
+
+// ss2i (OI 10346) : relance la synchro temps reel d'une identite et leve sa suspension pour mot
+// de passe refuse (le worker reinitialise les echecs avant d'ouvrir). Appelee a l'enregistrement
+// d'un compte SMTP/IMAP, pour chaque identite qui l'utilise (smtp-account-idle.ts).
+export const restartImapIdle = async (identityId: string) => {
+	const { smtpQueue } = await getRedis();
+	await smtpQueue.add(
+		"imap:start-idle",
+		{ identityId },
+		{
+			removeOnComplete: true,
+			removeOnFail: false,
+			attempts: 3,
+			backoff: { type: "exponential", delay: 1500 },
+		},
+	);
+};

@@ -50,7 +50,8 @@ import {getWorkspaceRole, rlsClient} from "@/lib/actions/clients";
 import {assertIdentityAccess, assertSignedIn, assertWorkspace, isUuid} from "@/lib/authz";
 import {assertPublicUrl} from "@common/safe-http";
 import { v4 as uuidv4 } from "uuid";
-import { backfillMailboxes, clearImapClients } from "@/lib/mail-jobs";
+import { backfillMailboxes, clearImapClients, restartImapIdle } from "@/lib/mail-jobs";
+import { restartIdleForSmtpAccount } from "@/lib/smtp-account-idle";
 import { kvGet } from "@common";
 import { nanoid } from "nanoid";
 import { getRedis } from "@/lib/actions/get-redis";
@@ -163,6 +164,21 @@ export async function upsertSMTPAccount(
 					value: JSON.stringify(smtpConfig),
 				});
 			}
+
+			// ss2i (OI 10346) : mot de passe corrige -> les identites de ce compte repartent, la
+			// suspension IMAP pour identifiants refuses est levee sans attendre ses 6 h.
+			await restartIdleForSmtpAccount(String(parsed.accountId), {
+				identityIdsOf: async (accountId) =>
+					(
+						await rls((tx) =>
+							tx
+								.select({ id: identities.id })
+								.from(identities)
+								.where(eq(identities.smtpAccountId, accountId)),
+						)
+					).map((row) => row.id),
+				enqueueStartIdle: restartImapIdle,
+			});
 		} else {
 			const secretMeta = await createSecret(session, workspaceId, {
 				name: String(parsed.ulid),

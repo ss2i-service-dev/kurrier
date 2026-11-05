@@ -1,34 +1,38 @@
 import { ImapFlow } from "imapflow";
 import { initSmtpClient } from "./imap-client";
+import { resolveUids, type UidRow } from "./imap-resolve-uids";
 
 import { db, messages, mailboxThreads, mailboxes, threads } from "@db";
 import { and, eq, inArray, notExists, sql } from "drizzle-orm";
 
+// Permanent deletion, so the UID is verified by Message-ID before acting (see
+// imap-resolve-uids.ts): a stale UID would delete another message in the folder.
 async function deleteUids(
 	client: ImapFlow,
 	mailboxPath: string,
-	uids: number[],
+	rows: UidRow[],
 ) {
-	if (!uids.length) return;
+	if (!rows.length) return;
 	const lock = await client.getMailboxLock(mailboxPath);
 	try {
-		await client.messageDelete(uids, { uid: true });
+		const uids = [...(await resolveUids(client, rows)).keys()];
+		if (uids.length) await client.messageDelete(uids, { uid: true });
 	} finally {
 		lock.release();
 	}
 }
 
 function collectUidsByMailboxPath(
-	rows: Array<{ meta: unknown }>,
-): Map<string, number[]> {
-	const byPath = new Map<string, number[]>();
+	rows: Array<{ id: string; meta: unknown; messageId: string | null }>,
+): Map<string, UidRow[]> {
+	const byPath = new Map<string, UidRow[]>();
 	for (const r of rows) {
 		const imap = (r.meta as any)?.imap;
 		const path = imap?.mailboxPath as string | undefined;
 		const uid = Number(imap?.uid);
 		if (!path || !uid) continue;
 		if (!byPath.has(path)) byPath.set(path, []);
-		byPath.get(path)!.push(uid);
+		byPath.get(path)!.push({ id: r.id, uid, messageId: r.messageId });
 	}
 	return byPath;
 }
@@ -132,6 +136,7 @@ export async function deleteMail(
 			id: messages.id,
 			threadId: messages.threadId,
 			meta: messages.metaData,
+			messageId: messages.messageId,
 		})
 		.from(messages)
 		.where(
@@ -144,9 +149,9 @@ export async function deleteMail(
 	if (imapDelete && client) {
 		try {
 			const byPath = collectUidsByMailboxPath(msgRows);
-			for (const [path, uids] of byPath) {
-				if (!uids.length) continue;
-				await deleteUids(client, path, uids);
+			for (const [path, rows] of byPath) {
+				if (!rows.length) continue;
+				await deleteUids(client, path, rows);
 			}
 		} catch (err) {
 			console.error("[deleteMail] IMAP per-thread delete failed:", err);

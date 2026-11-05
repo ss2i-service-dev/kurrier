@@ -1,4 +1,7 @@
-import {db, addressBooks, contacts, mailboxes, workspaceMembers, workspaceIdentityMembers} from "@db";
+import {db, addressBooks, contacts, identities, mailboxes, workspaceMembers, workspaceIdentityMembers} from "@db";
+import { upsertContactsFromOutgoing } from "./outgoing-contacts";
+import { ingestRecipientStats } from "./recipient-stats";
+import { autoMailKind } from "@common";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {ParsedMail} from "mailparser";
 
@@ -13,8 +16,14 @@ function getFromAddress(parsed: ParsedMail) {
 
 async function getMailboxContext(mailboxId: string) {
     const [mb] = await db
-        .select({ workspaceId: mailboxes.workspaceId, identityId: mailboxes.identityId })
+        .select({
+            workspaceId: mailboxes.workspaceId,
+            identityId: mailboxes.identityId,
+            kind: mailboxes.kind,
+            identityValue: identities.value,
+        })
         .from(mailboxes)
+        .leftJoin(identities, eq(identities.id, mailboxes.identityId))
         .where(eq(mailboxes.id, mailboxId))
         .limit(1);
 
@@ -38,11 +47,47 @@ export async function upsertWorkspaceSharedContactFromMessage(opts: {
 }) {
     const { parsed, mailboxId, fallbackOwnerId } = opts;
 
-    const addr = getFromAddress(parsed);
-    if (!addr) return null;
-
     const mb = await getMailboxContext(mailboxId);
     if (!mb) return null;
+
+    // The address book only receives people we wrote to. A message in the Sent folder
+    // (including one written outside kurrier, from Gmail for example) adds its recipients
+    // to it; received mail no longer adds anyone.
+    if (mb.kind === "sent") {
+        // Automatic mail from kurrier (unsubscribe): neither address book nor suggestions.
+        if (autoMailKind(parsed.headers as Map<string, any>)) return null;
+        try {
+            await upsertContactsFromOutgoing({
+                ownerIds: [fallbackOwnerId],
+                workspaceId: mb.workspaceId,
+                ownAddresses: [String(mb.identityValue ?? "")].filter(Boolean),
+                recipients: [
+                    (parsed.to as any)?.text ?? null,
+                    (parsed.cc as any)?.text ?? null,
+                ],
+            });
+        } catch (err: any) {
+            console.error("[contacts] sent recipients failed:", err?.message ?? err);
+        }
+        // and feed the recipient suggestions (including sends made outside kurrier).
+        if (parsed.messageId) {
+            await ingestRecipientStats({
+                ownerIds: [fallbackOwnerId],
+                messageId: parsed.messageId,
+                sentAt: parsed.date ?? null,
+                ownAddresses: [String(mb.identityValue ?? "")].filter(Boolean),
+                recipients: [
+                    (parsed.to as any)?.text ?? null,
+                    (parsed.cc as any)?.text ?? null,
+                    (parsed.bcc as any)?.text ?? null,
+                ],
+            });
+        }
+        return null;
+    }
+
+    const addr = getFromAddress(parsed);
+    if (!addr) return null;
 
     if (!mb.identityId) return null;
 
@@ -104,24 +149,8 @@ export async function upsertWorkspaceSharedContactFromMessage(opts: {
                 )
                 .limit(1);
 
-            if (!existing) {
-                const { firstName, lastName } = splitName(displayName);
-                const [inserted] = await tx
-                    .insert(contacts)
-                    .values({
-                        ownerId,
-                        workspaceId: book.workspaceId,
-                        addressBookId: book.id,
-                        firstName,
-                        lastName,
-                        emails: [{ address: email }],
-                        profilePictureXs: null,
-                    } as any)
-                    .returning();
-
-                if (inserted?.id) results.push({ ownerId, contactId: inserted.id });
-                continue;
-            }
+            // An unknown sender no longer becomes a contact.
+            if (!existing) continue;
 
             const hasName = !!(existing.firstName || existing.lastName);
             if (!hasName && displayName) {

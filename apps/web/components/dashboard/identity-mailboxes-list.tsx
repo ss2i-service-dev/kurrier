@@ -32,6 +32,7 @@ import {
 import AddNewFolder from "@/components/mailbox/default/add-new-folder";
 import { Menu, Select } from "@mantine/core";
 import DeleteMailboxFolder from "@/components/mailbox/default/delete-folder";
+import { setIdentityCollapsed } from "@/lib/actions/collapsed-identities";
 import { IconMailFast } from "@tabler/icons-react";
 
 const ORDER: MailboxKind[] = [
@@ -186,6 +187,7 @@ export default function IdentityMailboxesList({
 												  scheduledDraftsPromise,
 												  snoozedThreadsPromise,
 												  workspacePublicId,
+												  initialCollapsed = [],
 												  onComplete,
 											  }: {
 	identityMailboxes: FetchIdentityMailboxListResult;
@@ -193,8 +195,24 @@ export default function IdentityMailboxesList({
 	scheduledDraftsPromise: Promise<DraftMessageEntity[]>;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
 	workspacePublicId: string | undefined;
+	// publicId of the collapsed identities (server-side per-user preference).
+	initialCollapsed?: string[];
 	onComplete?: () => void;
 }) {
+	// A collapsed mailbox shows only its name and the Inbox unread count.
+	const [collapsed, setCollapsed] = React.useState<Set<string>>(
+		() => new Set(initialCollapsed),
+	);
+	const toggleIdentity = React.useCallback((publicId: string) => {
+		setCollapsed((prev) => {
+			const next = new Set(prev);
+			const nowCollapsed = !next.has(publicId);
+			if (nowCollapsed) next.add(publicId);
+			else next.delete(publicId);
+			void setIdentityCollapsed(publicId, nowCollapsed);
+			return next;
+		});
+	}, []);
 	const pathname = usePathname();
 	const params = useParams() as {
 		identityPublicId?: string;
@@ -275,7 +293,8 @@ export default function IdentityMailboxesList({
 							<Icon className="h-4 w-4 shrink-0" />
 							<span className="truncate">
 								{m.kind === "custom" ? (m.name ?? "Mailbox") : TITLE[m.kind]}
-								{m.unread > 0 && <span> ({m.unread})</span>}
+								{/* No unread count on Archive, it adds nothing */}
+								{m.unread > 0 && m.kind !== "archive" && <span> ({m.unread})</span>}
 							</span>
 						</Link>
 
@@ -341,13 +360,33 @@ export default function IdentityMailboxesList({
 			{identityMailboxes.map(({ identity, mailboxes }) => {
 				const tree = buildTree(mailboxes as MailboxEntity[], unreadCounts);
 
+				const isCollapsed = collapsed.has(identity.publicId);
+				const inboxUnread = tree.find((m) => m.kind === "inbox")?.unread ?? 0;
+
 				return (
 					<div key={identity.id}>
 						<div className="px-1 mb-1 mt-2 text-xs font-semibold text-sidebar-foreground/60 flex items-center gap-1">
-							<span>{identity.value}</span>
-							<AddNewFolder mailboxes={mailboxes} identity={identity} />
+							<button
+								type="button"
+								onClick={() => toggleIdentity(identity.publicId)}
+								className="flex items-center gap-1 min-w-0 hover:text-sidebar-foreground"
+								aria-expanded={!isCollapsed}
+								title={isCollapsed ? "Expand mailbox" : "Collapse mailbox"}
+							>
+								{isCollapsed ? (
+									<ChevronRight className="h-3.5 w-3.5 shrink-0" />
+								) : (
+									<ChevronDown className="h-3.5 w-3.5 shrink-0" />
+								)}
+								<span className="truncate">{identity.value}</span>
+								{isCollapsed && inboxUnread > 0 && (
+									<span className="shrink-0">({inboxUnread})</span>
+								)}
+							</button>
+							{!isCollapsed && <AddNewFolder mailboxes={mailboxes} identity={identity} />}
 						</div>
 
+						{!isCollapsed && (<>
 						<div className="space-y-1">
 							{tree.map((m) => (
 								<Item
@@ -368,6 +407,8 @@ export default function IdentityMailboxesList({
 								currentSlug={currentSlug}
 							/>
 						</Suspense>
+
+						</>)}
 					</div>
 				);
 			})}

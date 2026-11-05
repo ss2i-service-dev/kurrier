@@ -11,7 +11,11 @@
 // passager au LOGIN ([CONTACTADMIN] de Stalwart qui redemarre, [LIMIT]) ne suspend pas
 // l'identite ; la suspension pour mot de passe refuse dure 6 h, apres quoi le balayage retente
 // un seul LOGIN ; une coupure pendant le LOGIN ne laisse pas d'erreur non geree ; deux ouvertures
-// simultanees du client d'une identite n'ouvrent qu'une connexion.
+// simultanees du client d'une identite n'ouvrent qu'une connexion. Puis (revue de 36a195bc a
+// 8c9a4bd3) : pendant la suspension, le client de commandes (jobs, rattrapage, safeReconnect) ne
+// tente pas non plus de LOGIN, sans reconnexion programmee ni erreur non geree ; a l'echeance de
+// 6 h il retente un seul LOGIN ; seul un imap:start-idle explicite leve la suspension, et il
+// reinitialise avant d'ouvrir.
 // Dure environ 55 s. Base de test : voir mcp-test-env.ts :
 //   MCP_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55460/kurrier_test \
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/imap-idle-reconnect.ts
@@ -227,17 +231,36 @@ async function main() {
 	assert(authImap.logins <= 3, `mot de passe refuse : 3 LOGIN au plus, balayages compris (${authImap.logins})`);
 	assert(authImap.live === 0, `connexions refusees refermees (${authImap.live} encore ouvertes)`);
 
-	// Mot de passe corrige : le balayage ne retente pas seul ; une connexion reussie de l'identite
-	// (action de l'utilisateur sur le client de commandes) leve la suspension.
+	// Suspendu, le client de commandes (jobs de la file, rattrapage, safeReconnect) ne tente pas de
+	// LOGIN non plus, avec ou sans reconnexion automatique : echec immediat, sans reconnexion
+	// programmee ni erreur non geree, sans compter un nouvel echec.
+	const loginsAtSuspension = authImap.logins;
+	const uncaughtSuspended = uncaught.length;
+	const refusedCmd = await initSmtpClient(authId, cmdMap);
+	const refusedCmdAuto = await initSmtpClient(authId, new Map(), { reconnect: true });
+	await sleep(300);
+	assert(
+		refusedCmd === undefined && refusedCmdAuto === undefined && authImap.logins === loginsAtSuspension && authImap.live === 0,
+		`suspendu : le client de commandes ne tente aucun LOGIN (${authImap.logins - loginsAtSuspension})`,
+	);
+	assert(uncaught.length === uncaughtSuspended, "suspendu : pas d'erreur non geree");
+
+	// Mot de passe corrige : ni le balayage ni le client de commandes ne retentent seuls ; seul un
+	// imap:start-idle explicite leve la suspension (reinitialisation avant l'ouverture).
 	authImap.refuseLogin = false;
 	const loginsSuspended = authImap.logins;
 	await recoverOfflineRealtime(idleMap, cmdMap);
+	const stillRefused = await initSmtpClient(authId, cmdMap);
 	await sleep(300);
-	assert(authImap.logins === loginsSuspended, `suspendu : le balayage ne retente pas (${authImap.logins - loginsSuspended})`);
+	assert(
+		authImap.logins === loginsSuspended && stillRefused === undefined,
+		`suspendu, mot de passe corrige : ni le balayage ni les commandes ne retentent (${authImap.logins - loginsSuspended})`,
+	);
+	await startRealtimeForIdentity(authId, idleMap, cmdMap);
+	assert(await waitFor(() => authImap.idles === 1, 3000), "un imap:start-idle explicite relance l'IDLE");
+	assert(!imapAuthSuspended(authId), "imap:start-idle a leve la suspension");
 	const cmd = await initSmtpClient(authId, cmdMap);
-	assert(cmd?.authenticated, "connexion de commandes reussie");
-	await recoverOfflineRealtime(idleMap, cmdMap);
-	assert(await waitFor(() => authImap.idles === 1, 3000), "apres une connexion reussie, le balayage relance l'IDLE");
+	assert(cmd?.authenticated, "client de commandes de nouveau disponible");
 
 	// RST pendant le LOGOUT de stopRealtimeForIdentity (clients IDLE et de commandes).
 	authImap.resetOnLogout = true;
@@ -306,8 +329,17 @@ async function main() {
 	assert(due === 1 && again === 0, `apres 6 h, le balayage retente un seul LOGIN puis suspend de nouveau (${due}, puis ${again})`);
 	const nextDue = await sweepLogins(12 * hour + 60_000);
 	assert(nextDue === 1, `6 h plus tard, un LOGIN de nouveau (${nextDue})`);
+	// A l'echeance, le client de commandes retente lui aussi un seul LOGIN avant de suspendre.
+	shiftMs = 18 * hour + 2 * 60_000;
+	const cmdBefore = authImap.logins;
+	await initSmtpClient(authId, new Map(), { reconnect: false });
+	await initSmtpClient(authId, new Map(), { reconnect: false });
+	assert(authImap.logins - cmdBefore === 1, `echeance : le client de commandes retente un seul LOGIN (${authImap.logins - cmdBefore})`);
 	shiftMs = 0;
 	if (imapClientDeps) imapClientDeps.now = () => Date.now();
+	// L'horloge revient au temps reel : l'echec simule serait « dans le futur », on repart de zero
+	// comme apres un imap:start-idle.
+	imapClient.resetImapAuthFailures(authId);
 
 	// Coupure pendant le LOGIN : ImapFlow emet 'error' avant que initSmtpClient ait pose ses
 	// ecouteurs (Connection not available), en plus du rejet de connect().

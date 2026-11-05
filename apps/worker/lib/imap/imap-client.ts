@@ -11,10 +11,11 @@ const BASE_DELAY = 5000;
 // consecutifs par identite, tous clients confondus. Stalwart bannit l'IP source apres 100 echecs
 // d'authentification par jour, toutes boites confondues : un mot de passe refuse, retente a chaque
 // balayage imap:realtime-recovery (144 fois par jour), aurait coupe l'IMAP de toutes les boites.
-// Au-dela de MAX_AUTH_FAILURES, imap-idle-sync.ts suspend ses reconnexions automatiques pendant
-// AUTH_SUSPENSION_MS depuis le dernier echec, ou jusqu'a une connexion reussie de l'identite ou un
-// imap:start-idle explicite ; a l'echeance, le balayage retente un LOGIN, soit au plus 3 + 4
-// echecs par jour et par identite. Une suspension sans fin coupait sans bruit la synchro d'une
+// Au-dela de MAX_AUTH_FAILURES, plus aucun client de l'identite (IDLE, commandes, rattrapage,
+// safeReconnect) ne tente de LOGIN pendant AUTH_SUSPENSION_MS depuis le dernier echec, sauf apres
+// un imap:start-idle explicite (changement de mot de passe) ; a l'echeance, la premiere
+// ouverture retente un LOGIN (en pratique le balayage), soit au plus 3 + 4 echecs par jour et
+// par identite. Une suspension sans fin coupait sans bruit la synchro d'une
 // boite que personne n'ouvre. Un autre echec (serveur injoignable, coupure, refus passager)
 // interrompt la serie.
 const MAX_AUTH_FAILURES = 3;
@@ -169,6 +170,21 @@ const openImapClient = async (
 	} catch (err) {
 		console.error(`[IMAP:${identityId}] Existing instance check failed`, err);
 		retry();
+		return;
+	}
+
+	// ss2i (OI 10346) : mot de passe refuse, aucun LOGIN de plus, quel que soit le client (IDLE,
+	// commandes, rattrapage, safeReconnect, jobs de la file) : le plafond ne valait que pour
+	// l'IDLE et les autres clients refaisaient ~30 echecs par jour et par identite (Stalwart
+	// bannit l'IP source a 100). Echec immediat, sans compter un nouvel echec ni programmer de
+	// reconnexion ; les appelants traitent l'absence de client comme une connexion qui a echoue.
+	// La suspension prend fin a l'echeance de 6 h ou par imap:start-idle (reinitialisation
+	// avant l'ouverture, startRealtimeForIdentity).
+	if (imapAuthSuspended(identityId)) {
+		console.warn(
+			`[IMAP:${identityId}] LOGIN skipped: authentication refused, suspended until the ` +
+			"6 h deadline or imap:start-idle",
+		);
 		return;
 	}
 

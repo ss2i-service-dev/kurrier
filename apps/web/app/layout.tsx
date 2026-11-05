@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
-import { JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import { Inter, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import { interfaceMode } from "@/lib/actions/interface-pref";
+import { KUiProvider } from "@/components/k/ui-context";
+import "dayjs/locale/fr";
 import "./globals.css";
 import { ConfigProvider } from "@/components/providers/config-provider";
 import { AppearanceProvider } from "@/components/providers/appearance-provider";
@@ -23,10 +26,18 @@ import {
 } from "@mantine/core";
 import { createMantineTheme } from "@/lib/mantine-theme";
 import { ModalsProvider } from "@mantine/modals";
+import Script from "next/script";
 
 const jakartaSans = Plus_Jakarta_Sans({
 	variable: "--font-sans",
 	subsets: ["latin"],
+});
+// Font of the modern interface (per-user option).
+const inter = Inter({
+	variable: "--font-sans",
+	subsets: ["latin"],
+	// no preload: the font is only used by the modern interface (the classic one keeps Plus Jakarta Sans)
+	preload: false,
 });
 const jetbrains = JetBrains_Mono({
 	variable: "--font-mono",
@@ -58,15 +69,19 @@ export default async function RootLayout({
 		mode === "dark" ? true : mode === "light" ? false : resolved === "dark";
 
 	const publicConfig = getPublicEnv();
+	// Interface chosen by the user (classic by default).
+	const modern = (await interfaceMode()) === "modern";
 	const { theme: mantineTheme, colorScheme } = createMantineTheme({
 		theme,
 		mode,
+		modern: modern,
 	});
 
 	return (
 		<html
 			lang="en"
 			data-theme={theme}
+			data-ui={modern ? "k" : undefined}
 			className={`${initialDark ? "dark" : ""}`}
 			{...mantineHtmlProps}
 		>
@@ -77,7 +92,7 @@ export default async function RootLayout({
 				/>
 			</head>
 			<body
-				className={`${jakartaSans.variable} ${jetbrains.variable} font-sans bg-background text-foreground antialiased`}
+				className={`${modern ? inter.variable : jakartaSans.variable} ${jetbrains.variable} font-sans bg-background text-foreground antialiased`}
 			>
 				<AppearanceProvider initialTheme={theme} initialMode={mode}>
 					<ConfigProvider value={publicConfig}>
@@ -85,10 +100,13 @@ export default async function RootLayout({
 							theme={mantineTheme}
 							defaultColorScheme={colorScheme}
 						>
-							<ModalsProvider>{children}</ModalsProvider>
+							<KUiProvider modern={modern}>
+								<ModalsProvider>{children}</ModalsProvider>
+							</KUiProvider>
 						</MantineProvider>
 					</ConfigProvider>
 				</AppearanceProvider>
+				<Script src="/keyboard-shortcuts.js" strategy="afterInteractive" />
 			</body>
 		</html>
 	);

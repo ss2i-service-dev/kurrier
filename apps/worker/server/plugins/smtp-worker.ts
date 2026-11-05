@@ -248,8 +248,10 @@ export default defineNitroPlugin(async (nitroApp) => {
 			const logoutAll = async (label: string, map: Map<string, ImapFlow>) => {
 				for (const [identityId, client] of map) {
 					try {
-						// Sans ses ecouteurs, le close du logout ne relance pas safeReconnect.
+						// Sans ses ecouteurs, le close du logout ne relance pas safeReconnect ; une RST
+						// pendant le LOGOUT ne doit pas lever une erreur 'error' que personne n'ecoute.
 						client.removeAllListeners();
+						client.on("error", () => {});
 						await client.logout();
 						console.info(
 							`[${label}] Logged out from IMAP server for identityId: ${identityId}`,

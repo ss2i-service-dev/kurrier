@@ -7,6 +7,23 @@ const reconnectTimers = new Map<string, NodeJS.Timeout>();
 const MAX_RETRIES = 5;
 const BASE_DELAY = 5000;
 
+// ss2i (OI 10346, d'apres canAttemptImapConnection de 9b34ee91 amont) : echecs d'authentification
+// consecutifs par identite, tous clients confondus. Stalwart bannit l'IP source apres 100 echecs
+// d'authentification par jour, toutes boites confondues : un mot de passe refuse, retente a chaque
+// balayage imap:realtime-recovery (144 fois par jour), aurait coupe l'IMAP de toutes les boites.
+// Au-dela de MAX_AUTH_FAILURES, imap-idle-sync.ts suspend ses reconnexions automatiques jusqu'a une
+// connexion reussie de l'identite ou un imap:start-idle explicite. Un autre echec (serveur
+// injoignable, coupure) interrompt la serie.
+const MAX_AUTH_FAILURES = 3;
+const authFailures = new Map<string, number>();
+
+export const imapAuthSuspended = (identityId: string) =>
+	(authFailures.get(identityId) ?? 0) >= MAX_AUTH_FAILURES;
+
+export const resetImapAuthFailures = (identityId: string) => {
+	authFailures.delete(identityId);
+};
+
 function safeReconnect(
 	identityId: string,
 	imapInstances: Map<string, ImapFlow>,
@@ -121,8 +138,19 @@ export const initSmtpClient = async (
 		try {
 			await client.connect();
 			retryCounts.set(identityId, 0);
+			authFailures.delete(identityId);
 		} catch (err) {
 			console.error(`[IMAP:${identityId}] connect() failed:`, err);
+			if ((err as { authenticationFailed?: boolean } | null)?.authenticationFailed) {
+				authFailures.set(identityId, (authFailures.get(identityId) ?? 0) + 1);
+			} else {
+				authFailures.delete(identityId);
+			}
+			// ss2i (OI 10346) : apres un LOGIN refuse, ImapFlow garde la connexion ouverte jusqu'au
+			// socketTimeout (5 min), puis emet une erreur que plus personne n'ecoute.
+			try {
+				client.close();
+			} catch {}
 			retry();
 			return;
 		}

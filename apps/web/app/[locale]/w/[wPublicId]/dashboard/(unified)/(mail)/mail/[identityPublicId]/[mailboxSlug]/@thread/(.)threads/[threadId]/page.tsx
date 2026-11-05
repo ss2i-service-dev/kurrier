@@ -1,11 +1,15 @@
+import { isModernUi } from "@/lib/actions/interface-pref";
+import KThreadPage from "@/components/k/thread-page";
+import { fetchThreadMailbox } from "@/lib/thread-mailbox";
 import React, {Suspense} from "react";
-import {fetchMailbox, fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
+import {fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
 import ThreadItem from "@/components/mailbox/default/thread-item";
 import { Divider } from "@mantine/core";
 import {MessageEntity} from "@db";
+import { threadOrder } from "@/lib/actions/thread-order";
 import Loading from "@/app/loading";
 
-async function Page({
+async function ClassicPage({
 	params,
 }: {
 	params: Promise<{
@@ -15,12 +19,12 @@ async function Page({
 	}>;
 }) {
 	const { threadId, identityPublicId, mailboxSlug } = await params;
-	const { activeMailbox, mailboxSync } = await fetchMailbox(
+	const activeThread = await fetchWebMailThreadDetail(threadId);
+	const { activeMailbox, mailboxSync } = await fetchThreadMailbox(
 		identityPublicId,
 		mailboxSlug,
+		activeThread?.messages ?? [],
 	);
-
-	const activeThread = await fetchWebMailThreadDetail(threadId);
 
     const { byMessageId } = await fetchThreadMailSubscriptions({
         ownerId: activeMailbox.ownerId,
@@ -28,19 +32,29 @@ async function Page({
             activeThread?.messages.map((m: MessageEntity) => ({
                 id: m.id,
                 headersJson: m.headersJson,
+                from: m.from,
             })) ?? [],
     });
 
+	// Thread order chosen by the user (thread-order.ts). Messages arrive from
+	// oldest to newest; threadIndex keeps the chronological index (Reply goes
+	// under the newest), the subject goes above the first message shown.
+	const chronological = activeThread?.messages ?? [];
+	const newestFirst = (await threadOrder()) === "newest_first";
+	const shown = newestFirst ? [...chronological].reverse() : chronological;
+
 	return (
 		<>
-			{activeThread?.messages.map((message, threadIndex) => {
+			{shown.map((message, position) => {
+				const threadIndex = newestFirst ? shown.length - 1 - position : position;
 				return (
 					<Suspense fallback={<Loading />}>
 						<div key={message.id}>
 							<ThreadItem
 								message={message}
 								threadIndex={threadIndex}
-								numberOfMessages={activeThread.messages.length}
+								numberOfMessages={shown.length}
+							showSubject={position === 0}
 								threadId={threadId}
 								activeMailboxId={activeMailbox.id}
 								markSmtp={!!mailboxSync}
@@ -54,6 +68,11 @@ async function Page({
 			})}
 		</>
 	);
+}
+
+// Modern interface (per-user option): reading pane in components/k.
+async function Page(props: { params: Promise<{ identityPublicId: string; mailboxSlug: string; threadId: string }> }) {
+	return (await isModernUi()) ? <KThreadPage {...props} /> : <ClassicPage {...props} />;
 }
 
 export default Page;

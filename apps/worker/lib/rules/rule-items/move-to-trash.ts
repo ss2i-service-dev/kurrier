@@ -5,6 +5,8 @@ export const moveToTrash = async (
     mailboxId: string,
     moveImap: boolean,
     messageId?: string,
+    // true = only `messageId` goes (sender blocking), not the whole thread.
+    messageGrain = false,
 ) => {
     const ids = [threadId]
 
@@ -16,7 +18,10 @@ export const moveToTrash = async (
         ids.map((threadId) =>
             smtpQueue.add(
                 "mail:move",
-                { threadId, mailboxId, op: "trash", messageId, moveImap },
+                {
+                    threadId, mailboxId, op: "trash", messageId, moveImap,
+                    ...(messageGrain && messageId ? { messageIds: [messageId] } : {}),
+                },
                 {
                     attempts: 3,
                     backoff: { type: "exponential", delay: 1500 },

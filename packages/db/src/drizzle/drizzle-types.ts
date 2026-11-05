@@ -18,7 +18,7 @@ import {
     calendarEventAttendees,
     driveVolumes,
     driveEntries,
-    draftMessages, mailSubscriptions, users, workspaces,
+    draftMessages, mailSubscriptions, blockedSenders, users, workspaces,
 } from "./schema";
 import { z } from "zod";
 import {
@@ -115,6 +115,7 @@ export type DraftMessageEntity = typeof draftMessages.$inferSelect;
 export const DraftMessageInsertSchema = createInsertSchema(draftMessages);
 
 export type MailSubscriptionEntity = typeof mailSubscriptions.$inferSelect;
+export type BlockedSenderEntity = typeof blockedSenders.$inferSelect;
 export type UserEntity = typeof users.$inferSelect;
 export const WorkspaceRolesList = ["owner", "admin", "member"] as const;
 export type WorkspaceRolesListType = z.infer<typeof WorkspaceRolesList>;

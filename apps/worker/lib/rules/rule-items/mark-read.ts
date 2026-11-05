@@ -6,10 +6,22 @@ export const markAsRead = async (
         threadId: string,
         mailboxId: string,
         markSmtp: boolean,
+        // If provided, only these messages are marked read (mixed thread): neither the thread
+        // counter nor the IMAP flags of the whole thread are touched; the move that follows
+        // recomputes the counters of the folders concerned.
+        onlyMessageIds?: string[],
     ) => {
         const ids = [threadId];
 
         if (!ids.length || !mailboxId) return;
+
+        if (onlyMessageIds?.length) {
+            await db
+                .update(messages)
+                .set({ seen: true, updatedAt: new Date() })
+                .where(and(inArray(messages.id, onlyMessageIds), eq(messages.mailboxId, mailboxId)));
+            return;
+        }
 
         const now = new Date();
         await db

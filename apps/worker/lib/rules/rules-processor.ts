@@ -1,9 +1,10 @@
-import { db, identities, mailboxes, messages, mailRules, mailRuleActions, threads, mailboxThreadLabels } from "@db";
+import { db, identities, labels, mailboxes, messages, mailRules, mailRuleActions, threads, mailboxThreadLabels } from "@db";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { MailRuleMatchV1, mailRulesFieldsList, mailRulesOpsList } from "@schema";
 import { markAsRead } from "./rule-items/mark-read";
 import { toggleStar } from "./rule-items/mark-flag";
 import { moveToTrash } from "./rule-items/move-to-trash";
+import { trashIfBlocked } from "./blocked-senders";
 
 type AddressValue = { address?: string | null; name?: string | null };
 type AddressObjectLike =
@@ -214,10 +215,28 @@ export const processRules = async ({ messageId }: { messageId: string }) => {
     const [identity] = await db.select().from(identities).where(eq(identities.id, mailbox.identityId));
     if (!identity) return;
 
+    // Sender blocked by the user -> trash, before any rule.
+    if (
+        await trashIfBlocked({
+            message: message as any,
+            mailbox: mailbox as any,
+            threadId: thread.id,
+            moveImap: !!identity.smtpAccountId,
+        })
+    ) return;
+
+    // Access control: only the identity's rules within its own workspace (a rule created from
+    // another workspace on this identity is ignored).
     const rules = await db
         .select()
         .from(mailRules)
-        .where(and(eq(mailRules.identityId, identity.id), eq(mailRules.enabled, true)))
+        .where(
+            and(
+                eq(mailRules.identityId, identity.id),
+                eq(mailRules.workspaceId, identity.workspaceId),
+                eq(mailRules.enabled, true),
+            ),
+        )
         .orderBy(asc(mailRules.priority));
 
     if (!rules.length) return;
@@ -264,6 +283,13 @@ export const processRules = async ({ messageId }: { messageId: string }) => {
                 case "add_label": {
                     const labelId = (act.params as any)?.labelId as string | undefined;
                     if (!labelId) break;
+                    // Access control: only labels of the identity's workspace.
+                    const [label] = await db
+                        .select({ id: labels.id })
+                        .from(labels)
+                        .where(and(eq(labels.id, labelId), eq(labels.workspaceId, identity.workspaceId)))
+                        .limit(1);
+                    if (!label) break;
                     await db.insert(mailboxThreadLabels).values({
                         threadId: thread.id,
                         mailboxId: mailbox.id,

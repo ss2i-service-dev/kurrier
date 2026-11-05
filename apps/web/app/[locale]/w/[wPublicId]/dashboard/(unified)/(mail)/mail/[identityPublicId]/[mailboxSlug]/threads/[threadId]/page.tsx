@@ -1,10 +1,14 @@
+import { isModernUi } from "@/lib/actions/interface-pref";
+import MailboxPage from "../../page";
+import { fetchThreadMailbox } from "@/lib/thread-mailbox";
 import React from "react";
-import {fetchMailbox, fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
+import {fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
 import ThreadItem from "@/components/mailbox/default/thread-item";
 import { Divider } from "@mantine/core";
 import {MessageEntity} from "@db";
+import { threadOrder } from "@/lib/actions/thread-order";
 
-async function Page({
+async function ClassicPage({
 	params,
 }: {
 	params: Promise<{
@@ -14,11 +18,12 @@ async function Page({
 	}>;
 }) {
 	const { threadId, identityPublicId, mailboxSlug } = await params;
-	const { activeMailbox, mailboxSync } = await fetchMailbox(
+	const activeThread = await fetchWebMailThreadDetail(threadId);
+	const { activeMailbox, mailboxSync } = await fetchThreadMailbox(
 		identityPublicId,
 		mailboxSlug,
+		activeThread?.messages ?? [],
 	);
-	const activeThread = await fetchWebMailThreadDetail(threadId);
 
     const { byMessageId } = await fetchThreadMailSubscriptions({
         ownerId: activeMailbox.ownerId,
@@ -26,18 +31,28 @@ async function Page({
             activeThread?.messages.map((m: MessageEntity) => ({
                 id: m.id,
                 headersJson: m.headersJson,
+                from: m.from,
             })) ?? [],
     });
 
+	// Thread order chosen by the user (thread-order.ts). Messages arrive from
+	// oldest to newest; threadIndex keeps the chronological index (Reply goes
+	// under the newest), the subject goes above the first message shown.
+	const chronological = activeThread?.messages ?? [];
+	const newestFirst = (await threadOrder()) === "newest_first";
+	const shown = newestFirst ? [...chronological].reverse() : chronological;
+
 	return (
 		<>
-			{activeThread?.messages.map((message, threadIndex) => {
+			{shown.map((message, position) => {
+				const threadIndex = newestFirst ? shown.length - 1 - position : position;
 				return (
 					<div key={message.id}>
 						<ThreadItem
 							message={message}
 							threadIndex={threadIndex}
-							numberOfMessages={activeThread.messages.length}
+							numberOfMessages={shown.length}
+							showSubject={position === 0}
 							threadId={threadId}
 							activeMailboxId={activeMailbox.id}
 							markSmtp={!!mailboxSync}
@@ -50,6 +65,14 @@ async function Page({
 			})}
 		</>
 	);
+}
+
+// Modern interface: on a direct load of a thread URL, the list column keeps the
+// folder list; the thread is rendered in @thread
+// (@thread/threads/[threadId]/page.tsx), as in soft navigation.
+async function Page(props: { params: Promise<{ identityPublicId: string; mailboxSlug: string; threadId: string }> } & { searchParams: Promise<{ page?: string }> }) {
+	if (await isModernUi()) return <MailboxPage {...(props as any)} />;
+	return <ClassicPage {...props} />;
 }
 
 export default Page;

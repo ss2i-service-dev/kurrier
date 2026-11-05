@@ -7,8 +7,12 @@
 // (NO [AUTHENTICATIONFAILED]) ne fait pas retenter le LOGIN sans fin (Stalwart bannit l'IP source
 // apres 100 echecs par jour, toutes boites confondues) ; une connexion reussie de l'identite leve
 // la suspension, comme un imap:start-idle explicite ; une RST du serveur pendant le LOGOUT de
-// stopRealtimeForIdentity ne laisse pas d'erreur non geree.
-// Dure environ 45 s. Base de test : voir mcp-test-env.ts :
+// stopRealtimeForIdentity ne laisse pas d'erreur non geree. Enfin (revue du lot) : un refus
+// passager au LOGIN ([CONTACTADMIN] de Stalwart qui redemarre, [LIMIT]) ne suspend pas
+// l'identite ; la suspension pour mot de passe refuse dure 6 h, apres quoi le balayage retente
+// un seul LOGIN ; une coupure pendant le LOGIN ne laisse pas d'erreur non geree ; deux ouvertures
+// simultanees du client d'une identite n'ouvrent qu'une connexion.
+// Dure environ 55 s. Base de test : voir mcp-test-env.ts :
 //   MCP_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55460/kurrier_test \
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/imap-idle-reconnect.ts
 import { assert } from "./mcp-test-env";
@@ -23,7 +27,12 @@ import {
 	startRealtimeForIdentity,
 	stopRealtimeForIdentity,
 } from "../lib/imap/imap-idle-sync";
-import { initSmtpClient } from "../lib/imap/imap-client";
+import * as imapClient from "../lib/imap/imap-client";
+
+const { imapAuthSuspended, initSmtpClient } = imapClient;
+// Horloge des echecs d'authentification (absente avant la revue du lot : lue sans l'importer
+// nommement pour que le test reste executable).
+const imapClientDeps = (imapClient as any).imapClientDeps as { now: () => number } | undefined;
 
 const uncaught: unknown[] = [];
 process.on("uncaughtException", (err) => {
@@ -40,6 +49,8 @@ class FakeImapServer {
 	idles = 0;
 	logins = 0;
 	refuseLogin = false; // mot de passe refuse
+	loginReply = "NO [AUTHENTICATIONFAILED] Authentication failed."; // reponse au LOGIN refuse
+	dropOnLogin = false; // coupure pendant le LOGIN
 	resetOnLogout = false; // RST au lieu de repondre au LOGOUT
 	private server?: net.Server;
 	constructor(readonly port: number) {}
@@ -76,7 +87,8 @@ class FakeImapServer {
 						send(`${tag} OK CAPABILITY completed`);
 					} else if (cmd === "LOGIN") {
 						this.logins++;
-						if (this.refuseLogin) send(`${tag} NO [AUTHENTICATIONFAILED] Authentication failed.`);
+						if (this.dropOnLogin) socket.destroy();
+						else if (this.refuseLogin) send(`${tag} ${this.loginReply}`);
 						else send(`${tag} OK LOGIN completed`);
 					} else if (cmd === "LIST") {
 						send('* LIST (\\HasNoChildren) "/" INBOX');
@@ -243,6 +255,90 @@ async function main() {
 	await startRealtimeForIdentity(authId, idleMap, cmdMap);
 	assert(await waitFor(() => authImap.idles === idlesBefore + 1, 3000), "un imap:start-idle explicite leve la suspension");
 	await stopRealtimeForIdentity(authId, idleMap, cmdMap);
+
+	// Refus passager au LOGIN : ImapFlow pose authenticationFailed sur tout NO ou BAD du LOGIN.
+	// Stalwart repond [CONTACTADMIN] tant que son stockage ne repond pas (redemarrage), [LIMIT]
+	// au-dela des connexions simultanees du compte : ni l'un ni l'autre ne suspend l'identite.
+	authImap.refuseLogin = true;
+	authImap.loginReply = "NO [CONTACTADMIN] Database failure.";
+	let loginsBefore = authImap.logins;
+	await startRealtimeForIdentity(authId, idleMap, cmdMap);
+	await sleep(3000);
+	assert(
+		authImap.logins - loginsBefore === 6 && !imapAuthSuspended(authId),
+		`refus passager ([CONTACTADMIN]) : reconnexions jusqu'au plafond, sans suspension (${authImap.logins - loginsBefore} LOGIN)`,
+	);
+	authImap.loginReply = "NO [LIMIT] Too many connections";
+	loginsBefore = authImap.logins;
+	for (let i = 0; i < 2; i++) {
+		await recoverOfflineRealtime(idleMap, cmdMap);
+		await sleep(300);
+	}
+	assert(authImap.logins - loginsBefore === 2, `refus passager ([LIMIT]) : chaque balayage retente (${authImap.logins - loginsBefore})`);
+	authImap.refuseLogin = false;
+	const idlesTransient = authImap.idles;
+	await recoverOfflineRealtime(idleMap, cmdMap);
+	assert(await waitFor(() => authImap.idles === idlesTransient + 1, 3000), "refus passager leve : le balayage relance l'IDLE");
+	await stopRealtimeForIdentity(authId, idleMap, cmdMap);
+
+	// Mot de passe refuse : suspension de 6 h (horloge des echecs avancee), puis un seul LOGIN par
+	// balayage echu, soit au plus 3 + 4 echecs par jour et par identite.
+	authImap.refuseLogin = true;
+	authImap.loginReply = "NO [AUTHENTICATIONFAILED] Authentication failed.";
+	let shiftMs = 0;
+	if (imapClientDeps) imapClientDeps.now = () => Date.now() + shiftMs;
+	loginsBefore = authImap.logins;
+	await startRealtimeForIdentity(authId, idleMap, cmdMap);
+	await sleep(3000);
+	assert(authImap.logins - loginsBefore === 3 && imapAuthSuspended(authId), `mot de passe refuse : suspendu apres 3 LOGIN (${authImap.logins - loginsBefore})`);
+	const sweepLogins = async (shift: number) => {
+		shiftMs = shift;
+		const before = authImap.logins;
+		await recoverOfflineRealtime(idleMap, cmdMap);
+		await sleep(300);
+		return authImap.logins - before;
+	};
+	const hour = 60 * 60 * 1000;
+	const early = await sweepLogins(6 * hour - 60_000);
+	assert(early === 0, `suspendu : pas de LOGIN avant 6 h (${early})`);
+	const due = await sweepLogins(6 * hour);
+	const again = await sweepLogins(6 * hour + 10 * 60_000);
+	assert(due === 1 && again === 0, `apres 6 h, le balayage retente un seul LOGIN puis suspend de nouveau (${due}, puis ${again})`);
+	const nextDue = await sweepLogins(12 * hour + 60_000);
+	assert(nextDue === 1, `6 h plus tard, un LOGIN de nouveau (${nextDue})`);
+	shiftMs = 0;
+	if (imapClientDeps) imapClientDeps.now = () => Date.now();
+
+	// Coupure pendant le LOGIN : ImapFlow emet 'error' avant que initSmtpClient ait pose ses
+	// ecouteurs (Connection not available), en plus du rejet de connect().
+	authImap.refuseLogin = false;
+	authImap.dropOnLogin = true;
+	const uncaughtBefore = uncaught.length;
+	const dropped = await initSmtpClient(authId, new Map(), { reconnect: false });
+	await sleep(300);
+	assert(
+		dropped === undefined && uncaught.length === uncaughtBefore,
+		`coupure pendant le LOGIN : pas d'erreur non geree (${uncaught.length - uncaughtBefore})`,
+	);
+	authImap.dropOnLogin = false;
+
+	// Deux ouvertures simultanees du client de commandes (rattrapage de l'IDLE et job de la file) :
+	// une seule connexion, le meme client pour les deux.
+	const sharedMap = new Map<string, ImapFlow>();
+	const connectionsBeforeShared = authImap.connections;
+	const [first, second] = await Promise.all([
+		initSmtpClient(authId, sharedMap, { reconnect: false }),
+		initSmtpClient(authId, sharedMap, { reconnect: false }),
+	]);
+	assert(
+		first?.authenticated && first === second && authImap.connections - connectionsBeforeShared === 1,
+		`ouvertures simultanees : une seule connexion (${authImap.connections - connectionsBeforeShared})`,
+	);
+	for (const c of new Set([first, second])) {
+		c?.removeAllListeners();
+		c?.on("error", () => {});
+		await c?.logout().catch(() => {});
+	}
 	await authImap.stop();
 }
 

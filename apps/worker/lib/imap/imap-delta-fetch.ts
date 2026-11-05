@@ -49,6 +49,8 @@ export const deltaFetch = async (
 	const isAllMail = (r: (typeof mailboxRows)[number]) =>
 		String((r.metaData as any)?.imap?.specialUse ?? "").toLowerCase() === "\\all";
 	mailboxRows.sort((a, b) => Number(isAllMail(a)) - Number(isAllMail(b)));
+	// ss2i : dossiers des Envoyes (voir isSentCopy plus bas).
+	const sentIds = new Set(mailboxRows.filter((r) => r.kind === "sent").map((r) => r.id));
 
 	for (const row of mailboxRows) {
 		// only when fully idle
@@ -138,7 +140,25 @@ export const deltaFetch = async (
 						),
 					);
 
-				if (existing) {
+				// ss2i : un message envoye qui revient aussi dans un autre dossier (ma propre adresse,
+				// ou une liste qui me contient, en destinataire : dev@ en copie le 05/11) est une
+				// COPIE, pas un deplacement : il est dans les Envoyes ET dans l'INBOX, comme dans
+				// Outlook. Le prendre pour un deplacement faisait faire au fil des allers-retours
+				// INBOX <-> Envoyes, et le dernier emportait dans les Envoyes les reponses recues
+				// entre-temps (reponse d'OPTI MARCHE invisible dans la boite de reception).
+				let isSentCopy = false;
+				if (existing && existing.mailboxId !== row.id && !isAllMail(row)) {
+					if (sentIds.has(row.id)) isSentCopy = true;
+					else {
+						const copies = await db
+							.select({ mailboxId: messages.mailboxId })
+							.from(messages)
+							.where(and(eq(messages.ownerId, ownerId), eq(messages.messageId, messageId)));
+						isSentCopy = copies.some((c) => sentIds.has(c.mailboxId));
+					}
+				}
+
+				if (existing && !isSentCopy) {
 					// ss2i : « Tous les messages » (\All, Gmail) liste aussi le courrier de l'INBOX
 					// et des Envoyes. Y voir un message connu ailleurs n'est pas un deplacement :
 					// sans cette garde, chaque nouveau message quittait l'INBOX pour l'archive.

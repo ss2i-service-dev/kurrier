@@ -81,22 +81,27 @@ export default defineNitroPlugin(async (nitroApp) => {
 				if (job.data.op === "move" && !job.data.toMailboxId) {
 					throw new Error("mail:move requires toMailboxId when op === 'move'");
 				}
-				await moveMail(job.data, imapInstances);
-				const movedIds: string[] = job.data.threadIds?.length
-					? job.data.threadIds
-					: [job.data.threadId];
-				for (const threadId of movedIds) {
-					await searchIngestQueue.add(
-						"refresh-thread",
-						{ threadId },
-						{
-							jobId: `refresh-${threadId}`, // collapses duplicates
-							removeOnComplete: true,
-							removeOnFail: false,
-							attempts: 3,
-							backoff: { type: "exponential", delay: 1500 },
-						},
-					);
+				// ss2i (OI 10286) : moveMail echoue quand des messages n'ont pas pu etre deplaces sur
+				// IMAP (remis dans la source en base, job rejoue) ; l'index est rafraichi quand meme.
+				try {
+					await moveMail(job.data, imapInstances);
+				} finally {
+					const movedIds: string[] = job.data.threadIds?.length
+						? job.data.threadIds
+						: [job.data.threadId];
+					for (const threadId of movedIds) {
+						await searchIngestQueue.add(
+							"refresh-thread",
+							{ threadId },
+							{
+								jobId: `refresh-${threadId}`, // collapses duplicates
+								removeOnComplete: true,
+								removeOnFail: false,
+								attempts: 3,
+								backoff: { type: "exponential", delay: 1500 },
+							},
+						);
+					}
 				}
 			} else if (job.name === "mail:set-flags") {
 				await mailSetFlags(job.data, imapInstances);

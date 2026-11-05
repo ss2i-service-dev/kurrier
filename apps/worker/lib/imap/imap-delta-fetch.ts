@@ -107,6 +107,23 @@ export const deltaFetch = async (
 					});
 				}
 
+				// ss2i (OI 10286) : ce message est deja dans CE dossier en base (deplacement fait par
+				// courrier, curseur redescendu sous un doublon) : rien a faire. Sans cette sortie, la
+				// ligne prise plus bas parmi toutes celles de ce Message-ID pouvait etre la copie des
+				// Envoyes : « deplacement detecte », puis copie des Envoyes supprimee.
+				const [here] = await db
+					.select({ id: messages.id })
+					.from(messages)
+					.where(
+						and(
+							eq(messages.ownerId, ownerId),
+							eq(messages.messageId, messageId),
+							eq(messages.mailboxId, row.id),
+						),
+					)
+					.limit(1);
+				if (here) return;
+
 				const [existing] = await db
 					.select({
 						id: messages.id,
@@ -160,10 +177,10 @@ export const deltaFetch = async (
 									),
 								);
 
-							if (dup?.id) {
-								await db.delete(messages).where(eq(messages.id, m.id));
-								continue;
-							}
+							// ss2i (OI 10286) : une copie de ce message est deja dans ce dossier : on laisse
+							// celle-ci ou elle est. L'amont la supprimait, et c'etait souvent la copie des
+							// Envoyes (meme Message-ID que celle de l'INBOX ou de l'Archive).
+							if (dup?.id) continue;
 
 							const updatedMeta = {
 								...(m.metaData as any),

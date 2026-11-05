@@ -11,3 +11,4 @@ export * from "./list-unsubscribe";
 export * from "./sender-block";
 export * from "./auto-mail";
 export * from "./message-move";
+export * from "./move-uids";

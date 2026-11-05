@@ -259,12 +259,16 @@ export const processRules = async ({ messageId }: { messageId: string }) => {
 
     for (const rule of rules) {
         // ss2i (OI 10344) : l'echec d'une regle ne coupe ni les suivantes ni le traitement du message.
+        // `matched` sort du try : une regle qui correspond et dont une action leve garde son
+        // « arreter le traitement » (sinon une regle de priorite inferieure s'appliquerait).
+        let matched = false;
         try {
             const match = rule.match as MailRuleMatchV1;
             if (!match?.conditions?.length) continue;
 
             const ok = evalMatch(message, match);
             if (!ok) continue;
+            matched = true;
 
             const ruleActions = actionsByRuleId.get(rule.id) ?? [];
 
@@ -308,9 +312,9 @@ export const processRules = async ({ messageId }: { messageId: string }) => {
                 }
             }
 
-            if (rule.stopProcessing) break;
         } catch (err) {
             console.error("[COMMON] Rule failed, skipped:", rule.id, "message:", messageId, err);
         }
+        if (matched && rule.stopProcessing) break;
     }
 };

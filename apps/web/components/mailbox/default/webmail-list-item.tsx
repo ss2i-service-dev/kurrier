@@ -28,6 +28,8 @@ type Props = {
 	// ss2i : ordre affiche des fils, pour la selection par plage (Shift+clic).
 	// Obligatoire : une liste qui l'oublie casse Maj+clic (regression du 05/11/2026).
 	orderedThreadIds: string[];
+	// ss2i : dernier fil consulte (repere au retour du fil, lib/list-return.ts).
+	lastViewed?: boolean;
 };
 import { Temporal } from "@js-temporal/polyfill";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
@@ -41,6 +43,7 @@ import SnoozeMail from "@/components/mailbox/default/snooze-mail";
 import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
 import { DraftSendBadge, DraftTimesLabel, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
 
+import { LAST_VIEWED_CLASS } from "@/lib/list-return";
 export default function WebmailListItem({
 	mailboxThreadItem,
 	activeMailbox,
@@ -50,6 +53,7 @@ export default function WebmailListItem({
 	labelsByThreadId,
 	workspacePublicId,
 	orderedThreadIds,
+	lastViewed = false,
 }: Props) {
 	const showSnippet = useShowSnippet();
 	function formatDateLabel(input?: string | number | Date) {
@@ -249,6 +253,7 @@ export default function WebmailListItem({
 						? "!bg-sky-50 dark:!bg-sky-950/40 shadow-[inset_3px_0_0_0_rgb(2,132,199)]"
 						: "",
 					`pr-[${ACTIONS_W}]`,
+					lastViewed ? LAST_VIEWED_CLASS : "",
 				].join(" ")}
 			>
 				{/* ss2i (OI 10270) : poignee, glisser le fil (ou la selection) sur un client */}

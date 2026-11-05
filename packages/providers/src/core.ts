@@ -139,6 +139,11 @@ export interface Mailer {
 			from: string;
 			inReplyTo: string;
 			references: string[];
+			// Copies and blind copies; Bcc goes in the SMTP envelope, never in the headers.
+			cc?: string[];
+			bcc?: string[];
+			// Extra headers (e.g. X-Kurrier-Auto) added to the message as-is.
+			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
 	): Promise<{ success: boolean; MessageId?: string; error?: string }>;

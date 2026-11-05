@@ -394,6 +394,8 @@ export class SendgridMailer implements Mailer {
 			from: string;
 			inReplyTo: string;
 			references: string[];
+			// Extra headers (e.g. X-Kurrier-Auto) added to the message as-is.
+			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
 	): Promise<{ success: boolean; MessageId?: string }> {
@@ -417,6 +419,7 @@ export class SendgridMailer implements Mailer {
 			if (opts.inReplyTo) headers["In-Reply-To"] = opts.inReplyTo;
 			if (opts.references?.length)
 				headers["References"] = opts.references.join(" ");
+			Object.assign(headers, opts.extraHeaders ?? {});
 
 			const msg: MailDataRequired = {
 				from: opts.from,

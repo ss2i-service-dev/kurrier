@@ -144,6 +144,11 @@ export class SmtpMailer implements Mailer {
 			from: string;
 			inReplyTo: string;
 			references: string[];
+			// Copies and blind copies; Bcc goes in the SMTP envelope, never in the headers.
+			cc?: string[];
+			bcc?: string[];
+			// Extra headers (e.g. X-Kurrier-Auto) added to the message as-is.
+			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
 	): Promise<{ success: boolean; MessageId?: string }> {
@@ -161,15 +166,22 @@ export class SmtpMailer implements Mailer {
 			if (opts.inReplyTo) headers["In-Reply-To"] = opts.inReplyTo;
 			if (opts.references?.length)
 				headers["References"] = opts.references.join(" ");
+			Object.assign(headers, opts.extraHeaders ?? {});
 
 			const info = await this.transporter.sendMail({
 				from: opts.from,
 				to, // array is fine; Nodemailer will join
+				cc: opts.cc?.length ? opts.cc : undefined,
+				bcc: opts.bcc?.length ? opts.bcc : undefined,
 				subject: opts.subject,
 				text: opts.text || undefined,
 				html: opts.html || undefined,
 				headers,
 				attachments,
+				// data: images in the HTML (signature logo or card) are sent as inline (cid)
+				// attachments, as Outlook does: a remote image would be blocked by default
+				// for most recipients.
+				attachDataUrls: true,
 			});
 
 			return { success: true, MessageId: String(info.messageId || "") };

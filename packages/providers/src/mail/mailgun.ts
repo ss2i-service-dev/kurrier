@@ -308,6 +308,8 @@ export class MailgunMailer implements Mailer {
 			from: string;
 			inReplyTo: string;
 			references: string[];
+			// Extra headers (e.g. X-Kurrier-Auto) added to the message as-is.
+			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
 	): Promise<{ success: boolean; MessageId?: string }> {
@@ -330,6 +332,7 @@ export class MailgunMailer implements Mailer {
 			if (opts.inReplyTo) headers["h:In-Reply-To"] = opts.inReplyTo;
 			if (opts.references?.length)
 				headers["h:References"] = opts.references.join(" ");
+			for (const [k, v] of Object.entries(opts.extraHeaders ?? {})) headers[`h:${k}`] = v;
 
 			// Mailgun accepts string or array for "to"
 			const payload: any = {

@@ -83,6 +83,10 @@ function ClassicWebmailListLabelSearch({
     const pathname = usePathname();
     const onThread = /\/threads\/[^/]+/.test(pathname ?? "");
 
+    // ss2i : ordre affiche des fils, pour la selection par plage (Maj+clic).
+    // Test apps/web/test/thread-selection.ts (regression du 05/11/2026).
+    const orderedThreadIds = mailboxThreads.map((t) => String(t.threadId));
+
     return (
         <div className={onThread ? "hidden" : ""}>
             <DynamicContextProvider
@@ -134,6 +138,7 @@ function ClassicWebmailListLabelSearch({
                                         mailboxSync={mailboxSync ?? undefined}
                                         globalLabels={globalLabels}
                                         labelsByThreadId={labelsByThreadId}
+                                        orderedThreadIds={orderedThreadIds}
                                     />
                                 ),
                             )}

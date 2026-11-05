@@ -1,17 +1,7 @@
-import React from "react";
+import { redirect } from "next/navigation";
 
-function Page() {
-	return (
-		<>
-			<div
-				className={
-					"flex flex-1 flex-col items-center justify-center p-4 text-center"
-				}
-			>
-				Select a mailbox to view the emails.
-			</div>
-		</>
-	);
+// .../dashboard/mail without an identity used to show "Select a mailbox": go to the
+// inbox of the default identity instead, like the root.
+export default function Page() {
+	redirect("/api/auth/resume");
 }
-
-export default Page;

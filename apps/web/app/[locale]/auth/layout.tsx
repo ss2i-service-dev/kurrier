@@ -9,7 +9,9 @@ export default async function DashboardLayout({
 	const user = await isSignedIn();
 
 	if (user) {
-		redirect("/dashboard/platform/overview");
+		// The old target /dashboard/platform/overview lacked the /w/<id>/ segment
+		// and returned a 404 whenever a session was still valid.
+		redirect("/api/auth/resume");
 	}
 
 	return <>{children}</>;

@@ -1,12 +1,15 @@
 import { defineEventHandler, readBody } from "h3";
-import { db, identities, mailboxes } from "@db";
+import { db, mailboxes } from "@db";
 import { simpleParser } from "mailparser";
 import { eq } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { parseAndStoreEmail } from "../../../../../../lib/message-payload-parser";
 import { getToEmails } from "../sendgrid/inbound.post";
+import { verifyPostmark, inboundIdentityFor } from "../../../../../../lib/inbound-auth";
 
 export default defineEventHandler(async (event) => {
+	// Access control: shared secret required (403 otherwise, see lib/inbound-auth.ts).
+	verifyPostmark(event);
 	try {
 		const body = await readBody(event);
 
@@ -15,10 +18,8 @@ export default defineEventHandler(async (event) => {
 
 		const toAddress = getToEmails(parsed)[0] ?? null;
 
-		const [identity] = await db
-			.select()
-			.from(identities)
-			.where(eq(identities.value, toAddress));
+		// Access control: identity of this provider, and only one.
+		const identity = await inboundIdentityFor(toAddress, "postmark");
 
 		if (!identity) {
 			console.log("No identity found for toAddress", toAddress);

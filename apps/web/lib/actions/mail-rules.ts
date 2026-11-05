@@ -3,9 +3,10 @@
 import { rlsClient } from "@/lib/actions/clients";
 import {mailRules, mailRuleActions, labels} from "@db";
 import { handleAction, mailRulesActionsList, mailRulesFieldsList, mailRulesOpsList } from "@schema";
-import {asc, eq, ne} from "drizzle-orm";
+import {asc, eq, inArray, ne} from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { decode } from "decode-formdata";
+import { assertIdentityAccess } from "@/lib/authz";
 
 export async function fetchMailRules(identityId: string) {
     const rls = await rlsClient();
@@ -94,7 +95,8 @@ function validateRulePayload(p: {
     return errors;
 }
 
-export async function buildRulePayloadFromFormData(formData: FormData) {
+// Server helper, not exported (any export of a "use server" file is a callable action).
+async function buildRulePayloadFromFormData(formData: FormData) {
     const from = asString(formData.get("from"));
     const to = asString(formData.get("to"));
     const subject = asString(formData.get("subject"));
@@ -171,7 +173,8 @@ export async function buildRulePayloadFromFormData(formData: FormData) {
     return { ...payload, _errors: Object.keys(errors).length ? errors : null };
 }
 
-export async function createMailRule(payload: {
+// Server helper, not exported (any export of a "use server" file is a callable action).
+async function createMailRule(payload: {
     identityId: string;
     name: string;
     priority: number;
@@ -180,14 +183,26 @@ export async function createMailRule(payload: {
     match: MatchPayload;
     actions: RuleAction[];
 }) {
+    // Visible identity (RLS) and workspace labels; a rule used to be able to target the
+    // identity of another workspace (the worker loaded it by its id).
+    const identity = await assertIdentityAccess({ id: String(payload.identityId ?? "") });
     const rls = await rlsClient();
+    const labelIds = payload.actions
+        .filter((a) => a.actionType === "add_label")
+        .map((a) => String((a.params as any)?.labelId ?? ""));
+    if (labelIds.length) {
+        const found = await rls((tx) =>
+            tx.select({ id: labels.id }).from(labels).where(inArray(labels.id, labelIds)),
+        );
+        if (found.length !== new Set(labelIds).size) throw new Error("Label not found");
+    }
 
     return rls(async (tx) => {
         try {
             const [rule] = await tx
                 .insert(mailRules)
                 .values({
-                    identityId: payload.identityId,
+                    identityId: identity.id,
                     name: payload.name,
                     priority: payload.priority,
                     enabled: payload.enabled,

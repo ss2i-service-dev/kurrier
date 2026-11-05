@@ -31,7 +31,8 @@ import {
 	SmtpAccountFormSchema,
 	SYSTEM_MAILBOXES,
 } from "@schema";
-import { currentSession, isSignedIn } from "@/lib/actions/auth";
+import { isSignedIn } from "@/lib/actions/auth";
+import { currentSession } from "@/lib/auth-session";
 import {and, count, eq, sql, gte, desc, inArray, sum, countDistinct} from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { decode } from "decode-formdata";
@@ -45,15 +46,16 @@ import {
 import { parseSecret } from "@/lib/utils";
 import { z } from "zod";
 import slugify from "@sindresorhus/slugify";
-import {getWorkspaceId, getWorkspaceRole, rlsClient} from "@/lib/actions/clients";
+import {getWorkspaceRole, rlsClient} from "@/lib/actions/clients";
+import {assertIdentityAccess, assertSignedIn, assertWorkspace, isUuid} from "@/lib/authz";
+import {assertPublicUrl} from "@common/safe-http";
 import { v4 as uuidv4 } from "uuid";
-import { backfillMailboxes, clearImapClients } from "@/lib/actions/mailbox";
+import { backfillMailboxes, clearImapClients } from "@/lib/mail-jobs";
 import { kvGet } from "@common";
 import { nanoid } from "nanoid";
 import { getRedis } from "@/lib/actions/get-redis";
-import {
-	checkDefaultWorkspaceIdentity, fetchWorkspace
-} from "@/lib/actions/workspace";
+import { fetchWorkspace } from "@/lib/actions/workspace";
+import { checkDefaultWorkspaceIdentity } from "@/lib/workspace-defaults";
 import {workspaceIdentityMembers} from "@db";
 import {s3} from "@/lib/create-s3-client";
 import {CreateBucketCommand} from "@aws-sdk/client-s3";
@@ -78,7 +80,7 @@ export async function upsertProviderAccount(
 	return handleAction(async () => {
 		const session = await currentSession();
 		const data = decode(formData);
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 		const parsed = ProviderAccountFormSchema.parse(data);
 
 		const rls = await rlsClient();
@@ -126,7 +128,7 @@ export async function upsertSMTPAccount(
 		const parsed = SmtpAccountFormSchema.parse(data);
 		const cleanedOptional = parsed.optional;
 		const cleanedRequired = parsed.required;
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 
 		const smtpConfig: Record<string, unknown> = {
 			ulid: parsed.ulid,
@@ -204,7 +206,9 @@ export async function fetchDecryptedSecrets({
 }) {
 	const rls = await rlsClient();
 	const session = await currentSession();
-	// const workspaceId = await getWorkspaceId();
+	// Workspace of the cookie verified (membership) before any call to the vault, which
+	// only puts the received id in the RLS context.
+	const workspaceId = await assertWorkspace();
 
 	const rows = await rls((tx) => {
 		let q = tx
@@ -238,7 +242,6 @@ export async function fetchDecryptedSecrets({
 	return Promise.all(
 		rows.map(async (r) => {
 			const metaId = String(r.metaId);
-			const workspaceId = await getWorkspaceId();
 			const { vault } = await getSecret(session, metaId, workspaceId);
 
 			const payload = {
@@ -294,16 +297,20 @@ export const verifySmtpAccount = async (
 	smtpSecret: FetchDecryptedSecretsResultRow,
 ): Promise<FormState<VerifyResult>> => {
 	return handleAction(async () => {
-		const parsedVaultValues = smtpSecret.parsedSecret;
+		// The account is re-read by RLS; its credentials and secret are those of the
+		// database, never those sent by the client (used to allow overwriting any secret,
+		// connecting to any server).
+		const account = await smtpAccountById(String(smtpSecret?.linkRow?.accountId ?? ""));
+		const parsedVaultValues = account.parsedSecret;
 		const session = await currentSession();
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 
 		const mailer = createMailer("smtp", parsedVaultValues);
-		const res = await mailer.verify(String(smtpSecret?.linkRow?.accountId));
+		const res = await mailer.verify(String(account.linkRow?.accountId));
 		parsedVaultValues.sendVerified = res?.meta?.send;
 		parsedVaultValues.receiveVerified = res?.meta?.receive;
 
-		await updateSecret(session, workspaceId, smtpSecret.metaId, {
+		await updateSecret(session, workspaceId, account.metaId, {
 			value: JSON.stringify(parsedVaultValues),
 		});
 		revalidatePath(DASHBOARD_PATH);
@@ -331,7 +338,51 @@ export const getIdentityById = async (identityId: string) => {
 	return identity;
 };
 
-export async function initializeDomainIdentity(
+// Identity (with its SMTP account or provider) and secrets re-read by RLS from the id
+// sent by the client alone; the actions below used to receive the whole object from the
+// client and use it as is.
+async function identityWithAccounts(identityId: string) {
+	if (!isUuid(identityId)) throw new Error("Identity not found or access denied");
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select()
+			.from(identities)
+			.leftJoin(smtpAccounts, eq(identities.smtpAccountId, smtpAccounts.id))
+			.leftJoin(providers, eq(identities.providerId, providers.id))
+			.where(eq(identities.id, identityId))
+			.limit(1),
+	);
+	if (!row) throw new Error("Identity not found or access denied");
+	return row;
+}
+
+async function smtpAccountById(accountId: string) {
+	if (!isUuid(accountId)) throw new Error("SMTP account not found");
+	const [account] = await fetchDecryptedSecrets({
+		linkTable: smtpAccountSecrets,
+		foreignCol: smtpAccountSecrets.accountId,
+		secretIdCol: smtpAccountSecrets.secretId,
+		parentId: accountId,
+	});
+	if (!account) throw new Error("SMTP account not found");
+	return account;
+}
+
+async function providerAccountById(providerId: string) {
+	if (!isUuid(providerId)) throw new Error("Provider not found");
+	const [account] = await fetchDecryptedSecrets({
+		linkTable: providerSecrets,
+		foreignCol: providerSecrets.providerId,
+		secretIdCol: providerSecrets.secretId,
+		parentId: providerId,
+	});
+	if (!account?.provider) throw new Error("Provider not found");
+	return account;
+}
+
+// Server helper, not exported (any export of a "use server" file is a callable action).
+async function initializeDomainIdentity(
 	data: Record<string, unknown>,
 ): Promise<FormState<{ identity: DomainIdentity }>> {
 	return handleAction(async () => {
@@ -417,6 +468,9 @@ export async function verifyDomainIdentity(
 	providerAccount: FetchDecryptedSecretsResult[number] | undefined,
 ): Promise<FormState<DomainIdentity>> {
 	return handleAction(async () => {
+		// Identity and provider account re-read by RLS.
+		userDomainIdentity = await identityWithAccounts(String(userDomainIdentity?.identities?.id ?? ""));
+		providerAccount = await providerAccountById(String(userDomainIdentity.identities.providerId ?? ""));
 		// const decrypted = parseSecret(providerAccount);
 		const decrypted = providerAccount?.parsedSecret;
 		const mailer = createMailer(
@@ -492,7 +546,9 @@ const initializeEmailIdentity = async (
 	});
 };
 
-export const initializeMailboxes = async (emailIdentity: IdentityEntity, userId: string, workspaceId: string) => {
+// Internal to addNewEmailIdentity, not exported (an export of this "use server" file is
+// an action callable with any identity).
+const initializeMailboxes = async (emailIdentity: IdentityEntity, userId: string, workspaceId: string) => {
 	if (emailIdentity.kind !== "email") return;
 
 	if (emailIdentity.smtpAccountId) {
@@ -579,14 +635,25 @@ export async function addNewEmailIdentity(
 			}
 		}
 
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 		const userId = String((await isSignedIn())?.id);
 
 		if (data.smtpAccountId) {
+			// SMTP account visible (RLS) and owned by the user (the worker only decrypts the
+			// secrets of the identity owner); workspace and owner are the server's (the form
+			// spread after them used to override them).
+			const [smtpAccount] = await rls((tx) =>
+				tx
+					.select({ id: smtpAccounts.id })
+					.from(smtpAccounts)
+					.where(and(eq(smtpAccounts.id, String(data.smtpAccountId)), eq(smtpAccounts.ownerId, userId))),
+			);
+			if (!smtpAccount) throw new Error("SMTP account not found");
 			const identityData = IdentityInsertSchema.parse({
+				...data,
+				smtpAccountId: smtpAccount.id,
 				workspaceId,
 				ownerId: userId,
-				...data
 			});
 			identityData.sharedWithWorkspace = Boolean(sharedWithWorkspace)
 			identityData.metaData = {
@@ -611,6 +678,12 @@ export async function addNewEmailIdentity(
 					.where(eq(identities.id, String(data.domainIdentityId))),
 			);
 
+			// Domain and provider visible (RLS), provider owned by the user, before any call
+			// to the provider.
+			if (!domainIdentity) throw new Error("Domain identity not found");
+			const provider = isUuid(data.providerId) ? await getProviderById(String(data.providerId)) : null;
+			if (!provider || provider.ownerId !== userId) throw new Error("Provider not found");
+
 			const id = uuidv4();
 			const initRes = await initializeEmailIdentity(data, id);
 			if (!initRes.success || !initRes.data) {
@@ -622,9 +695,9 @@ export async function addNewEmailIdentity(
 			data.id = id;
 			data.sharedWithWorkspace = Boolean(sharedWithWorkspace);
 			const identityData = IdentityInsertSchema.parse({
+				...data,
 				workspaceId,
 				ownerId: userId,
-				...data
 			});
 			const [emailIdentity] = await db.insert(identities).values(identityData as IdentityCreate).returning()
 
@@ -659,6 +732,14 @@ export const testSendingEmail = async (
 	decryptedSecrets: Record<any, unknown>,
 ) => {
 	return handleAction(async () => {
+		// Identity and credentials re-read by RLS; the action used to send without sign-in,
+		// with the server and credentials supplied by the client.
+		userIdentity = await identityWithAccounts(String(userIdentity?.identities?.id ?? ""));
+		if (userIdentity.smtp_accounts) {
+			decryptedSecrets = (await smtpAccountById(userIdentity.smtp_accounts.id)).parsedSecret;
+		} else if (userIdentity.providers) {
+			decryptedSecrets = (await providerAccountById(userIdentity.providers.id)).parsedSecret;
+		}
 		if (userIdentity?.smtp_accounts) {
 			const mailer = createMailer("smtp", decryptedSecrets);
 			await mailer.sendTestEmail(userIdentity.identities.value, {
@@ -684,7 +765,7 @@ export const testSendingEmail = async (
 };
 
 export const fetchUserIdentities = async () => {
-	const workspaceId = await getWorkspaceId();
+	const workspaceId = await assertWorkspace();
 	return db.select()
 		.from(identities)
 		.leftJoin(smtpAccounts, eq(identities.smtpAccountId, smtpAccounts.id))
@@ -699,6 +780,9 @@ export const deleteDomainIdentity = async (
 	providerAccount: FetchDecryptedSecretsResult[number] | undefined,
 ): Promise<FormState> => {
 	return handleAction(async () => {
+		// Identity and provider account re-read by RLS.
+		userDomainIdentity = await identityWithAccounts(String(userDomainIdentity?.identities?.id ?? ""));
+		providerAccount = await providerAccountById(String(userDomainIdentity.identities.providerId ?? ""));
 		const rls = await rlsClient();
 		const emailsUsingThisDomain = await rls((tx) =>
 			tx
@@ -743,6 +827,10 @@ export const deleteEmailIdentity = async (
 	userIdentity: FetchUserIdentitiesResult[number],
 ) => {
 	return handleAction(async () => {
+		// Identity re-read by RLS from its id alone; an object forged by the client (without
+		// sign-in) used to make the worker delete any identity, with its mailboxes and
+		// messages in cascade.
+		userIdentity = await identityWithAccounts(String(userIdentity?.identities?.id ?? ""));
 		if (!userIdentity.smtp_accounts) {
 			const [secret] = await fetchDecryptedSecrets({
 				linkTable: providerSecrets,
@@ -776,8 +864,12 @@ export const verifyProviderAccount = async (
 	providerSecret: FetchDecryptedSecretsResultRow,
 ) => {
 	return handleAction(async () => {
+		// Provider and secret re-read by RLS (workspace verified); the secret designated by
+		// the client used to be overwritten with its values.
+		providerSecret = await providerAccountById(String(providerSecret?.linkRow?.providerId ?? ""));
+		providerType = providerSecret.provider!.type as Providers;
 		let res = { ok: false, message: "Not implemented" } as VerifyResult;
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 		if (providerType === "ses") {
 			const mailer = createMailer("ses", providerSecret.parsedSecret);
 			const { WEB_URL } = getPublicEnv();
@@ -934,7 +1026,7 @@ export const getDashboardStats = async () => {
 	return handleAction(async () => {
 		const rls = await rlsClient();
 		const workspaceRole = await getWorkspaceRole();
-		const isOwner = workspaceRole === "owners";
+		const isOwner = workspaceRole === "owner";
 
 		const data = await rls(async (tx) => {
 			const [
@@ -1062,7 +1154,7 @@ export async function addApiKey(
 	return handleAction(async () => {
 		const session = await currentSession();
 		const data = decode(formData);
-		const workspaceId = await getWorkspaceId();
+		const workspaceId = await assertWorkspace();
 
 		const { ulid, name, scope } = data as {
 			ulid: string;
@@ -1119,7 +1211,7 @@ export async function addApiKey(
 export const fetchUserAPIKeys = async () => {
 	const rls = await rlsClient();
 	const session = await currentSession();
-	const workspaceId = await getWorkspaceId();
+	const workspaceId = await assertWorkspace();
 
 	const apiKeyRows = await rls((tx) =>
 		tx
@@ -1154,10 +1246,10 @@ export type FetchUserAPIKeysResult = Awaited<
 
 
 export const regenerateDavPassword = async () => {
+	const user = await assertSignedIn();
+	const workspaceId = await assertWorkspace();
 	const { davEvents, davQueue } = await getRedis();
-	const user = await isSignedIn();
-	const workspaceId = await getWorkspaceId();
-	const job = await davQueue.add("dav:update-password", { userId: user?.id, workspaceId });
+	const job = await davQueue.add("dav:update-password", { userId: user.id, workspaceId });
 	await job.waitUntilFinished(davEvents);
 	revalidatePath("/w/[workspaceId]/dashboard/platform/sync-services");
 	return job.returnvalue;
@@ -1240,9 +1332,20 @@ export async function addWebhook(
 ): Promise<FormState> {
 	return handleAction(async () => {
 		const data = decode(formData);
+		// A webhook is attached to a visible identity; without one, the worker called it for
+		// all incoming mail of all mailboxes.
+		const identity = await assertIdentityAccess({ id: String(data.identityId ?? "") }).catch(() => null);
+		if (!identity) {
+			return { success: false, error: "Choose an identity for this webhook." };
+		}
+		// Public address only (the worker re-checks it on every send).
+		const url = await assertPublicUrl(String(data.url ?? ""), { allowHttp: true }).catch(() => null);
+		if (!url) {
+			return { success: false, error: "Webhook URL must be a public http(s) address." };
+		}
 		const insertPayload = {
-			url: data.url,
-			identityId: data.identityId ?? null,
+			url: url.toString(),
+			identityId: identity.id,
 			events: [data.scope],
 		};
 
@@ -1284,7 +1387,7 @@ export const fetchUserDavAccountForWorkspace = async () => {
 	const rls = await rlsClient();
 	const session = await currentSession();
 	const user = await isSignedIn();
-	const workspaceId = await getWorkspaceId();
+	const workspaceId = await assertWorkspace();
 
 	const [row] = await rls((tx) =>
 		tx

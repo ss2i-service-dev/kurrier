@@ -2,6 +2,7 @@ import { defineEventHandler, readRawBody } from "h3";
 import {
 	db,
 	decryptAdminSecrets,
+	identities,
 	mailboxes,
 	providers,
 	providerSecrets,
@@ -9,14 +10,23 @@ import {
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 
 import { simpleParser } from "mailparser";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { parseAndStoreEmail } from "../../../../../../../lib/message-payload-parser";
+import { forbidden, verifySns } from "../../../../../../../lib/inbound-auth";
 
 export default defineEventHandler(async (event) => {
+	// Access control: signed SNS message, from an allowed topic (403 otherwise, see
+	// lib/inbound-auth.ts); otherwise anyone could make the worker follow a SubscribeURL or
+	// read an S3 object with a provider's SES credentials.
+	const raw = (await readRawBody(event)) || "";
+	let sns: any;
 	try {
-		const raw = (await readRawBody(event)) || "";
-		const sns = JSON.parse(raw as string);
-
+		sns = JSON.parse(raw as string);
+	} catch {
+		throw forbidden("ses: payload is not JSON");
+	}
+	await verifySns(sns);
+	try {
 		// 1) One-time SNS handshake
 		if (sns?.Type === "SubscriptionConfirmation" && sns.SubscribeURL) {
 			await $fetch(sns.SubscribeURL as string, { method: "GET" });
@@ -39,6 +49,23 @@ export default defineEventHandler(async (event) => {
 			// const size: number = rec.s3?.object?.size ?? 0;
 
 			const [, ownerId, providerId, identityId, emlId] = key.split("/");
+			// Access control: the S3 key designates owner, provider and identity; they must go
+			// together (identity of this provider and of this owner).
+			const [identity] = await db
+				.select({ id: identities.id })
+				.from(identities)
+				.where(
+					and(
+						eq(identities.id, String(identityId ?? "")),
+						eq(identities.providerId, String(providerId ?? "")),
+						eq(identities.ownerId, String(ownerId ?? "")),
+					),
+				)
+				.limit(1);
+			if (!identity) {
+				console.warn(`[Webhook] SES: key ${key} does not match an identity of its provider: ignored`);
+				return { ok: true };
+			}
 			const [secrets] = await decryptAdminSecrets({
 				linkTable: providerSecrets,
 				foreignCol: providerSecrets.providerId,

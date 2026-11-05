@@ -1,4 +1,4 @@
-import {eq, sql} from "drizzle-orm";
+import {and, eq, sql} from "drizzle-orm";
 import {PgTable, PgColumn, pgPolicy} from "drizzle-orm/pg-core";
 
 import { db } from "./init-db";
@@ -20,7 +20,11 @@ export async function decryptAdminSecrets({
 	ownerId,
 	parentId,
 }: FetchArgs) {
-	let q = db
+	// Access control: a single where. Drizzle (0.44) replaces the condition on each
+	// .where() call (config.where = where), so a second call on parentId would drop the
+	// owner filter and an account could be decrypted for any identity that references it.
+	const ownerFilter = eq(secretsMeta.ownerId, ownerId);
+	const rows = await db
 		.select({
 			linkRow: linkTable,
 			metaId: secretsMeta.id,
@@ -31,14 +35,23 @@ export async function decryptAdminSecrets({
 		.leftJoin(secretsMeta, eq(secretIdCol as any, secretsMeta.id))
 		.leftJoin(providers, eq(foreignCol as any, providers.id))
 		.leftJoin(smtpAccounts, eq(foreignCol as any, smtpAccounts.id))
-		.where(eq(secretsMeta.ownerId, ownerId))
-		.$dynamic();
+		.where(parentId ? and(ownerFilter, eq(foreignCol as any, parentId)) : ownerFilter);
 
-	if (parentId) {
-		q = q.where(eq(foreignCol as any, parentId));
+	// Diagnostic: an account that exists but whose secret belongs to another user is
+	// refused (identity without credentials); say so in the log.
+	if (!rows.length && parentId) {
+		const [other] = await db
+			.select({ metaOwner: secretsMeta.ownerId })
+			.from(linkTable)
+			.innerJoin(secretsMeta, eq(secretIdCol as any, secretsMeta.id))
+			.where(eq(foreignCol as any, parentId))
+			.limit(1);
+		if (other) {
+			console.error(
+				`[secrets] account ${parentId}: secret owned by ${other.metaOwner}, not by ${ownerId}: refused`,
+			);
+		}
 	}
-
-	const rows = await q;
 
 	return Promise.all(
 		rows.map(async (r) => {

@@ -1,13 +1,12 @@
 "use server"
 
 import {cache} from "react";
-import {getWorkspaceId, rlsClient} from "@/lib/actions/clients";
-import {and, eq} from "drizzle-orm";
+import {getWorkspaceId, rlsClient, rlsClientForWorkspace} from "@/lib/actions/clients";
+import {and, eq, or} from "drizzle-orm";
 import {
     db,
     identities,
-    UserEntity,
-    workspaceIdentityMembers, workspaceMembers, WorkspaceRolesListType, workspaces,
+    workspaceIdentityMembers, workspaceMembers, workspaces,
 } from "@db";
 import {FormState, handleAction} from "@schema";
 import {decode} from "decode-formdata";
@@ -15,8 +14,10 @@ import {revalidatePath} from "next/cache";
 import {users} from "@db";
 import { createHash } from "node:crypto";
 import {isSignedIn} from "@/lib/actions/auth";
-import {cookies} from "next/headers";
 import {redirect} from "next/navigation";
+import {updateWorkSpaceContext} from "@/lib/auth-session";
+import {setWorkspaceDefaultIdentity} from "@/lib/workspace-defaults";
+import {assertIdentityAccess} from "@/lib/authz";
 
 export const fetchWorkspace = cache(async () => {
     const rls = await rlsClient();
@@ -42,11 +43,19 @@ export const workspaceIdentityAssignments = async () => {
     const workspace = await fetchWorkspace();
 
     return await db
-        .select()
+        .select({
+            workspace_identity_members: workspaceIdentityMembers,
+            users: {
+                id: users.id,
+                email: users.email
+            },
+        })
         .from(workspaceIdentityMembers)
         .leftJoin(users, eq(workspaceIdentityMembers.userId, users.id))
         .where(eq(workspaceIdentityMembers.workspaceId, workspace.id));
 };
+
+
 export type FetchAdminWorkspaceIdentitiesResult = Awaited<
     ReturnType<typeof workspaceIdentityAssignments>
 >;
@@ -70,8 +79,18 @@ export type FetchWorkspacesResult = Awaited<
 >;
 
 export const fetchWorkspaceMembers = async (id: string) => {
+    // Members of a workspace the user belongs to; used to accept any id (member addresses,
+    // without sign-in).
+    await rlsClientForWorkspace(String(id));
     return await db
-        .select()
+        .select({
+            workspace_members: workspaceMembers,
+            users: {
+                id: users.id,
+                email: users.email,
+                createdAt: users.createdAt,
+            },
+        })
         .from(workspaceMembers)
         .leftJoin(users, eq(workspaceMembers.userId, users.id))
         .where(eq(workspaceMembers.workspaceId, id));
@@ -81,46 +100,16 @@ export type FetchWorkspaceMembersResult = Awaited<
     ReturnType<typeof fetchWorkspaceMembers>
 >;
 
-export const setWorkspaceDefaultIdentity = async (identityId: string) => {
-    const workspace = await fetchWorkspace();
-    if (!workspace) return { success: false };
-
-    const rls = await rlsClient();
-    await rls(async (tx) => {
-        await tx.update(identities).set({ sharedWithWorkspace: true }).where(eq(identities.id, identityId));
-        await tx
-            .update(workspaces)
-            .set({ defaultIdentityId: null });
-        await tx
-            .update(workspaces)
-            .set({ defaultIdentityId: identityId })
-            .where(eq(workspaces.id, workspace.id));
-    });
-
-    return { success: true };
-};
-
-export const checkDefaultWorkspaceIdentity = async () => {
-    const workspaceId = await getWorkspaceId();
-    const userId = String((await isSignedIn())?.id);
-    const userIdentities = await db.select().from(identities).where(and(
-        eq(identities.sharedWithWorkspace, true),
-        eq(identities.ownerId, userId),
-        eq(identities.workspaceId, workspaceId)
-    ))
-
-    if (userIdentities.length === 1) {
-        await setWorkspaceDefaultIdentity(userIdentities[0].id);
-    }
-};
-
 export async function toggleDefaultIdentity(
     _prev: FormState,
     formData: FormData,
 ): Promise<FormState> {
     return handleAction(async () => {
         const decodedForm = decode(formData) as Record<string, unknown>;
-        await setWorkspaceDefaultIdentity(String(decodedForm.identityId));
+        // Visible identity of the user (RLS); the RLS update only filtered on the workspace
+        // and could share another user's private identity.
+        const identity = await assertIdentityAccess({ id: String(decodedForm.identityId ?? "") });
+        await setWorkspaceDefaultIdentity(identity.id);
         revalidatePath("/w/[wPublicId]/dashboard/platform/identities", "page");
         return { success: true };
     });
@@ -147,47 +136,30 @@ function sha256Hex(input: string) {
 }
 
 
-export const refreshView = async (path: string) => {
+// No caller; not exported (an action that revalidates any path).
+const refreshView = async (path: string) => {
     return revalidatePath(path);
 };
 
 export const switchWorkSpace = async (workspacePublicId: string, id: string) => {
-    await updateWorkSpaceContext(workspacePublicId, id);
-    redirect(`/w/${workspacePublicId}/dashboard/platform/overview`)
-};
-
-
-export const updateWorkSpaceContext = async (workspacePublicId: string, id: string, user?: UserEntity) => {
-    const cookieStore = await cookies()
-    if (!user) {
-        user = await isSignedIn() as UserEntity;
-    }
-    let role: WorkspaceRolesListType = "member"
-    const [member] = await db.select().from(workspaceMembers).where(and(
-        eq(workspaceMembers.workspaceId, id),
-        eq(workspaceMembers.userId, String(user?.id))
-    )).limit(1)
-    if (member){
-        role = member.role as WorkspaceRolesListType
-    }
-    cookieStore.set({
-        name: 'workspaceId',
-        value: id,
-        httpOnly: true,
-        path: '/',
-    })
-    cookieStore.set({
-        name: 'workspacePublicId',
-        value: workspacePublicId,
-        httpOnly: true,
-        path: '/',
-    })
-    if (role){
-        cookieStore.set({
-            name: 'workspaceRole',
-            value: String(role),
-            httpOnly: true,
-            path: '/',
-        })
-    }
+    // Cookies are only set for a workspace the user owns or belongs to, with its ids
+    // re-read from the database.
+    const user = await isSignedIn();
+    if (!user?.id) throw new Error("Unauthorized");
+    const [workspace] = await db
+        .select({ id: workspaces.id, publicId: workspaces.publicId })
+        .from(workspaces)
+        .leftJoin(workspaceMembers, and(
+            eq(workspaceMembers.workspaceId, workspaces.id),
+            eq(workspaceMembers.userId, user.id),
+        ))
+        .where(and(
+            eq(workspaces.id, String(id)),
+            eq(workspaces.publicId, String(workspacePublicId)),
+            or(eq(workspaces.ownerId, user.id), eq(workspaceMembers.userId, user.id)),
+        ))
+        .limit(1);
+    if (!workspace) throw new Error("Workspace not found or no access");
+    await updateWorkSpaceContext(workspace.publicId, workspace.id, user);
+    redirect(`/w/${workspace.publicId}/dashboard/platform/overview`)
 };

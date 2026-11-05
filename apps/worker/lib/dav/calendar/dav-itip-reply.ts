@@ -88,12 +88,16 @@ export const davItipReply = async (opts: {
 		return;
 	}
 
+	// Access control: the identity must belong to the event owner AND to the event's
+	// workspace; the attendee is already the event's own. Callers only pass ids re-read
+	// under RLS, this protects the other code paths.
 	const [identity] = await db
 		.select()
 		.from(identities)
 		.where(
 			and(
 				eq(identities.ownerId, event.ownerId),
+				eq(identities.workspaceId, event.workspaceId),
 				sql`lower(${identities.value}) = ${responderEmail}`,
 			),
 		);

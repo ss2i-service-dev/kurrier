@@ -1,9 +1,10 @@
 import { defineEventHandler, readMultipartFormData } from "h3";
-import { db, identities, mailboxes } from "@db";
+import { db, mailboxes } from "@db";
 import { ParsedMail, simpleParser } from "mailparser";
 import { eq } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { parseAndStoreEmail } from "../../../../../../lib/message-payload-parser";
+import { verifySendgrid, inboundIdentityFor } from "../../../../../../lib/inbound-auth";
 
 export function getToEmails(parsed: ParsedMail): string[] {
 	if (!parsed.to) return [];
@@ -14,6 +15,9 @@ export function getToEmails(parsed: ParsedMail): string[] {
 }
 
 export default defineEventHandler(async (event) => {
+	// Access control: request signed by SendGrid required (403 otherwise, see
+	// lib/inbound-auth.ts).
+	await verifySendgrid(event);
 	try {
 		const parts = await readMultipartFormData(event);
 		if (!parts) return { ok: false, error: "No multipart body" };
@@ -27,10 +31,8 @@ export default defineEventHandler(async (event) => {
 
 		const toAddress = getToEmails(parsed)[0] ?? null;
 
-		const [identity] = await db
-			.select()
-			.from(identities)
-			.where(eq(identities.value, toAddress));
+		// Access control: identity of this provider, and only one.
+		const identity = await inboundIdentityFor(toAddress, "sendgrid");
 
 		if (!identity) {
 			console.log("No identity found for toAddress", toAddress);

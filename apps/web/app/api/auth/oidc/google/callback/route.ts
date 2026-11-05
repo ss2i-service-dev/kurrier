@@ -15,7 +15,8 @@ import {
     createSessionForUser,
     createUserWithWorkspace,
     getWorkspaceRedirectUrl,
-} from "@/lib/actions/auth";
+} from "@/lib/auth-session";
+import { getPublicEnv } from "@schema";
 
 export async function GET(request: NextRequest) {
     const cookieStore = await cookies();
@@ -50,10 +51,19 @@ export async function GET(request: NextRequest) {
     if (!email || !providerUserId) {
         return NextResponse.redirect(new URL("/auth/login", request.url));
     }
+    // Access control: the address is used to find the local account; an address not
+    // verified by Google would open the account of its real owner.
+    if (claims?.email_verified !== true) {
+        return NextResponse.redirect(new URL("/auth/login", request.url));
+    }
 
     let [user] = await db.select().from(users).where(eq(users.email, email));
 
     if (!user) {
+        // Signup disabled (DISABLE_SIGNUP): Google sign-in does not create accounts either.
+        if (getPublicEnv().DISABLE_SIGNUP) {
+            return NextResponse.redirect(new URL("/auth/login", request.url));
+        }
         const passwordHash = await argon2.hash(crypto.randomUUID());
 
         const createdUser = await createUserWithWorkspace({

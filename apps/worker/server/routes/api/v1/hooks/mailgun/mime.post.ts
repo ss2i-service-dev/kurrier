@@ -1,23 +1,24 @@
-import { defineEventHandler, readBody } from "h3";
+import { defineEventHandler } from "h3";
 import { simpleParser } from "mailparser";
-import { db, identities, mailboxes } from "@db";
+import { db, mailboxes } from "@db";
 import { eq } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { parseAndStoreEmail } from "../../../../../../lib/message-payload-parser";
 import { getToEmails } from "../sendgrid/inbound.post";
+import { readFormFields, verifyMailgun, inboundIdentityFor } from "../../../../../../lib/inbound-auth";
 
 export default defineEventHandler(async (event) => {
+	// Access control: Mailgun signature required (403 otherwise, see lib/inbound-auth.ts).
+	const body = await readFormFields(event);
+	verifyMailgun(body);
 	try {
-		const body = await readBody(event);
 		const rawMime = body["body-mime"];
 		const parsed = await simpleParser(rawMime);
 
 		const toAddress = getToEmails(parsed)[0] ?? null;
 
-		const [identity] = await db
-			.select()
-			.from(identities)
-			.where(eq(identities.value, toAddress));
+		// Access control: identity of this provider, and only one.
+		const identity = await inboundIdentityFor(toAddress, "mailgun");
 
 		if (!identity) {
 			console.log("No identity found for toAddress", toAddress);

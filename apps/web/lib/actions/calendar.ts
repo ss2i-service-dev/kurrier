@@ -1,5 +1,6 @@
 "use server";
 import {getWorkspaceId, rlsClient} from "@/lib/actions/clients";
+import { assertOwnedS3Key, assertSignedIn } from "@/lib/authz";
 import {
 	addressBooks,
 	CalendarEventAttendeeEntity,
@@ -149,7 +150,8 @@ type SyncEventAttendeesArgs = {
 
 
 
-export async function syncEventAttendees({
+// Server helper, not exported (any export of a "use server" file is a callable action).
+async function syncEventAttendees({
 											 tx,
 											 eventId,
 											 organizerEmail,
@@ -449,7 +451,8 @@ export async function getRangeForCalendarView(
 	return { from, to };
 }
 
-export async function eventsBySlot(
+// Server helper, not exported (any export of a "use server" file is a callable action).
+async function eventsBySlot(
 	tz: string,
 	events: CalendarEventEntity[],
 ): Promise<Map<SlotKey, EventSlotFragment[]>> {
@@ -499,7 +502,8 @@ export async function eventsBySlot(
 	return map;
 }
 
-export async function eventsByDay(
+// Server helper, not exported (any export of a "use server" file is a callable action).
+async function eventsByDay(
 	tz: string,
 	events: CalendarEventEntity[],
 ): Promise<Map<string, EventSlotFragment[]>> {
@@ -743,6 +747,28 @@ export type FetchContactsForAttendeesResult = Awaited<
 	ReturnType<typeof getContactsForAttendeeIds>
 >;
 
+// Event and attendee re-read by RLS (workspace of the user), the attendee belonging to the
+// event; only these re-read ids go to the worker. Any event used to be accepted, without
+// sign-in.
+async function verifiedInviteTarget(eventId: unknown, attendeeId: unknown) {
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({ eventId: calendarEvents.id, attendeeId: calendarEventAttendees.id })
+			.from(calendarEventAttendees)
+			.innerJoin(calendarEvents, eq(calendarEventAttendees.eventId, calendarEvents.id))
+			.where(
+				and(
+					eq(calendarEvents.id, String(eventId ?? "")),
+					eq(calendarEventAttendees.id, String(attendeeId ?? "")),
+				),
+			)
+			.limit(1),
+	);
+	if (!row) throw new Error("Invitation not found");
+	return row;
+}
+
 export async function yesCalendarInvite(
 	_prev: FormState,
 	formData: FormData,
@@ -754,10 +780,11 @@ export async function yesCalendarInvite(
 			attendeeId: string;
 		};
 
+		const target = await verifiedInviteTarget(decodedForm.eventId, decodedForm.attendeeId);
 		const { davQueue, davEvents } = await getRedis();
 		const job = await davQueue.add("dav:calendar:itip-reply", {
-			eventId: decodedForm.eventId,
-			attendeeId: decodedForm.attendeeId,
+			eventId: target.eventId,
+			attendeeId: target.attendeeId,
 			partstat: "accepted",
 		});
 		await job.waitUntilFinished(davEvents);
@@ -777,10 +804,11 @@ export async function noCalendarInvite(
 			attendeeId: string;
 		};
 
+		const target = await verifiedInviteTarget(decodedForm.eventId, decodedForm.attendeeId);
 		const { davQueue, davEvents } = await getRedis();
 		const job = await davQueue.add("dav:calendar:itip-reply", {
-			eventId: decodedForm.eventId,
-			attendeeId: decodedForm.attendeeId,
+			eventId: target.eventId,
+			attendeeId: target.attendeeId,
 			partstat: "declined",
 		});
 		await job.waitUntilFinished(davEvents);
@@ -800,10 +828,11 @@ export async function maybeCalendarInvite(
 			attendeeId: string;
 		};
 
+		const target = await verifiedInviteTarget(decodedForm.eventId, decodedForm.attendeeId);
 		const { davQueue, davEvents } = await getRedis();
 		const job = await davQueue.add("dav:calendar:itip-reply", {
-			eventId: decodedForm.eventId,
-			attendeeId: decodedForm.attendeeId,
+			eventId: target.eventId,
+			attendeeId: target.attendeeId,
 			partstat: "tentative",
 		});
 		await job.waitUntilFinished(davEvents);
@@ -908,7 +937,8 @@ function fromRRuleLocal(rruleDate: Date, tz: string): Date {
 	return zoned.toDate();
 }
 
-export async function expandEventForRange(
+// Server helper, not exported (any export of a "use server" file is a callable action).
+async function expandEventForRange(
 	event: CalendarEventEntity,
 	rangeStart: Date,
 	rangeEnd: Date,
@@ -1035,9 +1065,13 @@ export async function fetchEventPreviewItems(
 		return { calendarEvent: null, attendees: null, identity: null };
 	}
 
+	// The attachment comes from the caller; only a key of the user or of a message of their
+	// workspace is read (used to read any object of the bucket).
+	const user = await assertSignedIn();
+	const key = await assertOwnedS3Key(String(messageAttachment.path), user.id);
 	const command = new GetObjectCommand({
 		Bucket: S3_BUCKET,
-		Key: String(messageAttachment.path),
+		Key: key,
 	});
 	const response = await s3.send(command);
 	const rawICS = response.Body

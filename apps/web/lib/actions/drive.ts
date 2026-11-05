@@ -2,14 +2,14 @@
 
 import { isSignedIn } from "@/lib/actions/auth";
 import {
-	driveEntries, DriveVolumeEntity,
+	driveEntries, driveUploadIntents, DriveVolumeEntity,
 	driveVolumes
 } from "@db";
 import { rlsClient } from "@/lib/actions/clients";
 import { DriveRouteContext, FormState, handleAction } from "@schema";
 import { decode } from "decode-formdata";
 import { revalidatePath } from "next/cache";
-import {and, eq, sql} from "drizzle-orm";
+import {and, eq, inArray, sql} from "drizzle-orm";
 
 import {
 	DeleteObjectCommand,
@@ -66,7 +66,8 @@ export const fetchVolumes = async () => {
 	);
 };
 
-export const normalizeWithinPathString = async (path: unknown) => {
+// Server helper, not exported (any export of a "use server" file is a callable action).
+const normalizeWithinPathString = async (path: unknown) => {
 	const raw = typeof path === "string" ? path : "/";
 	const cleaned = "/" + trimSlashes(decodeURIComponent(raw));
 	return cleaned === "/" ? "/" : cleaned;
@@ -221,6 +222,8 @@ export async function addNewFolder(
 
 
 export const refreshViewAfterUpload = async () => {
+	// Reserved for signed-in users.
+	if (!(await isSignedIn())) return;
 	return revalidatePath("/w/[workspaceId]/dashboard/drive");
 };
 
@@ -228,9 +231,33 @@ function getVolumePrefix(volume: DriveVolumeEntity) {
 	return `drive/workspaces/${volume.workspaceId}/${volume.code}/`;
 }
 
+// The context comes from the client; the volume (bucket, workspace prefix) is re-read by
+// RLS from its id alone, and the path cannot climb out of the volume prefix. The volume
+// sent by the client used to choose bucket and prefix (list and upload URL in any
+// workspace).
+async function verifiedVolume(ctx: DriveRouteContext) {
+	const volumeId = String(ctx?.driveVolume?.id ?? "");
+	if (!volumeId) return null;
+	const rls = await rlsClient();
+	const [vol] = await rls((tx) =>
+		tx.select().from(driveVolumes).where(eq(driveVolumes.id, volumeId)).limit(1),
+	);
+	if (!vol) throw new Error("Volume not found");
+	return vol;
+}
+
+const assertSafeDrivePath = (...parts: string[]) => {
+	for (const p of parts) {
+		if (String(p ?? "").split("/").some((seg) => seg === "." || seg === "..") || String(p ?? "").includes("\\")) {
+			throw new Error("Invalid path");
+		}
+	}
+};
+
 export async function fetchCloudListPath(ctx: DriveRouteContext) {
-	const volume = ctx.driveVolume;
+	const volume = await verifiedVolume(ctx);
 	if (!volume) return [];
+	assertSafeDrivePath(String(ctx.withinPath || "/"));
 
 	const volumeId = volume.id;
 	const bucket = String(volume.metaData?.bucket || "");
@@ -342,7 +369,6 @@ function joinPaths(base: string, leaf: string) {
 	return out === "" ? "/" : out;
 }
 
-
 export async function getCloudUploadUrl(
 	ctx: DriveRouteContext,
 	input: {
@@ -351,7 +377,7 @@ export async function getCloudUploadUrl(
 		contentType?: string | null;
 	},
 ) {
-	const volume = ctx.driveVolume;
+	const volume = await verifiedVolume(ctx);
 	if (!volume) throw new Error("Missing driveVolume");
 
 	const user = await isSignedIn();
@@ -364,11 +390,26 @@ export async function getCloudUploadUrl(
 	const withinPath = String(ctx.withinPath || "/");
 	const filename = String(input.filename || "").trim();
 	if (!filename) throw new Error("Missing filename");
+	assertSafeDrivePath(withinPath, filename);
 
 	const volumePrefix = getVolumePrefix(volume);
 	const fullPath = joinPaths(withinPath, filename);
 	const relativeKey = fullPath.replace(/^\/+/, "");
 	const key = `${volumePrefix}${relativeKey}`;
+
+	const uploadToken = crypto.randomUUID();
+
+	const rls = await rlsClient();
+
+	await rls((tx) =>
+		tx.insert(driveUploadIntents).values({
+			volumeId: volume.id,
+			token: uploadToken,
+			targetPath: fullPath,
+			singleUse: true,
+			expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+		}),
+	);
 
 	const url = await getSignedUrl(
 		s3,
@@ -392,6 +433,7 @@ export async function getCloudUploadUrl(
 		relativeKey,
 		method: "PUT",
 		url,
+		uploadToken,
 		headers: {
 			"Content-Type": input.contentType || "application/octet-stream",
 		},
@@ -420,6 +462,33 @@ export async function getDriveDownloadUrl(entryId: string) {
 		{ expiresIn: 60 * 5 },
 	);
 
+}
+
+// Preview URLs (inline display, no forced download) for the viewer of the modern
+// interface. Read-only, same access check (RLS) as getDriveDownloadUrl.
+export async function getDriveViewUrls(entryIds: string[]) {
+	const ids = Array.from(new Set(entryIds)).slice(0, 60);
+	if (!ids.length) return {} as Record<string, string>;
+	const rls = await rlsClient();
+	const rows = await rls((tx) =>
+		tx.select().from(driveEntries).where(inArray(driveEntries.id, ids)),
+	);
+	const out: Record<string, string> = {};
+	await Promise.all(
+		rows.map(async (entry) => {
+			if (entry.type === "folder") return;
+			const meta = entry.metaData as any;
+			const bucket = String(meta?.bucket || "");
+			const key = String(meta?.key || entry.path?.replace(/^\/+/, "") || "");
+			if (!bucket || !key) return;
+			out[entry.id] = await getSignedUrl(
+				s3,
+				new GetObjectCommand({ Bucket: bucket, Key: key }),
+				{ expiresIn: 60 * 15 },
+			);
+		}),
+	);
+	return out;
 }
 
 export async function deleteDriveEntry(entryId: string) {

@@ -117,7 +117,7 @@ export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookC
 				const days = viewDays(view, stepView(view, anchor, dir));
 				prefetchEvents(boxId, days[0], days.length, refs, tz);
 			}
-		}, 400);
+		}, 1500);
 		return () => clearTimeout(t);
 	}, [loading, boxId, refs, view, anchor, tz]);
 	const catColor = useMemo(() => new Map(categories.map((c) => [c.name, c.color])), [categories]);

@@ -66,7 +66,6 @@ export function MailboxNav({
 
 	const system = mailboxes
 		.filter((m) => m.kind !== "custom")
-		.filter((m) => m.kind !== "drafts")
 		.sort((a, b) => systemOrder.indexOf(a.kind) - systemOrder.indexOf(b.kind));
 
 	const custom = mailboxes.filter((m) => m.kind === "custom");

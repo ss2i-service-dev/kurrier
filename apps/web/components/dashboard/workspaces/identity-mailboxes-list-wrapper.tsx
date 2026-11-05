@@ -5,6 +5,8 @@ import {
     fetchScheduledDraftCounts
 } from "@/lib/actions/mailbox";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
+import {fetchDraftCounts} from "@/lib/actions/drafts";
+import {collapsedIdentities} from "@/lib/actions/collapsed-identities";
 import {fetchLabelsWithCounts} from "@/lib/actions/labels";
 import IdentityMailboxesList from "@/components/dashboard/identity-mailboxes-list";
 import {DynamicContextProvider} from "@/hooks/use-dynamic-context";
@@ -16,15 +18,25 @@ async function IdentityMailboxesListWrapper() {
 
     const [
         identityMailboxes,
-        unreadCounts,
+        unreadThreadCounts,
         globalLabels,
-        workspacePublicId
+        workspacePublicId,
+        draftCounts,
+        collapsed,
     ] = await Promise.all([
         fetchIdentityMailboxList(),
         fetchMailboxUnreadCounts(),
         fetchLabelsWithCounts(),
-        getWorkspacePublicId()
+        getWorkspacePublicId(),
+        fetchDraftCounts(),
+        collapsedIdentities(),
     ]);
+
+    // The Drafts folder shows its draft count in place of unread threads.
+    const unreadCounts = new Map(unreadThreadCounts);
+    for (const [mailboxId, n] of draftCounts) {
+        unreadCounts.set(mailboxId, { unreadThreads: n, unreadTotal: n });
+    }
 
     const scheduledDraftsPromise = fetchScheduledDraftCounts();
     const snoozedThreadsPromise = fetchIdentitySnoozedThreads()
@@ -37,6 +49,7 @@ async function IdentityMailboxesListWrapper() {
                 scheduledDraftsPromise={scheduledDraftsPromise}
                 snoozedThreadsPromise={snoozedThreadsPromise}
                 workspacePublicId={workspacePublicId}
+                initialCollapsed={collapsed}
             />
 
             <DynamicContextProvider

@@ -6,7 +6,18 @@ import {
 	MailComposeInput,
 } from "@schema";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
-import { generateSnippet, upsertMailboxThreadItem } from "@common";
+import { AUTO_MAIL_HEADER } from "@common";
+import {
+	composeMessage,
+	formatQuoteDate,
+	generateSnippet,
+	quoteOverrideOf,
+	quoteScopeOf,
+	setDraftSendState,
+	upsertMailboxThreadItem,
+	type QuoteOverride,
+	type QuoteScope,
+} from "@common";
 const serverConfig = getServerEnv();
 import IORedis from "ioredis";
 import { Worker } from "bullmq";
@@ -26,15 +37,20 @@ import {
 	smtpAccounts,
 	smtpAccountSecrets,
 	threads,
+	workspaces,
 } from "@db";
 import { createMailer } from "@providers";
 import { toArray } from "drizzle-orm/mysql-core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import addressparser from "addressparser";
 import { PgTransaction } from "drizzle-orm/pg-core";
 import { getRedis } from "../../lib/get-redis";
 import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import {s3} from "../../lib/create-s3-client";
+import { upsertContactsFromOutgoing } from "../../lib/outgoing-contacts";
+import { ingestRecipientStats } from "../../lib/recipient-stats";
+import { deleteDraft } from "../../lib/drafts/draft-service";
+import { allowedAttachmentKeys, originalUsableBy } from "../../lib/send-guards";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 // import MailComposer from "nodemailer/lib/mail-composer";
 const connection = new IORedis({
@@ -60,9 +76,14 @@ export default defineNitroPlugin(async (nitroApp) => {
 				case "send-scheduled-draft":
 					await processDraft(job.data);
 					return { success: true };
-				case "send-and-reconcile":
-					await send(job.data);
+				case "send-and-reconcile": {
+					// A provider refusal returned as a value (not thrown) counts as a failure.
+					const result = await send(job.data);
+					if (result && (result as any).success === false) {
+						throw new Error(String((result as any).error ?? "Sending failed"));
+					}
 					return { success: true };
+				}
 				default:
 					return { success: true };
 			}
@@ -75,6 +96,21 @@ export default defineNitroPlugin(async (nitroApp) => {
 	});
 	worker.on("failed", (job, err) => {
 		console.error(`[send-mail] ${job?.id} failed: ${err?.message}`);
+		// Final failure of a send coming from a draft: the "sending" mark is removed and the
+		// error kept on the draft ("Not sent" badge).
+		const draftMessageId = (job?.data as any)?.draftMessageId;
+		if (
+			job?.name === "send-and-reconcile" &&
+			draftMessageId &&
+			job.attemptsMade >= (job.opts?.attempts ?? 1)
+		) {
+			setDraftSendState(String(draftMessageId), {
+				pendingSend: null,
+				sendError: { message: err?.message ?? "Sending failed", at: new Date().toISOString() },
+			}).catch((e: any) =>
+				console.error("[send-mail] sendError mark failed:", e?.message ?? e),
+			);
+		}
 	});
 
 	const getOriginalMessage = async (decodedForm: Record<any, any>) => {
@@ -177,7 +213,31 @@ export default defineNitroPlugin(async (nitroApp) => {
 		}
 	};
 
+	// A send that started from a draft deletes it (database, then IMAP through the
+	// draft:delete job). A cancelled or failed send leaves it in place.
 	const send = async (decodedForm: Record<any, unknown>) => {
+		const result = await sendTx(decodedForm);
+		if (result?.success && decodedForm.draftMessageId) {
+			try {
+				const [ident] = await db
+					.select({ id: identities.id, ownerId: identities.ownerId })
+					.from(identities)
+					.where(eq(identities.id, String(decodedForm.identityId ?? "")));
+				if (ident) {
+					await deleteDraft({
+						ownerId: ident.ownerId,
+						identityId: ident.id,
+						draftMessageId: String(decodedForm.draftMessageId),
+					});
+				}
+			} catch (err: any) {
+				console.error("[send-mail] draft cleanup failed:", err?.message ?? err);
+			}
+		}
+		return result;
+	};
+
+	const sendTx = async (decodedForm: Record<any, unknown>) => {
 		return await db.transaction(async (tx) => {
 			const [mailbox] = await tx
 				.select({
@@ -223,6 +283,11 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 			const attachmentBlobs = await fetchAttachmentBlobs(
 				decodedForm.attachments as string,
+				{
+					workspaceId: mailbox.mailbox.workspaceId,
+					identityOwnerId: mailbox.identity.ownerId,
+					senderUserId: String(decodedForm.senderUserId ?? "") || null,
+				},
 			);
 
 			const data: MailComposeInput = {
@@ -242,19 +307,60 @@ export default defineNitroPlugin(async (nitroApp) => {
 				decodedForm.originalMessageId
 			) {
 				origRow = await getOriginalMessage(decodedForm);
+				// Access control: an original message from another workspace is ignored (no quote, no
+				// thread attachment, no In-Reply-To); a reply without an original message is refused
+				// further down, like a message not found.
+				if (origRow?.message && !originalUsableBy(origRow.message, mailbox.mailbox)) {
+					console.warn(
+						`[send-mail] original message ${origRow.message.id} is not in workspace ${mailbox.mailbox.workspaceId}: ignored`,
+					);
+					origRow = null;
+				}
 			}
 
-			const { subject, text, html } = await generateMailAttrs({
+			const signatureHtml =
+				decodedForm.includeSignature !== "false"
+					? String((mailbox.identity.metaData as any)?.signatureHtml ?? "").trim()
+					: "";
+			// Signature requested but empty for this identity (Settings > General > Signature is
+			// per identity): say so in the log, so nobody goes looking for a bug.
+			if (decodedForm.includeSignature !== "false" && !signatureHtml) {
+				console.warn(
+					`[send-mail] identity ${mailbox.identity.value} (${mailbox.identity.id}) has no signature: sending without one`,
+				);
+			}
+
+			// RFC style (reply below the quote, "-- " before the signature), an option of the sending
+			// user (workspaces.meta.prefRfcStyle[userId], see apps/web/lib/actions/rfc-style.ts).
+			// Scope of the quote chosen in the editor; absent (job already queued) = whole message.
+			const senderUserId =
+				String(decodedForm.senderUserId ?? "") || mailbox.identity.ownerId;
+			const rfcStyle = await rfcStyleEnabled(mailbox.mailbox.workspaceId, senderUserId);
+			const quoteScope = quoteScopeOf(decodedForm.quoteScope);
+			// Quote edited in the editor (quoteMode custom + quoteHtml) or removed (none).
+			const quoteOverride = quoteOverrideOf(decodedForm.quoteMode, decodedForm.quoteHtml);
+
+			const { subject, text, html } = generateMailAttrs({
 				data,
 				orig: origRow,
+				signatureHtml,
+				rfcStyle,
+				quoteScope,
+				quoteOverride,
 			});
 
 			const mailboxIdForMessage = String(decodedForm.sentMailboxId);
 
 			let threadIdForMessage: string;
 
+			// A forward stays in the thread of the forwarded message (like a reply), otherwise it
+			// appears nowhere under the original message; it also carries In-Reply-To and References,
+			// like Gmail and Thunderbird.
+			const threaded = data.mode === "reply" || data.mode === "forward";
 			if (data.mode === "reply") {
 				if (!origRow?.message) throw new Error("Original message not found");
+				threadIdForMessage = origRow.message.threadId;
+			} else if (data.mode === "forward" && origRow?.message?.threadId) {
 				threadIdForMessage = origRow.message.threadId;
 			} else {
 				threadIdForMessage = await ensureThreadId(
@@ -265,12 +371,12 @@ export default defineNitroPlugin(async (nitroApp) => {
 			}
 
 			const inReplyTo =
-				data.mode === "reply" && origRow?.message
+				threaded && origRow?.message
 					? origRow.message.messageId
 					: null;
 
 			const references =
-				data.mode === "reply" && origRow?.message
+				threaded && origRow?.message
 					? Array.from(
 						new Set(
 							[
@@ -295,7 +401,8 @@ export default defineNitroPlugin(async (nitroApp) => {
 				from: mailbox.identity.value,
 				cc: toAddressObj(data?.cc || []),
 				bcc: toAddressObj(data.bcc || []),
-				snippet: generateSnippet(text || html || ""),
+				// In RFC style the text starts with the quote: the snippet stays the reply.
+				snippet: generateSnippet((rfcStyle && data.text) || text || html || ""),
 				subject,
 				text,
 				html,
@@ -306,13 +413,18 @@ export default defineNitroPlugin(async (nitroApp) => {
 				newMessageBody.id = String(decodedForm.apiMessageId);
 			}
 
+			// Kind of automatic mail requested by the payload ("unsubscribe").
+			const autoMail = decodedForm.autoMail === "unsubscribe" ? "unsubscribe" : null;
 			const mailerResponse = await mailer.sendEmail(data.to, {
 				from: mailbox.identity.value,
+				cc: data.cc ?? [],
+				bcc: data.bcc ?? [],
 				subject: String(newMessageBody.subject),
 				text: newMessageBody.text ?? "",
 				html: newMessageBody.html ?? "",
 				inReplyTo: inReplyTo ?? "",
 				references: references,
+				extraHeaders: autoMail ? { [AUTO_MAIL_HEADER]: autoMail } : undefined,
 				attachments: attachmentBlobs.map((att) => ({
 					name: att.name,
 					content: att.blob,
@@ -382,6 +494,33 @@ export default defineNitroPlugin(async (nitroApp) => {
 					{ messageId: newMessage.id },
 					{ removeOnComplete: true },
 				);
+				// Automatic mail (unsubscribe): the recipient enters neither the address book nor the
+				// suggestions (the Sent folder copy is filtered by the header in
+				// message-parser-contacts.ts).
+				const skipRecipientStats = !!autoMail;
+				// Recipients join the sender's address book. Never blocking: a failure here must not make
+				// a successful send fail.
+				if (!skipRecipientStats) try {
+					await upsertContactsFromOutgoing({
+						ownerIds: [
+							String(decodedForm.senderUserId ?? ""),
+							mailbox.identity.ownerId,
+						].filter(Boolean),
+						workspaceId: mailbox.mailbox.workspaceId,
+						ownAddresses: [mailbox.identity.value],
+						recipients: [data.to, data.cc],
+					});
+				} catch (err: any) {
+					console.error("[send-mail] outgoing contacts failed:", err?.message ?? err);
+				}
+				// Recipient suggestions (frecency and co-occurrence), To, Cc and Bcc.
+				if (!skipRecipientStats) await ingestRecipientStats({
+					ownerIds: [String(decodedForm.senderUserId ?? ""), newMessage.ownerId].filter(Boolean),
+					messageId: String(parsedMessage.messageId),
+					sentAt: newMessage.date ?? newMessage.createdAt ?? null,
+					ownAddresses: [mailbox.identity.value],
+					recipients: [data.to, data.cc, data.bcc],
+				});
 			} else if (mailerResponse.error) {
 				return {
 					success: false,
@@ -392,91 +531,73 @@ export default defineNitroPlugin(async (nitroApp) => {
 		});
 	};
 
-	const generateMailAttrs = async ({
-										 data,
-										 orig,
-									 }: {
+	// The sending user's "RFC style" option, read from the workspace meta (same layout as the
+	// other per-user options: prefUnreadPanel, prefListPreview).
+	async function rfcStyleEnabled(workspaceId: string, userId: string) {
+		try {
+			const [row] = await db
+				.select({
+					on: sql<boolean>`coalesce((${workspaces.metaData}->'prefRfcStyle'->>${userId}::text)::boolean, false)`,
+				})
+				.from(workspaces)
+				.where(eq(workspaces.id, workspaceId))
+				.limit(1);
+			return Boolean(row?.on);
+		} catch (err: any) {
+			console.error("[send-mail] rfc style lookup failed:", err?.message ?? err);
+			return false;
+		}
+	}
+
+	// Subject, text and HTML of the message to send: the assembly (quote, signature, order) is
+	// in packages/common/src/compose.ts, shared with the web editor.
+	const generateMailAttrs = ({
+		data,
+		orig,
+		signatureHtml,
+		rfcStyle,
+		quoteScope,
+		quoteOverride,
+	}: {
 		data: MailComposeInput;
 		orig: GetOriginalMessageType | null;
+		signatureHtml?: string;
+		rfcStyle: boolean;
+		quoteScope: QuoteScope;
+		quoteOverride: QuoteOverride;
 	}) => {
-		if (!orig) {
-			return {
-				subject: data.subject ?? "(no subject)",
-				text: data.text ?? "",
-				html: data.html ?? "",
-			};
-		}
-		const isReply = data.mode === "reply";
-		const isForward = data.mode === "forward";
-		const hasOrig = Boolean(orig?.message);
-
 		const origMsg = orig?.message ?? null;
-
-		const fromNameStr = hasOrig ? getMessageName(origMsg!, "from") || "" : "";
-		const fromAddrStr = hasOrig
-			? getMessageAddress(origMsg!, "from") || ""
-			: "";
 
 		// Prefer RFC822 Date, then createdAt, else empty
 		const rawDate: Date | null =
-			hasOrig && (origMsg!.date ?? origMsg!.createdAt)
-				? (origMsg!.date ?? origMsg!.createdAt)!
+			origMsg && (origMsg.date ?? origMsg.createdAt)
+				? (origMsg.date ?? origMsg.createdAt)!
 				: null;
 
-		// Human-friendly fallback
-		const origDateLabel = rawDate
-			? new Date(rawDate).toLocaleString(undefined, {
-				year: "numeric",
-				month: "short",
-				day: "2-digit",
-				hour: "2-digit",
-				minute: "2-digit",
-			})
-			: "";
+		// In the users' time zone (MAIL_TIMEZONE), not the container's (UTC).
+		const origDateLabel = formatQuoteDate(rawDate, serverConfig.MAIL_TIMEZONE);
 
-		const origHtml = hasOrig ? origMsg!.html || origMsg!.textAsHtml || "" : "";
-		const origText = hasOrig ? origMsg!.text || "" : "";
-
-		// Subject
-		const baseSubj = (data.subject ?? "").trim();
-		let subject = baseSubj;
-		if (isReply && hasOrig) {
-			const s = (origMsg!.subject ?? "").trim();
-			subject = s.startsWith("Re:") ? s : `Re: ${s || "(no subject)"}`;
-		} else if (isForward && hasOrig) {
-			const s = (origMsg!.subject ?? "").trim();
-			subject = s.startsWith("Fwd:") ? s : `Fwd: ${s || "(no subject)"}`;
-		} else if (!baseSubj) {
-			subject = "(no subject)";
-		}
-
-		// Quoted blocks (only with original)
-		const quotedText = hasOrig
-			? `On ${origDateLabel}, ${fromNameStr} <${fromAddrStr}> wrote:\n${origText}`
-			: "";
-
-		const quotedHtml = hasOrig
-			? `<hr>
-<p>On ${origDateLabel}, ${fromNameStr} &lt;${fromAddrStr}&gt; wrote:</p>
-<blockquote style="border-left:2px solid #ccc;margin:0;padding-left:8px;">
-  ${origHtml || `<pre style="white-space:pre-wrap;margin:0;">${origText}</pre>`}
-</blockquote>`
-			: "";
-
-		// Bodies
-		const text = isReply
-			? `${data.text ?? ""}${hasOrig ? `\n\n${quotedText}` : ""}`
-			: isForward
-				? `${data.text ?? ""}${hasOrig ? `\n\nForwarded message:\n${quotedText}` : ""}`
-				: (data.text ?? "");
-
-		const html = isReply
-			? `${data.html ?? ""}${quotedHtml}`
-			: isForward
-				? `${data.html ?? ""}${hasOrig ? `<p>Forwarded message:</p>${quotedHtml}` : ""}`
-				: (data.html ?? ""); // for "new", don't auto-pull orig html
-
-		return { subject, text, html };
+		return composeMessage({
+			mode: data.mode,
+			subject: data.subject,
+			text: data.text,
+			html: data.html,
+			signatureHtml,
+			rfcStyle,
+			quoteScope,
+			quoteOverride,
+			orig: origMsg
+				? {
+					html: origMsg.html,
+					text: origMsg.text,
+					textAsHtml: origMsg.textAsHtml,
+					subject: origMsg.subject,
+					fromName: getMessageName(origMsg, "from") || "",
+					fromAddress: getMessageAddress(origMsg, "from") || "",
+					dateLabel: origDateLabel,
+				}
+				: null,
+		});
 	};
 
 
@@ -491,6 +612,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 	async function fetchAttachmentBlobs(
 		attachmentsString: string,
+		owner: Parameters<typeof allowedAttachmentKeys>[1],
 	): Promise<AttachmentDownload[]> {
 		let attachments: unknown = [];
 		try {
@@ -503,6 +625,19 @@ export default defineNitroPlugin(async (nitroApp) => {
 		const candidates = list.filter((a: any) => a && a.path);
 
 		if (candidates.length === 0) return [];
+
+		// Access control: only keys of the sender or attachments of their workspace; any other
+		// key makes the send fail (otherwise any object in the bucket could go out as an attachment).
+		const allowed = await allowedAttachmentKeys(
+			candidates.map((a: any) => String(a.path)),
+			owner,
+		);
+		const refused = candidates.filter((a: any) => !allowed.has(String(a.path)));
+		if (refused.length) {
+			throw new Error(
+				`Attachment not allowed: ${refused.map((a: any) => String(a.filenameOriginal ?? a.path)).join(", ")}`,
+			);
+		}
 
 		try {
 			const downloads = await Promise.all(

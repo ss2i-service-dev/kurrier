@@ -42,6 +42,20 @@ export const getMessageName = (
 	return value.value?.[0]?.name ?? null;
 };
 
+/**
+ * Name handed to an initials avatar: only letters and digits are kept, so that
+ * "Administrator (@Root)" gives "AR" and not "A(". Falls back to the raw value
+ * when nothing alphanumeric is left.
+ */
+export const avatarName = (name: string | null | undefined): string => {
+	const raw = (name ?? "").trim();
+	const cleaned = raw
+		.replace(new RegExp("[^\\p{L}\\p{N}\\s]+", "gu"), " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	return cleaned || raw;
+};
+
 export const getMessageAddress = (
 	message: MessageEntity,
 	field: "from" | "to" | "cc" | "bcc",
@@ -100,3 +114,23 @@ export const DEFAULT_COLORS_SWATCH = [
 ];
 
 export const PAGE_SIZE = 50;
+
+// Address object (to/cc/bcc column) -> list of "Name <address>" or "address" entries,
+// to prefill a draft editor and to send it. No server dependency.
+export function addressObjToList(
+	obj:
+		| {
+				value?: Array<{ address?: string | null; name?: string | null }> | null;
+		  }
+		| null
+		| undefined,
+): string[] {
+	return (obj?.value ?? [])
+		.map((a) => {
+			const address = String(a?.address ?? "").trim();
+			if (!address) return "";
+			const name = String(a?.name ?? "").trim();
+			return name ? `${name} <${address}>` : address;
+		})
+		.filter(Boolean);
+}

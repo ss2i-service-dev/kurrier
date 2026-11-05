@@ -9,6 +9,17 @@ import Loading from "@/app/loading";
 import IdentityMailboxesListWrapper from "@/components/dashboard/workspaces/identity-mailboxes-list-wrapper";
 import NavUserWrapper from "@/components/ui/dashboards/workspace/nav-user-wrapper";
 import {fetchIdentityMailboxList} from "@/lib/actions/mailbox";
+import {listPreviewMode} from "@/lib/actions/list-preview";
+import {ListPreviewProvider} from "@/components/mailbox/default/list-preview-context";
+import {rfcStyleEnabled} from "@/lib/actions/rfc-style";
+import {ComposeStyleProvider} from "@/components/mailbox/default/compose-style-context";
+import DraftBackupRecovery from "@/components/mailbox/default/draft-backup-recovery";
+import { isModernUi } from "@/lib/actions/interface-pref";
+import { isSignedIn } from "@/lib/actions/auth";
+import { fetchWorkspaces } from "@/lib/actions/workspace";
+import KMailShell from "@/components/k/mail-shell";
+import KCompose from "@/components/k/compose";
+import KSidebarNavWrapper from "@/components/k/sidebar-nav-wrapper";
 
 export default async function DashboardLayout({
 	children
@@ -18,9 +29,53 @@ export default async function DashboardLayout({
 	const publicConfig = getPublicEnv();
 	const workspacePublicId = await getWorkspacePublicId()
 	const identityMailboxes = await fetchIdentityMailboxList();
+	// Content of the list rows (subject only, or subject and snippet).
+	const previewMode = await listPreviewMode();
+	// RFC style on send (preview of the quote in the reply editor).
+	const rfcStyle = await rfcStyleEnabled();
+
+	// Modern interface (per-user option, Settings > General > Interface).
+	if (await isModernUi()) {
+		const [user, userWorkspaces] = await Promise.all([isSignedIn(), fetchWorkspaces()]);
+		return (
+			<ComposeStyleProvider rfcStyle={rfcStyle}>
+				<ListPreviewProvider mode={previewMode}>
+					<KMailShell
+						workspacePublicId={workspacePublicId}
+						userEmail={user?.email ?? null}
+						identities={identityMailboxes.map(({ identity }) => ({
+							publicId: identity.publicId,
+							value: identity.value,
+							displayName: identity.displayName,
+						}))}
+						workspaces={userWorkspaces.map(({ workspaces }) => ({
+							publicId: workspaces.publicId,
+							id: workspaces.id,
+							name: workspaces.name,
+						}))}
+						compose={
+							<Suspense fallback={<div className="h-10 rounded-k bg-k-hover" />}>
+								<KCompose publicConfig={publicConfig} identityMailboxes={identityMailboxes} />
+							</Suspense>
+						}
+						nav={
+							<Suspense fallback={null}>
+								<KSidebarNavWrapper />
+							</Suspense>
+						}
+					>
+						{children}
+					</KMailShell>
+					{/* Recovery of drafts the server did not receive */}
+					<DraftBackupRecovery />
+				</ListPreviewProvider>
+			</ComposeStyleProvider>
+		);
+	}
 
 	return (
-		<>
+		<ComposeStyleProvider rfcStyle={rfcStyle}>
+			<DraftBackupRecovery />
 			<AppSidebar
 				workspacePublicId={workspacePublicId}
 				sidebarTopContent={
@@ -37,7 +92,7 @@ export default async function DashboardLayout({
 					</Suspense>
 				}
 			/>
-			<SidebarInset>{children}</SidebarInset>
-		</>
+			<SidebarInset><ListPreviewProvider mode={previewMode}>{children}</ListPreviewProvider></SidebarInset>
+		</ComposeStyleProvider>
 	);
 }

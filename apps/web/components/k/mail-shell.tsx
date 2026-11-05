@@ -5,9 +5,10 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
-import { Drawer, Menu } from "@mantine/core";
+import { Drawer, Menu, Tooltip } from "@mantine/core";
 import {
 	Check,
+	CalendarDays,
 	ChevronsUpDown,
 	Contact,
 	HardDrive,
@@ -122,6 +123,7 @@ function SidebarContent({
 
 	const apps = [
 		{ href: `${base}/mail`, label: "Messagerie", icon: Mail, match: "/mail" },
+		{ href: `${base}/agenda`, label: "Agenda", icon: CalendarDays, match: "/agenda" },
 		{ href: `${base}/contacts`, label: "Contacts", icon: Contact, match: "/contacts" },
 		{ href: `${base}/drive`, label: "Drive", icon: HardDrive, match: "/drive" },
 		{ href: `${base}/platform/overview`, label: "Plateforme", icon: LayoutGrid, match: "/platform" },
@@ -225,22 +227,25 @@ function SidebarContent({
 
 			<div className="k-scroll -mx-1 min-h-0 flex-1 overflow-y-auto px-1">{nav}</div>
 
-			{/* Autres espaces */}
+			{/* Autres espaces : icones seules (5 espaces dans 248 px), nom en infobulle et
+			    sous l'icone de l'espace courant. */}
 			<div className="mt-3 flex items-center gap-1 border-t border-k-line pt-3">
 				{apps.map(({ href, label, icon: Icon, match }) => {
 					const active = pathname.includes(match);
 					return (
-						<Link
-							key={href}
-							href={href}
-							title={label}
-							className={`flex flex-1 flex-col items-center gap-0.5 rounded-k-sm py-1.5 text-[11px] transition-colors ${
-								active ? "bg-k-surface text-k-ink shadow-k-pane" : "text-k-ink-3 hover:bg-k-hover hover:text-k-ink"
-							}`}
-						>
-							<Icon size={16} />
-							{label}
-						</Link>
+						<Tooltip key={href} label={label} openDelay={250} withArrow>
+							<Link
+								href={href}
+								aria-label={label}
+								aria-current={active ? "page" : undefined}
+								className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-k-sm py-1.5 text-[10.5px] leading-tight transition-colors ${
+									active ? "bg-k-surface text-k-ink shadow-k-pane" : "text-k-ink-3 hover:bg-k-hover hover:text-k-ink"
+								}`}
+							>
+								<Icon size={17} />
+								{active && <span className="max-w-full truncate px-0.5">{label}</span>}
+							</Link>
+						</Tooltip>
 					);
 				})}
 			</div>

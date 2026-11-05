@@ -30,13 +30,22 @@ export function ProposalsStep({
 	mailbox,
 	nouvelle,
 	onChange,
+	activeKey = null,
+	onActivate,
+	planning = false,
 }: {
 	rows: AgendaRow[];
 	mailbox: string;
 	nouvelle: boolean;
 	onChange: (key: number, patch: Partial<AgendaRow>) => void;
+	/** Proposition placee par un clic dans l'agenda a cote (fenetre elargie). */
+	activeKey?: number | null;
+	onActivate?: (key: number) => void;
+	/** Agenda Outlook affiche a cote : la liste prend toute la hauteur de la fenetre. */
+	planning?: boolean;
 }) {
 	const { muted, card } = styles(nouvelle);
+	const ring = nouvelle ? "ring-2 ring-k-accent" : "ring-2 ring-primary";
 	// Journee entiere <-> horaire : on garde les jours, 09:00-10:00 par defaut a corriger ; le
 	// rappel repart a « aucun » (les choix ne sont pas les memes).
 	const toggleAllDay = (r: AgendaRow, allDay: boolean) =>
@@ -55,10 +64,16 @@ export function ProposalsStep({
 		<>
 			<div className={`text-xs ${muted}`}>
 				Propositions à vérifier : rien n'est créé avant votre confirmation. Agenda Outlook de {mailbox}.
+				{planning && " Cliquez sur l'agenda pour choisir le créneau de la proposition encadrée."}
 			</div>
-			<ul className="max-h-[60vh] space-y-2 overflow-y-auto">
+			<ul className={`${planning ? "min-h-0 flex-1" : "max-h-[60vh]"} space-y-2 overflow-y-auto p-0.5`}>
 				{rows.map((r) => (
-					<li key={r.key} className={`${card} space-y-2 ${r.checked ? "" : "opacity-60"}`}>
+					<li
+						key={r.key}
+						className={`${card} space-y-2 ${r.checked ? "" : "opacity-60"} ${onActivate && r.key === activeKey && r.checked ? ring : ""}`}
+						onFocusCapture={onActivate ? () => onActivate(r.key) : undefined}
+						onMouseDown={onActivate ? () => onActivate(r.key) : undefined}
+					>
 						<div className="flex items-center gap-2">
 							<Checkbox
 								checked={r.checked}

@@ -1,0 +1,436 @@
+"use client";
+// ss2i : grille horaire de l'agenda Outlook, facon Notion Calendar (page Agenda et fenetre
+// « Ajouter a l'agenda »). Une colonne par jour (1 a 14), journees entieres en tete, heures
+// en dessous dans une zone defilante, trait rouge de l'heure courante. Couleur de l'agenda
+// d'origine sur chaque evenement. A la souris :
+// - clic sur un creneau libre : saisie a ce quart d'heure ; glisser sur un creneau libre :
+//   saisie sur la plage tracee ;
+// - glisser un evenement modifiable : deplacement (heure et jour), sa poignee du bas :
+//   duree ; un simple clic : detail.
+// Les propositions pas encore creees (ghost) sont en pointilles, celle en cours d'edition
+// (active) en plein. Rendu des deux interfaces (classes k-* en Outlook).
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { addDays } from "@common/thread-agenda";
+import {
+	type CalendarEvent,
+	JOURS_COURTS,
+	allDayCovers,
+	hhmm,
+	layoutDay,
+	minutesNowInParis,
+	slotFromOffset,
+	todayInParis,
+	weekday,
+} from "@common/outlook-calendar";
+
+export type MoveTarget = { allDay: boolean; start: string; end: string };
+
+export type CalendarGridProps = {
+	days: string[];
+	events: CalendarEvent[];
+	nouvelle: boolean;
+	/** Hauteur d'une heure (px). */
+	hourHeight?: number;
+	/** Creneau horaire libre clique : jour et minutes depuis minuit (quart d'heure). */
+	onSlot?: (date: string, minutes: number) => void;
+	/** Plage tracee a la souris sur un creneau libre. */
+	onRange?: (date: string, startMinutes: number, endMinutes: number) => void;
+	/** Case « journee entiere » d'un jour cliquee. */
+	onAllDaySlot?: (date: string) => void;
+	onEventClick?: (event: CalendarEvent, anchor: DOMRect) => void;
+	/** Evenement modifiable depose a un autre horaire. */
+	onMove?: (event: CalendarEvent, to: MoveTarget) => void;
+	/** Heure montree en haut a l'ouverture (minutes), 7 h 30 par defaut. */
+	scrollTo?: number;
+	/**
+	 * Cle de la periode affichee (page Agenda) : a chaque nouvelle cle, l'heure `scrollTo` est
+	 * placee au tiers haut de la grille, puis on ne bouge plus (l'heure qui avance ne fait pas
+	 * sauter le defilement de l'utilisateur).
+	 */
+	scrollKey?: string;
+	loading?: boolean;
+	className?: string;
+	/** Fuseau d'affichage (ligne de l'heure courante). */
+	tz?: string;
+};
+
+const theme = (n: boolean) => ({
+	line: n ? "border-k-line" : "border-border",
+	muted: n ? "text-k-ink-3" : "text-muted-foreground",
+	ink: n ? "text-k-ink" : "text-foreground",
+	weekend: n ? "bg-k-surface-2" : "bg-muted/40",
+	todayBadge: n ? "bg-k-accent text-white" : "bg-primary text-primary-foreground",
+	hover: n ? "hover:bg-k-hover" : "hover:bg-muted/60",
+	event: n ? "bg-k-accent-soft text-k-accent-soft-ink border-k-accent" : "bg-primary/15 text-foreground border-primary",
+	free: n ? "bg-k-surface text-k-ink-2 border-k-line-strong" : "bg-background text-muted-foreground border-border",
+	ghost: n ? "border-k-accent text-k-accent bg-k-surface/80" : "border-primary text-primary bg-background/80",
+	active: n ? "bg-k-accent text-white border-k-accent" : "bg-primary text-primary-foreground border-primary",
+	draft: n ? "bg-k-accent/25 border-k-accent" : "bg-primary/25 border-primary",
+});
+
+const STRIPES = "[background-image:repeating-linear-gradient(135deg,transparent_0_6px,rgba(255,255,255,.4)_6px_9px)]";
+
+function eventClass(e: CalendarEvent, t: ReturnType<typeof theme>) {
+	if (e.active) return `${t.active} border shadow-sm`;
+	if (e.ghost) return `${t.ghost} border border-dashed`;
+	const declined = e.responseStatus === "declined" ? "line-through opacity-60" : "";
+	const pending = e.responseStatus === "notResponded" || e.responseStatus === "none" ? "border-dashed" : "";
+	if (e.color) {
+		// Couleur de l'agenda : fond leger et liseré plein ; invitation sans reponse en pointilles.
+		return `border border-l-[3px] text-inherit ${e.showAs === "tentative" ? STRIPES : ""} ${e.showAs === "free" ? "opacity-70" : ""} ${!e.isOrganizer ? pending : ""} ${declined}`;
+	}
+	if (e.showAs === "free") return `${t.free} border ${declined}`;
+	if (e.showAs === "tentative") return `${t.event} border-l-[3px] opacity-80 ${STRIPES} ${declined}`;
+	return `${t.event} border-l-[3px] ${declined}`;
+}
+
+/** Couleur d'agenda en style (fond, bordure) ; rien pour les propositions. */
+const colorStyle = (e: CalendarEvent): React.CSSProperties =>
+	e.color && !e.ghost && !e.active
+		? {
+				background: `color-mix(in srgb, ${e.color} ${e.showAs === "free" ? 8 : 18}%, var(--k-surface, white))`,
+				borderColor: `color-mix(in srgb, ${e.color} 45%, transparent)`,
+				borderLeftColor: e.color,
+			}
+		: {};
+
+/** Pastille « un participant propose un autre horaire » (reunion que j'organise). */
+function ProposalBadge() {
+	return (
+		<span
+			title="Un participant propose un autre horaire"
+			className="mr-1 inline-flex h-3.5 min-w-3.5 -translate-y-px items-center justify-center rounded-full bg-amber-500 px-1 align-middle text-[9px] font-bold text-white"
+		>
+			!
+		</span>
+	);
+}
+
+const tooltip = (e: CalendarEvent) =>
+	[e.proposals?.length ? `Nouvel horaire proposé par ${e.proposals.map((p) => p.name ?? p.address).join(", ")}` : "", e.title, e.allDay ? "Journée entière" : `${e.start.slice(11, 16)} – ${e.end.slice(11, 16)}`, e.location, e.organizer && `Organisateur : ${e.organizer}`]
+		.filter(Boolean)
+		.join("\n");
+
+function useNow(tz?: string) {
+	const read = () => ({ day: todayInParis(new Date(), tz), min: minutesNowInParis(new Date(), tz) });
+	const [now, setNow] = useState(read);
+	useEffect(() => {
+		setNow(read());
+		const t = setInterval(() => setNow(read()), 60_000);
+		return () => clearInterval(t);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [tz]);
+	return now;
+}
+
+type Drag =
+	| { kind: "move" | "resize"; event: CalendarEvent; x: number; y: number; day: string; top: number; bottom: number; moved: boolean; preview: { day: string; top: number; bottom: number } }
+	| { kind: "create"; day: string; y0: number; from: number; to: number; moved: boolean };
+
+const snap = (m: number) => Math.round(m / 15) * 15;
+const DAY_END = 24 * 60;
+
+export default function CalendarGrid({
+	days,
+	events,
+	nouvelle,
+	hourHeight = 44,
+	onSlot,
+	onRange,
+	onAllDaySlot,
+	onEventClick,
+	onMove,
+	scrollTo = 7 * 60 + 30,
+	scrollKey,
+	loading,
+	className = "",
+	tz,
+}: CalendarGridProps) {
+	const t = theme(nouvelle);
+	const now = useNow(tz);
+	const scroller = useRef<HTMLDivElement>(null);
+	const columns = useRef(new Map<string, HTMLDivElement>());
+	const [drag, setDrag] = useState<Drag | null>(null);
+	const dragRef = useRef<Drag | null>(null);
+	dragRef.current = drag;
+	const swallowClick = useRef(false);
+	const many = days.length > 7;
+
+	// Position de defilement : a l'ouverture et quand l'heure demandee change (proposition deplacee hors champ).
+	const lastKey = useRef<string | undefined>(undefined);
+	useLayoutEffect(() => {
+		const el = scroller.current;
+		if (!el) return;
+		const y = (scrollTo / 60) * hourHeight;
+		if (scrollKey !== undefined) {
+			if (lastKey.current === scrollKey) return;
+			lastKey.current = scrollKey;
+			el.scrollTop = Math.max(0, y - el.clientHeight / 3);
+			return;
+		}
+		if (y < el.scrollTop || y > el.scrollTop + el.clientHeight - hourHeight) el.scrollTop = Math.max(0, y - hourHeight / 2);
+	}, [scrollTo, hourHeight, scrollKey]);
+
+	const dayAt = (x: number): string | null => {
+		for (const [d, el] of columns.current) {
+			const r = el.getBoundingClientRect();
+			if (x >= r.left && x < r.right) return d;
+		}
+		return null;
+	};
+
+	// Suivi de la souris pendant un glisser (fenetre entiere : on peut sortir de la colonne).
+	useEffect(() => {
+		if (!drag) return;
+		const move = (ev: PointerEvent) => {
+			const d = dragRef.current;
+			if (!d) return;
+			if (d.kind === "create") {
+				const col = columns.current.get(d.day);
+				if (!col) return;
+				const m = Math.max(0, Math.min(DAY_END, snap(((ev.clientY - col.getBoundingClientRect().top) / hourHeight) * 60)));
+				setDrag({ ...d, to: m, moved: d.moved || Math.abs(ev.clientY - d.y0) > 4 });
+				return;
+			}
+			const dm = snap(((ev.clientY - d.y) / hourHeight) * 60);
+			const moved = d.moved || Math.abs(ev.clientY - d.y) > 4 || Math.abs(ev.clientX - d.x) > 4;
+			if (d.kind === "resize") {
+				const bottom = Math.max(d.top + 15, Math.min(DAY_END, d.bottom + dm));
+				setDrag({ ...d, moved, preview: { day: d.day, top: d.top, bottom } });
+				return;
+			}
+			const len = d.bottom - d.top;
+			const top = Math.max(0, Math.min(DAY_END - len, d.top + dm));
+			setDrag({ ...d, moved, preview: { day: dayAt(ev.clientX) ?? d.preview.day, top, bottom: top + len } });
+		};
+		const up = () => {
+			const d = dragRef.current;
+			setDrag(null);
+			if (!d) return;
+			if (d.kind === "create") {
+				const a = Math.min(d.from, d.to);
+				const b = Math.max(d.from, d.to);
+				if (d.moved && b - a >= 15 && onRange) onRange(d.day, a, b);
+				else onSlot?.(d.day, Math.min(d.from, DAY_END - 15));
+				return;
+			}
+			if (!d.moved) return; // simple clic : le onClick de l'evenement ouvre le detail
+			swallowClick.current = true;
+			setTimeout(() => (swallowClick.current = false), 0);
+			const p = d.preview;
+			if (p.day === d.day && p.top === d.top && p.bottom === d.bottom) return;
+			onMove?.(d.event, { allDay: false, start: `${p.day}T${hhmm(p.top)}`, end: p.bottom >= DAY_END ? `${addDays(p.day, 1)}T00:00` : `${p.day}T${hhmm(p.bottom)}` });
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up, { once: true });
+		return () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [drag !== null]);
+
+	const allDay = events.filter((e) => e.allDay);
+	const hasAllDay = days.some((d) => allDay.some((e) => allDayCovers(e, d)));
+	// Week-end plus etroit : 14 colonnes restent lisibles.
+	const grow = (d: string) => (many && (weekday(d) === 0 || weekday(d) === 6) ? 0.55 : 1);
+
+	const clickEvent = (e: CalendarEvent) => (ev: React.MouseEvent) => {
+		ev.stopPropagation();
+		if (swallowClick.current) return;
+		onEventClick?.(e, (ev.currentTarget as HTMLElement).getBoundingClientRect());
+	};
+
+	const startDrag = (e: CalendarEvent, d: string, top: number, bottom: number, kind: "move" | "resize") => (ev: React.PointerEvent) => {
+		// Jamais jusqu'a la colonne : un appui sur un evenement ne trace pas de nouvelle plage.
+		ev.stopPropagation();
+		if (ev.pointerType !== "mouse" || ev.button !== 0 || !onMove || !e.editable || e.ghost) return;
+		// Un evenement de plusieurs jours ne se deplace qu'entier depuis son premier jour.
+		if (e.start.slice(0, 10) !== e.end.slice(0, 10) && !(e.end.slice(0, 10) === addDays(e.start.slice(0, 10), 1) && e.end.endsWith("T00:00"))) return;
+		setDrag({ kind, event: e, x: ev.clientX, y: ev.clientY, day: d, top, bottom, moved: false, preview: { day: d, top, bottom } });
+	};
+
+	// Evenements avec l'apercu du glisser en cours.
+	const shown =
+		drag && drag.kind !== "create" && drag.moved
+			? events.map((e) =>
+					e.id === drag.event.id
+						? {
+								...e,
+								start: `${drag.preview.day}T${hhmm(drag.preview.top)}`,
+								end: drag.preview.bottom >= DAY_END ? `${addDays(drag.preview.day, 1)}T00:00` : `${drag.preview.day}T${hhmm(drag.preview.bottom)}`,
+								active: true,
+							}
+						: e,
+				)
+			: events;
+
+	const gutter = "w-12 shrink-0";
+
+	return (
+		<div className={`flex min-h-0 flex-col text-[12px] ${t.ink} ${drag?.moved ? "select-none" : ""} ${className}`} aria-busy={loading || undefined}>
+			{/* En-tetes des jours */}
+			<div className={`flex overflow-y-hidden border-b [scrollbar-gutter:stable] ${t.line}`}>
+				<div className={gutter} />
+				{days.map((d) => {
+					const today = d === now.day;
+					return (
+						<div key={d} className={`min-w-0 px-1 py-1.5 text-center ${t.muted}`} style={{ flex: `${grow(d)} 1 0` }}>
+							<span className="block truncate text-[11px] uppercase tracking-wide">{JOURS_COURTS[weekday(d)]}</span>
+							<span className={`mt-0.5 inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-[13px] font-semibold ${today ? t.todayBadge : t.ink}`}>
+								{Number(d.slice(8, 10))}
+							</span>
+						</div>
+					);
+				})}
+			</div>
+
+			{/* Journees entieres */}
+			{(hasAllDay || onAllDaySlot) && (
+				<div className={`flex overflow-y-hidden border-b [scrollbar-gutter:stable] ${t.line}`}>
+					<div className={`${gutter} py-1 pr-1 text-right text-[10px] ${t.muted}`}>Jour</div>
+					{days.map((d) => (
+						// biome-ignore lint/a11y/noStaticElementInteractions: case cliquable de la grille, le clavier passe par « Nouvel evenement »
+						// biome-ignore lint/a11y/useKeyWithClickEvents: idem
+						<div
+							key={d}
+							className={`min-w-0 space-y-px border-l p-0.5 ${t.line} ${onAllDaySlot ? `cursor-pointer ${t.hover}` : ""}`}
+							style={{ flex: `${grow(d)} 1 0`, minHeight: 22 }}
+							onClick={onAllDaySlot ? () => onAllDaySlot(d) : undefined}
+						>
+							{allDay
+								.filter((e) => allDayCovers(e, d))
+								.map((e) => (
+									<button
+										type="button"
+										key={`${e.id}-${d}`}
+										title={tooltip(e)}
+										onClick={clickEvent(e)}
+										style={colorStyle(e)}
+										className={`block w-full truncate rounded-[4px] px-1 py-px text-left text-[11px] leading-4 ${eventClass(e, t)}`}
+									>
+										{e.title}
+									</button>
+								))}
+						</div>
+					))}
+				</div>
+			)}
+
+			{/* Heures */}
+			<div ref={scroller} className="k-scroll relative min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+				<div className="relative flex" style={{ height: 24 * hourHeight }}>
+					<div className={`${gutter} relative`}>
+						{Array.from({ length: 23 }, (_, i) => i + 1).map((h) => (
+							<div key={h} className={`absolute right-1.5 -translate-y-1/2 text-[10.5px] ${t.muted}`} style={{ top: h * hourHeight }}>
+								{String(h).padStart(2, "0")}:00
+							</div>
+						))}
+					</div>
+					{days.map((d) => {
+						const wk = weekday(d) === 0 || weekday(d) === 6;
+						const placed = layoutDay(shown, d);
+						return (
+							// biome-ignore lint/a11y/noStaticElementInteractions: colonne de la grille (souris), le clavier passe par « Nouvel evenement »
+							<div
+								key={d}
+								ref={(el) => {
+									if (el) columns.current.set(d, el);
+									else columns.current.delete(d);
+								}}
+								className={`relative min-w-0 border-l ${t.line} ${wk ? t.weekend : ""} ${onSlot ? "cursor-pointer" : ""}`}
+								style={{ flex: `${grow(d)} 1 0` }}
+								onPointerDown={
+									onSlot
+										? (ev) => {
+												if (ev.button !== 0) return;
+												const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+												const m = slotFromOffset(ev.clientY - rect.top, hourHeight);
+												if (ev.pointerType !== "mouse" || !onRange) {
+													onSlot(d, m);
+													return;
+												}
+												ev.preventDefault();
+												setDrag({ kind: "create", day: d, y0: ev.clientY, from: m, to: m + 15, moved: false });
+											}
+										: undefined
+								}
+							>
+								{/* lignes des heures et demi-heures */}
+								{Array.from({ length: 24 }, (_, h) => (
+									<React.Fragment key={`h${h}`}>
+										<div className={`pointer-events-none absolute inset-x-0 border-t ${t.line}`} style={{ top: h * hourHeight }} />
+										<div className={`pointer-events-none absolute inset-x-0 border-t border-dotted opacity-50 ${t.line}`} style={{ top: h * hourHeight + hourHeight / 2 }} />
+									</React.Fragment>
+								))}
+								{drag?.kind === "create" && drag.day === d && (
+									<div
+										className={`pointer-events-none absolute inset-x-0.5 z-20 rounded-[5px] border px-1 text-[11px] font-medium ${t.draft}`}
+										style={{
+											top: (Math.min(drag.from, drag.to) / 60) * hourHeight,
+											height: Math.max(((Math.abs(drag.to - drag.from) || 15) / 60) * hourHeight, 12),
+										}}
+									>
+										{hhmm(Math.min(drag.from, drag.to))} – {hhmm(Math.max(drag.from, drag.to, Math.min(drag.from, drag.to) + 15))}
+									</div>
+								)}
+								{placed.map((p) => {
+									const h = ((p.bottom - p.top) / 60) * hourHeight;
+									const short = h < 30;
+									const draggable = !!onMove && !!p.event.editable && !p.event.ghost;
+									return (
+										<button
+											type="button"
+											key={`${p.event.id}-${d}`}
+											title={tooltip(p.event)}
+											onClick={clickEvent(p.event)}
+											onPointerDown={startDrag(p.event, d, p.top, p.bottom, "move")}
+											className={`group absolute overflow-hidden rounded-[5px] px-1 text-left leading-[1.15] ${eventClass(p.event, t)} ${
+												p.event.active ? "z-20" : p.event.ghost ? "z-10" : ""
+											} ${draggable ? "cursor-grab active:cursor-grabbing" : ""}`}
+											style={{
+												top: (p.top / 60) * hourHeight + 1,
+												height: Math.max(h - 2, 14),
+												left: `calc(${(p.col / p.cols) * 100}% + 1px)`,
+												width: `calc(${100 / p.cols}% - 3px)`,
+												...colorStyle(p.event),
+											}}
+										>
+											<span className={`block truncate font-medium ${short ? "text-[10.5px]" : "text-[11.5px]"}`}>
+												{!!p.event.proposals?.length && <ProposalBadge />}
+												{short ? `${hhmm(p.top)} ${p.event.title}` : p.event.title}
+											</span>
+											{!short && h >= 44 && !!p.event.proposals?.length && (
+												<span className="block truncate text-[10px] font-semibold text-amber-700 dark:text-amber-400">Nouvel horaire proposé</span>
+											)}
+											{!short && (
+												<span className="block truncate text-[10.5px] opacity-80">
+													{hhmm(p.top)} – {hhmm(p.bottom)}
+													{p.event.location && !many ? ` · ${p.event.location}` : ""}
+												</span>
+											)}
+											{draggable && (
+												<span
+													aria-hidden
+													onPointerDown={startDrag(p.event, d, p.top, p.bottom, "resize")}
+													className="absolute inset-x-0 bottom-0 h-1.5 cursor-ns-resize opacity-0 group-hover:opacity-100"
+												/>
+											)}
+										</button>
+									);
+								})}
+								{d === now.day && (
+									<div className="pointer-events-none absolute inset-x-0 z-30" style={{ top: (now.min / 60) * hourHeight }}>
+										<div className="relative border-t-2 border-red-500">
+											<span className="absolute -left-1 -top-[5px] h-2 w-2 rounded-full bg-red-500" />
+										</div>
+									</div>
+								)}
+							</div>
+						);
+					})}
+				</div>
+			</div>
+		</div>
+	);
+}

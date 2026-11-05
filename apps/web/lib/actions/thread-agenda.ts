@@ -21,6 +21,7 @@ import {
 } from "@common/thread-agenda";
 import { getWorkspacePublicId, rlsClient } from "@/lib/actions/clients";
 import { type CopyAddress, fetchMessagesForCopy } from "@/lib/actions/mail-copy";
+import { demoCreate, demoProposals, outlookDemo } from "@/lib/outlook-demo";
 
 export type AgendaAnalysis =
 	| { ok: true; mailbox: string; events: AgendaEvent[] }
@@ -91,6 +92,7 @@ const addressLabel = (list: CopyAddress[]) =>
  * qui manque a la configuration).
  */
 export async function agendaAvailable(identityPublicId: string): Promise<boolean> {
+	if (outlookDemo()) return true;
 	try {
 		const rls = await rlsClient();
 		const [ident] = await rls((tx) =>
@@ -117,6 +119,10 @@ export async function analyzeThreadForAgenda(input: {
 	/** Ce que l'utilisateur veut creer, quand le fil ne donne pas (ou pas seul) l'evenement. */
 	request?: string;
 }): Promise<AgendaAnalysis> {
+	if (outlookDemo()) {
+		await new Promise((r) => setTimeout(r, 600));
+		return { ok: true, mailbox: "agenda de démonstration", events: demoProposals(input.request) };
+	}
 	try {
 		const { address } = await threadMailbox(input.identityPublicId, input.threadId);
 		const cfg = agendaConfig(address);
@@ -141,6 +147,15 @@ export async function addThreadEventsToAgenda(input: {
 	identityPublicId: string;
 	events: AgendaEvent[];
 }): Promise<AgendaAddResult> {
+	if (outlookDemo()) {
+		const results = (Array.isArray(input.events) ? input.events : []).map((raw) => {
+			const n = normalizeAgendaEvent(raw);
+			if ("error" in n) return { ok: false, error: n.error };
+			demoCreate(n.event);
+			return { ok: true };
+		});
+		return { ok: true, mailbox: "agenda de démonstration", results };
+	}
 	try {
 		const { address, slugs } = await threadMailbox(input.identityPublicId, input.threadId);
 		const cfg = agendaConfig(address);

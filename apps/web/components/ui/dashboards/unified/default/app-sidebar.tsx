@@ -50,6 +50,13 @@ export function AppSidebar({ ...props }: UnifiedSidebarProps) {
 				icon: Inbox,
 				isActive: true,
 			},
+			// ss2i : agenda Outlook de l'utilisateur (Microsoft Graph), facon Notion Calendar.
+			{
+				title: "Agenda",
+				url: `/w/${workspacePublicId}/dashboard/agenda`,
+				icon: Calendar,
+				isActive: true,
+			},
 			{
 				title: "Contacts",
 				url: `/w/${workspacePublicId}/dashboard/contacts`,
@@ -75,7 +82,7 @@ export function AppSidebar({ ...props }: UnifiedSidebarProps) {
 	const isOnMail = pathName?.includes("/mail");
 	const isOnPlatform = pathName?.includes("/platform");
 	const isOnContacts = pathName?.includes("/contacts");
-	const isOnCalendar = pathName?.includes("/calendar");
+	const isOnCalendar = pathName?.includes("/calendar") || pathName?.includes("/agenda");
 	const isOnDrive = pathName?.includes("/drive");
 
 	type SidebarSection = "mail" | "contacts" | "platform" | "calendar" | "drive";
@@ -103,7 +110,7 @@ export function AppSidebar({ ...props }: UnifiedSidebarProps) {
 		}
 		if (section === "calendar") {
 			return (
-				data.navMain.find((i) => i.url.includes("/calendar")) ?? data.navMain[0]
+				data.navMain.find((i) => i.url.includes("/agenda")) ?? data.navMain[0]
 			);
 		}
 		if (section === "drive") {
@@ -122,7 +129,7 @@ export function AppSidebar({ ...props }: UnifiedSidebarProps) {
 			);
 		} else if (section === "calendar") {
 			setActiveItem(
-				data.navMain.find((i) => i.url.includes("/calendar")) ??
+				data.navMain.find((i) => i.url.includes("/agenda")) ??
 					data.navMain[0],
 			);
 		} else if (section === "contacts") {

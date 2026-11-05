@@ -48,6 +48,7 @@ import {
 	graphZoned,
 	listReminders,
 	toEventDetail,
+	MAILBOX_CONCURRENCY,
 } from "../../../packages/common/src/outlook-graph";
 
 /** Faux Graph : jeton, puis reponses par methode + chemin ; garde chaque appel. */
@@ -615,6 +616,35 @@ const ev = (id: string, start: string, end: string, extra: Partial<CalendarEvent
 		// apostrophe doublee dans le filtre OData
 		assert.ok(calls.some((c) => c.path === "/onlineMeetings"));
 		await assert.rejects(getTeamsOptions(cfg, "hugo@x.fr", "https://evil.example/x"), AgendaError);
+	});
+
+	await test("Graph : au plus 3 appels simultanes par boite (limite d'Exchange), 429 rejoue apres Retry-After", async () => {
+		let active = 0;
+		let peak = 0;
+		let calls = 0;
+		let throttled = 0;
+		const fetchImpl = (async (url: string) => {
+			if (url.startsWith("https://login.microsoftonline.com/")) return new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }), { status: 200 });
+			const n = ++calls;
+			active++;
+			peak = Math.max(peak, active);
+			await new Promise((r) => setTimeout(r, 15));
+			active--;
+			// le premier appel est refuse une fois, comme Exchange quand trop d'appels arrivent
+			if (n === 1) {
+				throttled++;
+				return new Response(JSON.stringify({ error: { code: "ApplicationThrottled" } }), { status: 429, headers: { "retry-after": "1" } });
+			}
+			return new Response(JSON.stringify({ value: [] }), { status: 200 });
+		}) as typeof fetch;
+		const cfg = { tenant: "t-limit", clientId: "c", clientSecret: "s", fetchImpl };
+		const t0 = Date.now();
+		const lists = await Promise.all(Array.from({ length: 8 }, () => listCalendarEvents(cfg, "hugo@x.fr", undefined, "2026-11-02", "2026-11-16")));
+		assert.equal(lists.length, 8);
+		assert.ok(peak <= MAILBOX_CONCURRENCY, `pic de ${peak} appels simultanes`);
+		assert.equal(throttled, 1);
+		assert.equal(calls, 9, "8 lectures + 1 rejouee");
+		assert.ok(Date.now() - t0 >= 1000, "attente du Retry-After");
 	});
 
 	await test("câblage : entrée Agenda dans les deux interfaces, panneau dans « Ajouter à l'agenda », action serveur sans export interne", () => {

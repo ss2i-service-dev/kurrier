@@ -328,17 +328,56 @@ async function graph(cfg: GraphConfig, mailbox: string, method: string, path: st
 	return graphUrl(cfg, `${GRAPH}/users/${encodeURIComponent(mailbox)}${path}`, method, body, what, tz, { mailbox, ...need });
 }
 
+// Outlook (Exchange) refuse plus de 4 appels simultanes d'une application sur une meme boite
+// (429 MailboxConcurrency). Les appels sont donc limites a 3 en meme temps par boite, les
+// suivants attendent leur tour ; un 429 ou 503 est rejoue apres le Retry-After de Graph.
+export const MAILBOX_CONCURRENCY = 3;
+const slots = new Map<string, { active: number; queue: (() => void)[] }>();
+
+async function withMailboxSlot<T>(mailbox: string, fn: () => Promise<T>): Promise<T> {
+	const k = mailbox.toLowerCase();
+	let s = slots.get(k);
+	if (!s) slots.set(k, (s = { active: 0, queue: [] }));
+	const slot = s;
+	if (slot.active >= MAILBOX_CONCURRENCY) await new Promise<void>((resolve) => slot.queue.push(resolve));
+	slot.active++;
+	try {
+		return await fn();
+	} finally {
+		slot.active--;
+		slot.queue.shift()?.();
+		if (!slot.active && !slot.queue.length) slots.delete(k);
+	}
+}
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Delai avant nouvel essai (Retry-After en secondes, borne a 10 s ; 1, 2, 4 s sinon). */
+export const retryDelayMs = (retryAfter: string | null, attempt: number) => {
+	const s = Number(retryAfter);
+	return Number.isFinite(s) && s > 0 ? Math.min(s, 10) * 1000 : 1000 * 2 ** attempt;
+};
+
 async function graphUrl(cfg: GraphConfig, url: string, method: string, body?: unknown, what = "Outlook", tz: string = AGENDA_TIMEZONE, need: GraphNeed = {}): Promise<any> {
 	const mailbox = need.mailbox ?? "la boîte";
 	const token = await graphToken(cfg);
-	const res = await (cfg.fetchImpl ?? fetch)(url, {
-		method,
-		headers: {
-			authorization: `Bearer ${token}`,
-			prefer: `outlook.timezone="${tz}", outlook.body-content-type="html"`,
-			...(body !== undefined ? { "content-type": "application/json" } : {}),
-		},
-		body: body !== undefined ? JSON.stringify(body) : undefined,
+	const send = () =>
+		(cfg.fetchImpl ?? fetch)(url, {
+			method,
+			headers: {
+				authorization: `Bearer ${token}`,
+				prefer: `outlook.timezone="${tz}", outlook.body-content-type="html"`,
+				...(body !== undefined ? { "content-type": "application/json" } : {}),
+			},
+			body: body !== undefined ? JSON.stringify(body) : undefined,
+		});
+	const res = await withMailboxSlot(need.mailbox ?? "_tenant", async () => {
+		let r = await send();
+		for (let attempt = 0; (r.status === 429 || r.status === 503) && attempt < 3; attempt++) {
+			await wait(retryDelayMs(r.headers.get("retry-after"), attempt));
+			r = await send();
+		}
+		return r;
 	});
 	if (res.status === 204 || res.status === 202) return null;
 	const data: any = await res.json().catch(() => null);
@@ -355,7 +394,7 @@ async function graphUrl(cfg: GraphConfig, url: string, method: string, body?: un
 				: `Microsoft Graph refuse l'accès à l'agenda de ${mailbox} (HTTP ${res.status}) : permission applicative Calendars.ReadWrite à vérifier.`,
 		);
 	}
-	if (res.status === 429) throw new AgendaError("Microsoft Graph limite les appels : réessayez dans quelques secondes.");
+	if (res.status === 429 || res.status === 503) throw new AgendaError("Microsoft Graph limite les appels : réessayez dans quelques secondes.");
 	throw new AgendaError(`Refusé par Microsoft Graph (HTTP ${res.status}${data?.error?.message ? ` : ${data.error.message}` : ""}).`);
 }
 
@@ -382,9 +421,22 @@ export function calendarColor(raw: any, index: number): string {
 	return ["#4f8de8", "#5fb35f", "#f0a14b", "#e57399", "#7a6ad8", "#3fb5ad"][index % 6];
 }
 
+// Liste des agendas (/calendars) : une lecture partagee par listCalendars et
+// sharedCalendarOwners, gardee 60 s par boite.
+const calendarsCache = new Map<string, { at: number; p: Promise<any> }>();
+function readCalendars(cfg: GraphConfig, mailbox: string): Promise<any> {
+	const k = `${cfg.tenant}|${mailbox.toLowerCase()}`;
+	const hit = calendarsCache.get(k);
+	if (hit && Date.now() - hit.at < 60_000) return hit.p;
+	const p = graph(cfg, mailbox, "GET", "/calendars?$select=id,name,color,hexColor,isDefaultCalendar,canEdit,owner&$top=100", undefined, "Agenda");
+	calendarsCache.set(k, { at: Date.now(), p });
+	p.catch(() => calendarsCache.delete(k));
+	return p;
+}
+
 /** Agendas de la boite, l'agenda par defaut en tete. */
 export async function listCalendars(cfg: GraphConfig, mailbox: string): Promise<OutlookCalendar[]> {
-	const data = await graph(cfg, mailbox, "GET", "/calendars?$select=id,name,color,hexColor,isDefaultCalendar,canEdit,owner&$top=100", undefined, "Agenda");
+	const data = await readCalendars(cfg, mailbox);
 	// Agendas de la boite elle-meme ; ceux des collegues passent par sharedCalendarOwners.
 	const own = (Array.isArray(data?.value) ? data.value : []).filter(
 		(c: any) => !c?.owner?.address || String(c.owner.address).toLowerCase() === mailbox.toLowerCase(),
@@ -1050,7 +1102,7 @@ export function redactForRole(e: CalendarEvent, role: CalendarRole): CalendarEve
 
 /** Agendas partages avec la boite (entrees ajoutees dans Outlook dont le proprietaire est un autre). */
 export async function sharedCalendarOwners(cfg: GraphConfig, mailbox: string): Promise<{ address: string; name: string }[]> {
-	const data = await graph(cfg, mailbox, "GET", "/calendars?$select=id,name,owner&$top=100", undefined, "Agenda");
+	const data = await readCalendars(cfg, mailbox);
 	const seen = new Set<string>();
 	const out: { address: string; name: string }[] = [];
 	for (const c of Array.isArray(data?.value) ? data.value : []) {

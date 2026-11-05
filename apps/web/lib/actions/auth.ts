@@ -11,6 +11,7 @@ import * as crypto from "node:crypto";
 // ss2i (controle d'acces) : creation de compte, ouverture de session et redirection vers le
 // workspace vivent dans un module serveur qui n'est pas un module d'actions.
 import { createUserWithWorkspace, signInUserAndRedirect, verifyAndDecode } from "@/lib/auth-session";
+import { consumePendingCeriseLink } from "@/lib/cerise-account";
 
 
 export async function login(
@@ -38,6 +39,10 @@ export async function login(
 	if (!valid) {
 		return { error: "Invalid credentials" };
 	}
+
+	// ss2i (OI 10297) : retour de Cerise sur une adresse qui n'est qu'une identité de ce
+	// compte (cookie cerise_link) : le mot de passe vient d'être vérifié, le lien se pose.
+	await consumePendingCeriseLink(user.id);
 
 	await signInUserAndRedirect(user, locale);
 

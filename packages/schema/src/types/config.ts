@@ -61,6 +61,12 @@ export const ZServerConfig = z.object({
 	// chez Lore. Sans l'un des deux, la fenêtre du bouton dit ce qui manque.
 	LORE_URL: z.string().optional(),
 	LORE_APP_TOKEN: z.string().optional(),
+	// ss2i : connexion par Cerise (OI 10297). CERISE_URL = base de Cerise
+	// (https://c4.ss2i-services.fr) ; sans elle, pas de bouton et les routes répondent 404.
+	// CERISE_ALLOWED_DOMAINS : domaines admis, séparés par des virgules (défaut : les trois
+	// domaines SS2i, cf. @common/cerise-auth).
+	CERISE_URL: z.string().optional(),
+	CERISE_ALLOWED_DOMAINS: z.string().optional(),
 });
 
 /** Safe to expose to the browser */

@@ -31,7 +31,7 @@ type Props = {
 };
 import { Temporal } from "@js-temporal/polyfill";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
-import { toggleThreadSelection } from "@/lib/thread-selection";
+import { preventShiftTextSelection, toggleThreadSelection } from "@/lib/thread-selection";
 import { ThreadDragHandle } from "@/components/mailbox/default/client-link-ui";
 import { toast } from "sonner";
 import { moveWithUndo } from "@/lib/pending-moves";
@@ -236,6 +236,7 @@ export default function WebmailListItem({
 	return (
 		<>
 			<li
+				onMouseDown={preventShiftTextSelection}
 				className={[
 					"relative group grid cursor-pointer",
 					// "grid-cols-[auto_auto_minmax(16rem,1fr)_minmax(10rem,2fr)_auto]",

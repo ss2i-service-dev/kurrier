@@ -30,3 +30,11 @@ export function toggleThreadSelection<T extends Partial<ThreadSelectionState>>(
 	}
 	return { ...(prev as T), selectedThreadIds: next, lastSelectedThreadId: id };
 }
+
+// ss2i : Maj+clic sur une ligne ne surligne plus le texte entre l'ancre et la ligne
+// cliquee (selection native du navigateur, 05/11/2026). Bloquer l'appui souris avec Maj
+// empeche la selection de texte sans empecher le clic ; sans Maj, rien ne change
+// (texte selectionnable, glisser-deposer d'un fil).
+export function preventShiftTextSelection(e: { shiftKey: boolean; preventDefault: () => void }) {
+	if (e.shiftKey) e.preventDefault();
+}

@@ -15,7 +15,7 @@ import { FetchMailboxThreadsResult } from "@/lib/actions/mailbox";
 import { FetchLabelsResult, FetchMailboxThreadLabelsResult } from "@/lib/actions/labels";
 import { IconPin, IconPinnedFilled, IconPinnedOff, IconStar, IconStarFilled } from "@tabler/icons-react";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
-import { toggleThreadSelection } from "@/lib/thread-selection";
+import { preventShiftTextSelection, toggleThreadSelection } from "@/lib/thread-selection";
 import { ThreadDragHandle } from "@/components/mailbox/default/client-link-ui";
 import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 import ThreadLabelHoverButtons from "@/components/dashboard/labels/thread-label-hover-buttons";
@@ -154,6 +154,7 @@ export default function KThreadRow({
 
 	return (
 		<li
+			onMouseDown={preventShiftTextSelection}
 			role="listitem"
 			data-thread-id={item.threadId}
 			aria-current={isActive ? "true" : undefined}

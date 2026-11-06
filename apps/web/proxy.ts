@@ -28,6 +28,15 @@ function getRedirectLocale(request: NextRequest) {
 
 export async function proxy(request: NextRequest) {
 
+	// ss2i : fichier racine inconnu = vrai 404, avant tout rendu (lib/root-file-not-found.ts).
+	// Avant le test /api ci-dessous, qui n'exige pas de « / » et laissait passer /api%2F.env.
+	if (isUnknownRootFile(request.nextUrl.pathname)) {
+		return new NextResponse("Not Found", {
+			status: 404,
+			headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+		});
+	}
+
 	// ss2i : les routes du serveur OAuth de l'MCP courrier (decouverte et jetons) sont
 	// hors locale et hors garde de session, comme /api.
 	if (
@@ -36,14 +45,6 @@ export async function proxy(request: NextRequest) {
 		request.nextUrl.pathname.startsWith("/.well-known/")
 	) {
 		return await updateSession(request);
-	}
-
-	// ss2i : fichier racine inconnu = vrai 404, avant tout rendu (lib/root-file-not-found.ts).
-	if (isUnknownRootFile(request.nextUrl.pathname)) {
-		return new NextResponse("Not Found", {
-			status: 404,
-			headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
-		});
 	}
 
 	const redirectLocale = getRedirectLocale(request);

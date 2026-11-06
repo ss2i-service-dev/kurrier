@@ -1,6 +1,7 @@
 import {type NextRequest, NextResponse} from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 import { jwtVerify } from "jose";
+import { isUnknownRootFile } from "@/lib/root-file-not-found";
 
 const locales = ["en", "ko"];
 const defaultLocale = "en";
@@ -35,6 +36,14 @@ export async function proxy(request: NextRequest) {
 		request.nextUrl.pathname.startsWith("/.well-known/")
 	) {
 		return await updateSession(request);
+	}
+
+	// ss2i : fichier racine inconnu = vrai 404, avant tout rendu (lib/root-file-not-found.ts).
+	if (isUnknownRootFile(request.nextUrl.pathname)) {
+		return new NextResponse("Not Found", {
+			status: 404,
+			headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+		});
 	}
 
 	const redirectLocale = getRedirectLocale(request);

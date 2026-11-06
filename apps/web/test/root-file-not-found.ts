@@ -19,7 +19,7 @@ const test = (label: string, fn: () => void) => {
 };
 
 test("chemins d'attaque a la racine : 404", () => {
-	for (const p of ["/docker-compose.yaml", "/.env", "/..%2F.env", "/api%2F.env", "/secrets.env",
+	for (const p of ["/docker-compose.yaml", "/.env", "/..%2F.env", "/api%2F.env", "/api%2F..%2F.env", "/oauth%2F.env", "/secrets.env",
 		"/.git/config", "/wp-config.php", "/robots.txt", "/backup.tar.gz"]) {
 		assert.equal(isUnknownRootFile(p), true, p);
 	}

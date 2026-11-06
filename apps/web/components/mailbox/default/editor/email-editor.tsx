@@ -157,10 +157,21 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			[],
 		);
 
+		// ss2i : onReady une seule fois, a l'ouverture de l'editeur. Les appelants passent une
+		// fonction flechee recreee a chaque rendu : l'effet sur [onReady] se rejouait a chaque
+		// rendu du parent (sauvegarde du brouillon, saisie dans le message transfere) et
+		// remettait le curseur sur « A » pendant qu'on supprimait du texte transfere
+		// (Samuel le 06/11 : « quand je supprime, ça me met dans la zone de saisie de destinataire »).
+		const onReadyRef = useRef(onReady);
+		onReadyRef.current = onReady;
+		const readyDoneRef = useRef(false);
 		useEffect(() => {
+			if (readyDoneRef.current) return;
 			const el = textEditorRef.current?.getElement();
-			if (el) onReady?.(el);
-		}, [onReady]);
+			if (!el) return;
+			readyDoneRef.current = true;
+			onReadyRef.current?.(el);
+		});
 
 		const params = useParams() as { identityPublicId?: string };
 		// ss2i : style RFC de l'utilisateur, pour l'apercu de la citation en reponse.

@@ -99,9 +99,10 @@ export default function ReplyQuoteEditor({
 
 	return (
 		// ss2i : classe k-quote, reperee par le CSS de la nouvelle interface (sans effet ailleurs).
-		<div className="k-quote px-3 pt-2">
-			<div className="flex items-center gap-3 text-xs text-neutral-500 mb-1">
-				<span>
+		// ss2i : un filet et un libelle lisible separent le texte saisi du message cite ou transfere.
+		<div className={nouvelle ? "k-quote px-3 pt-2" : "k-quote px-3 pt-2 mt-1 border-t border-neutral-200 dark:border-neutral-700"}>
+			<div className={nouvelle ? "flex items-center gap-3 text-xs text-neutral-500 mb-1" : "flex items-center gap-3 text-xs text-neutral-500 mb-2"}>
+				<span className={nouvelle ? undefined : "text-sm font-medium text-neutral-700 dark:text-neutral-300"}>
 					{forward
 						? t("Forwarded message (editable)", "Message transféré (modifiable)")
 						: t(`Quoted message (editable) - ${quoteScope === "last" ? "last message only" : "whole thread"}`, `Message cité (modifiable) · ${quoteScope === "last" ? "dernier message" : "tout le fil"}`)}

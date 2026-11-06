@@ -53,7 +53,7 @@ test("origine, reply : reponse, signature, puis citation (texte et HTML exacts)"
 		signatureHtml: SIG,
 		orig,
 	});
-	assert.equal(r.subject, "Re: Devis serveur");
+	assert.equal(r.subject, "Devis serveur");
 	assert.equal(
 		r.text,
 		`Oui, demain.\n\n-- \n${SIG_TEXT}\n\nOn 02 Nov 2026, 09:15, Jean Client <jean@client.example> wrote:\n${orig.text}`,
@@ -68,9 +68,9 @@ test("origine, reply : reponse, signature, puis citation (texte et HTML exacts)"
 	);
 });
 
-test("origine, forward : libelle Forwarded message, Fwd:", () => {
+test("origine, forward : libelle Forwarded message, objet sans Fwd:", () => {
 	const r = composeMessage({ mode: "forward", text: "FYI", html: "<p>FYI</p>", signatureHtml: SIG, orig });
-	assert.equal(r.subject, "Fwd: Devis serveur");
+	assert.equal(r.subject, "Devis serveur");
 	assert.equal(
 		r.text,
 		`FYI\n\n-- \n${SIG_TEXT}\n\nForwarded message:\nOn 02 Nov 2026, 09:15, Jean Client <jean@client.example> wrote:\n${orig.text}`,
@@ -89,9 +89,9 @@ test("origine, new : texte et signature, sans separateur HTML ; sans signature r
 	assert.equal(none.html, "<p>Salut</p>");
 });
 
-test("origine, Re:/Fwd: deja presents et sujet vide", () => {
-	assert.equal(composeMessage({ mode: "reply", orig: { ...orig, subject: "Re: X" } }).subject, "Re: X");
-	assert.equal(composeMessage({ mode: "forward", orig: { ...orig, subject: "" } }).subject, "Fwd: (no subject)");
+test("origine, Re:/Fwd: deja presents retires et sujet vide", () => {
+	assert.equal(composeMessage({ mode: "reply", orig: { ...orig, subject: "Re: X" } }).subject, "X");
+	assert.equal(composeMessage({ mode: "forward", orig: { ...orig, subject: "" } }).subject, "(no subject)");
 });
 
 test("origine, portee thread sans HTML : textAsHtml puis <pre> non echappe (inchange)", () => {
@@ -454,7 +454,7 @@ test("quoteOverride custom, style d'origine : enveloppe hr + attribution + block
 test("quoteOverride none : aucune attribution ni blockquote, style d'origine et RFC", () => {
 	for (const rfcStyle of [false, true]) {
 		const r = composeMessage({ mode: "reply", text: "Oui.", html: "<p>Oui.</p>", signatureHtml: SIG, orig, rfcStyle, quoteOverride: { mode: "none" } });
-		assert.equal(r.subject, "Re: Devis serveur");
+		assert.equal(r.subject, "Devis serveur");
 		assert.ok(!/wrote|blockquote|<hr|quote-attribution|Jean/.test(r.text + r.html), r.text + r.html);
 		assert.ok(r.text.startsWith("Oui.") && r.html.startsWith("<p>Oui.</p>"));
 		assert.ok(r.text.includes(SIG_TEXT));

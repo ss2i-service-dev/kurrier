@@ -1,4 +1,5 @@
 "use client";
+import { stripSubjectPrefixes } from "@common/subject";
 import React from "react";
 import { Archive, Mail, MailOpen, Paperclip, Trash2 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
@@ -330,7 +331,7 @@ export default function WebmailListItem({
 						isRead={isRead}
 					/>
 					{isDrafts && <DraftSendBadge state={mailboxThreadItem.draftSend} />}
-					<span className="truncate">{mailboxThreadItem.subject}</span>
+					<span className="truncate">{stripSubjectPrefixes(mailboxThreadItem.subject)}</span>
 					{showSnippet && (
 						<>
 							<span className="mx-1 text-muted-foreground">–</span>

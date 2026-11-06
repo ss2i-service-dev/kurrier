@@ -1,4 +1,5 @@
 "use client";
+import { stripSubjectPrefixes } from "@common/subject";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -134,7 +135,7 @@ export default function UnreadPanel({
 									</div>
 									<div className="mt-0.5 flex items-center gap-1">
 										<span className={`truncate text-sm ${isUnread ? "font-medium" : "text-muted-foreground"}`}>
-											{t.subject?.trim() || "(no subject)"}
+											{stripSubjectPrefixes(t.subject) || "(no subject)"}
 										</span>
 										{t.messageCount > 1 && (
 											<span className="shrink-0 text-xs text-muted-foreground">({t.messageCount})</span>

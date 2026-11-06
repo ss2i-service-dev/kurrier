@@ -1,5 +1,6 @@
 // @ts-nocheck
 "use client";
+import { stripSubjectPrefixes } from "@common/subject";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { leaveThreadToList } from "@/lib/leave-thread";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
@@ -392,7 +393,7 @@ function EmailRenderer({
 				<div className={"col-span-12"}>
 					{(showSubject ?? threadIndex === 0) && <div className={"flex gap-3 items-center"}>
 						<div className="text-2xl font-semibold tracking-tight">
-							{message.subject || "No Subject"}
+							{stripSubjectPrefixes(message.subject) || "No Subject"}
 						</div>
                         <MailUnsubscriber mailSubscription={mailSubscription} message={message}/>
                     </div>}

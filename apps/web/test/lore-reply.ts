@@ -266,9 +266,9 @@ await test("requete : forme du contrat, boite en minuscules, locale fr, sans con
 	});
 
 	await test("objet : comme l'editeur pour une reponse", () => {
-		assert.equal(loreReplySubject("Devis"), "Re: Devis");
-		assert.equal(loreReplySubject("RE: Devis"), "Re: Devis");
-		assert.equal(loreReplySubject("Fwd: Devis"), "Re: Devis");
+		assert.equal(loreReplySubject("Devis"), "Devis");
+		assert.equal(loreReplySubject("RE: Devis"), "Devis");
+		assert.equal(loreReplySubject("Fwd: Devis"), "Devis");
 	});
 
 	await test("configuration : variables manquantes nommees", () => {

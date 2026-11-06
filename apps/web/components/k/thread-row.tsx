@@ -1,4 +1,5 @@
 "use client";
+import { stripSubjectPrefixes } from "@common/subject";
 // SS2i (nouvelle interface) : ligne de la liste des fils. Deux lignes de texte
 // (correspondants + date, objet + extrait), avatar qui devient case a cocher au
 // survol, actions rapides au survol (montees seulement pour la ligne survolee).
@@ -238,7 +239,7 @@ export default function KThreadRow({
 				<div className="mt-0.5 flex items-center gap-1.5">
 					{isDrafts && <DraftSendBadge state={item.draftSend} />}
 					<span className={`truncate text-[13px] ${isUnread ? "font-medium text-k-ink" : "text-k-ink-2"}`}>
-						{item.subject || "(sans objet)"}
+						{stripSubjectPrefixes(item.subject) || "(sans objet)"}
 					</span>
 					{isDrafts && <DraftTimesLabel times={item.draftTimes} className="ml-auto text-[11.5px] text-k-ink-3" />}
 					{!showSnippet && starButton}

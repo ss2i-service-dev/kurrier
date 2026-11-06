@@ -1,3 +1,4 @@
+import { stripSubjectPrefixes } from "./subject";
 import { joinSurrogateEntities } from "./html-entities";
 // ss2i : assemblage du corps d'un message sortant (reponse, transfert, nouveau), partage
 // par le worker (send-mail.ts, qui envoie), l'editeur web (apercu de la citation) et le
@@ -513,12 +514,10 @@ export function composeMessage(rawInput: ComposeInput) {
 
 	const baseSubj = (input.subject ?? "").trim();
 	let subject = baseSubj;
-	if (isReply) {
-		const s = (orig.subject ?? "").trim();
-		subject = s.startsWith("Re:") ? s : `Re: ${s || "(no subject)"}`;
-	} else if (isForward) {
-		const s = (orig.subject ?? "").trim();
-		subject = s.startsWith("Fwd:") ? s : `Fwd: ${s || "(no subject)"}`;
+	if (isReply || isForward) {
+		// ss2i : ni « Re: » ni « Fwd: », et ceux empilés par les autres clients retirés
+		// (subject.ts). L'objet saisi dans l'éditeur prime, sinon celui d'origine.
+		subject = stripSubjectPrefixes(baseSubj || orig.subject) || "(no subject)";
 	} else if (!baseSubj) {
 		subject = "(no subject)";
 	}

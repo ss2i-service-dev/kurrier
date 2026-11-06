@@ -1,3 +1,4 @@
+import { stripSubjectPrefixes } from "@common/subject";
 import React, { Suspense } from "react";
 import {
 	fetchIdentityMailboxList,
@@ -95,7 +96,7 @@ export default async function KThreadPage({
 							{/* Objet, et a droite sur la meme ligne les societes rattachees au fil */}
 							<div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
 								<h1 className="min-w-0 flex-1 basis-[320px] text-[21px] font-semibold leading-snug tracking-[-0.015em] text-k-ink">
-									{first.subject || "(sans objet)"}
+									{stripSubjectPrefixes(first.subject) || "(sans objet)"}
 								</h1>
 								<Suspense fallback={null}>
 									<KThreadClients threadId={threadId} identityPublicId={identityPublicId} workspacePublicId={workspacePublicId} />

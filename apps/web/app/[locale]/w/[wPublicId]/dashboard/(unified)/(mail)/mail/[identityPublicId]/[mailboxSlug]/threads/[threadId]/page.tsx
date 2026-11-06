@@ -9,6 +9,7 @@ import {MessageEntity} from "@db";
 import ThreadClientsBar from "@/components/mailbox/default/thread-clients-bar";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
 import { threadOrder } from "@/lib/actions/thread-order";
+import { dedupeThreadMessages } from "@/lib/thread-dedupe";
 
 async function ClassicPage({
 	params,
@@ -44,7 +45,8 @@ async function ClassicPage({
 	// messages arrivent du plus ancien au plus recent ; threadIndex garde
 	// l'index chronologique (Reply sous le plus recent), l'objet va au-dessus
 	// du premier message affiche.
-	const chronological = activeThread?.messages ?? [];
+	// ss2i : un mail present dans deux dossiers (Sent et Inbox) ne s'affiche qu'une fois (thread-dedupe.ts).
+	const chronological = dedupeThreadMessages(activeThread?.messages ?? []);
 	const newestFirst = (await threadOrder()) === "newest_first";
 	const shown = newestFirst ? [...chronological].reverse() : chronological;
 

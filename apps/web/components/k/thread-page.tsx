@@ -18,6 +18,7 @@ import { ThreadProvider } from "@/components/k/thread-context";
 import ThreadMessages from "@/components/k/thread-messages";
 import ReplyDock from "@/components/k/reply-dock";
 import MailUnsubscriber from "@/components/mailbox/default/mail-unsubscriber";
+import { dedupeThreadMessages } from "@/lib/thread-dedupe";
 
 // SS2i (nouvelle interface) : panneau de lecture. Barre d'actions, objet, messages a plat (les
 // anciens replies et regroupes), reponse ancree en bas.
@@ -39,9 +40,11 @@ export default async function KThreadPage({
 		threadOrder(),
 		kPinnedMap(),
 	]);
-	const messages: MessageEntity[] = activeThread?.messages ?? [];
+	const allMessages: MessageEntity[] = activeThread?.messages ?? [];
 	// Dossier reel du fil (un fil ouvert depuis la vue Clients n'est pas dans le dossier de l'URL).
-	const { activeMailbox, mailboxSync } = await fetchThreadMailbox(identityPublicId, mailboxSlug, messages);
+	const { activeMailbox, mailboxSync } = await fetchThreadMailbox(identityPublicId, mailboxSlug, allMessages);
+	// ss2i : un mail present dans deux dossiers (Sent et Inbox) ne s'affiche qu'une fois (thread-dedupe.ts).
+	const messages = dedupeThreadMessages(allMessages);
 	const { byMessageId } = await fetchThreadMailSubscriptions({
 		ownerId: activeMailbox.ownerId,
 		messages: messages.map((m) => ({ id: m.id, headersJson: m.headersJson, from: m.from })),

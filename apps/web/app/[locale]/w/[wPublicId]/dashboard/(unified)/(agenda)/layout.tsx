@@ -12,6 +12,10 @@ import NavUserWrapper from "@/components/ui/dashboards/workspace/nav-user-wrappe
 import { getWorkspacePublicId } from "@/lib/actions/clients";
 import { outlookCalendarBoxes } from "@/lib/actions/outlook-calendar";
 import KAgendaNav, { KAgendaNew } from "@/components/outlook-calendar/agenda-nav";
+import { tabMetadata } from "@/lib/tab-identity";
+
+// ss2i : titre et icone de l'onglet propres a la section.
+export const metadata = tabMetadata("agenda");
 
 export default async function AgendaLayout({ children }: { children: React.ReactNode }) {
 	const [nouvelle, boxes] = await Promise.all([isNouvelleInterface(), outlookCalendarBoxes()]);

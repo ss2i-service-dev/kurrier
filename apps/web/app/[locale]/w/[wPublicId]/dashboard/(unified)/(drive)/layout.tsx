@@ -14,6 +14,10 @@ import NavUserWrapper from "@/components/ui/dashboards/workspace/nav-user-wrappe
 import {getWorkspacePublicId} from "@/lib/actions/clients";
 import KDriveNew from "@/components/k/drive-new";
 import KDriveNav from "@/components/k/drive-nav";
+import { tabMetadata } from "@/lib/tab-identity";
+
+// ss2i : titre et icone de l'onglet propres a la section.
+export const metadata = tabMetadata("drive");
 
 async function ClassicDriveLayout({
                                               children,

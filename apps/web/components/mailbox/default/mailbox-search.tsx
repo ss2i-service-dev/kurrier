@@ -44,6 +44,12 @@ export default function MailboxSearch({
 	const [hasAttachment, setHasAttachment] = React.useState(false);
 	const [onlyUnread, setOnlyUnread] = React.useState(false);
 	const [isStarred, setIsStarred] = React.useState(false);
+	// ss2i : la recherche part du dossier courant ; si elle ne donne rien, un bouton l'etend a
+	// tous les dossiers (sauf Corbeille et Spam). Chaque ouverture repart du dossier courant.
+	const [allFolders, setAllFolders] = React.useState(false);
+	React.useEffect(() => {
+		if (open) setAllFolders(false);
+	}, [open]);
 
 	const [loading, setLoading] = React.useState(false);
 	const [items, setItems] = React.useState<ThreadHit[]>([]);
@@ -110,6 +116,7 @@ export default function MailboxSearch({
 					onlyUnread,
 					isStarred,
 					1,
+					allFolders,
 				);
 
 				setItems(res.items || []);
@@ -133,6 +140,7 @@ export default function MailboxSearch({
 		workspacePublicId,
 		publicId,
 		mailboxSlug,
+		allFolders,
 	]);
 
 	const toggle = (setter: React.Dispatch<React.SetStateAction<boolean>>) =>
@@ -148,6 +156,14 @@ export default function MailboxSearch({
 	const threadBase = inDashboard
 		? `/w/${workspacePublicId}/dashboard/mail/${publicId}/${mailboxSlug}/threads`
 		: `/w/${workspacePublicId}/mail/${publicId}/${mailboxSlug}/threads`;
+	// en recherche etendue, chaque fil s'ouvre dans son propre dossier
+	const identityBase = inDashboard
+		? `/w/${workspacePublicId}/dashboard/mail/${publicId}`
+		: `/w/${workspacePublicId}/mail/${publicId}`;
+	const threadHref = (t: ThreadHit) =>
+		allFolders && t.mailboxSlug
+			? `${identityBase}/${encodeURIComponent(t.mailboxSlug)}/threads/${t.threadId}`
+			: `${threadBase}/${t.threadId}`;
 
 	const router = useRouter()
 
@@ -197,6 +213,9 @@ export default function MailboxSearch({
 					onKeyDown={(e) => {
 						if (e.key !== "Enter") return;
 						e.preventDefault();
+						// la page de resultats ne couvre que le dossier courant : en recherche
+						// etendue, les resultats restent dans la modale
+						if (allFolders) return;
 						setOpen(false);
 						router.push(
 							`/w/${workspacePublicId}/${pathName.match("/dashboard/mail") ? "/dashboard" : ""}/mail/${publicId}/${mailboxSlug}/search?q=${encodeURIComponent(query)}&has=${hasAttachment ? "1" : "0"}&unread=${onlyUnread ? "1" : "0"}&starred=${isStarred ? "1" : "0"}`,
@@ -256,20 +275,39 @@ export default function MailboxSearch({
 				<div className="px-4 py-2 text-xs text-muted-foreground">
 					{loading
 						? k("Searching…", "Recherche en cours…")
-						: k(`Threads: ${totalThreads} · Messages: ${totalMessages}`, `Fils : ${totalThreads} · Messages : ${totalMessages}`)}
+						: k(`Threads: ${totalThreads} · Messages: ${totalMessages}`, `Fils : ${totalThreads} · Messages : ${totalMessages}`) +
+							(allFolders ? k(" · all folders", " · tous les dossiers") : "")}
 				</div>
 
 				<div className="max-h-[60vh] overflow-auto px-2 pb-2">
 					{items.length === 0 && !loading ? (
 						<div className="px-4 py-8 text-center text-sm text-muted-foreground">
-							{k("No results found.", "Aucun résultat.")}
+							{allFolders
+								? k("No results in any folder.", "Aucun résultat dans aucun dossier.")
+								: k("No results in this folder.", "Aucun résultat dans ce dossier.")}
+							{!allFolders && query.trim() && (
+								<div className="mt-3">
+									<button
+										type="button"
+										data-ss2i="search-all-folders"
+										onMouseDown={(e) => e.preventDefault()}
+										onClick={() => {
+											setAllFolders(true);
+											inputRef.current?.focus();
+										}}
+										className="rounded-md border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted"
+									>
+										{k("Search all folders", "Étendre la recherche à tous les dossiers")}
+									</button>
+								</div>
+							)}
 						</div>
 					) : (
 						<ul className="space-y-2">
 							{items.map((t) => (
 								<li key={t.id} className="my-2">
 									<Link
-										href={`${threadBase}/${t.threadId}`}
+										href={threadHref(t)}
 										className="block w-full rounded-md px-4 py-3 text-left hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring"
 										onClick={() => setOpen(false)}
 									>
@@ -296,6 +334,12 @@ export default function MailboxSearch({
 											{t.hasAttachment && (
 												<span className="ml-1 text-muted-foreground">
 													<Paperclip className="h-3.5 w-3.5" />
+												</span>
+											)}
+
+											{allFolders && t.mailboxName && (
+												<span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+													{t.mailboxName}
 												</span>
 											)}
 										</div>
@@ -352,7 +396,9 @@ export default function MailboxSearch({
 							<span className="font-medium text-foreground">{`‘${query || ""}’`}</span>
 						</span>
 					</div>
-					<div className="text-xs text-muted-foreground">{k("Press ENTER", "Appuyez sur Entrée")}</div>
+					<div className="text-xs text-muted-foreground">
+						{allFolders ? k("All folders", "Tous les dossiers") : k("Press ENTER", "Appuyez sur Entrée")}
+					</div>
 				</div>
 			</CommandDialog>
 		</>

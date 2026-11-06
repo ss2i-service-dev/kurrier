@@ -15,7 +15,7 @@ import {
 	SidebarMenuItem,
 	useSidebar,
 } from "@/components/ui/sidebar";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import KurrierLogo from "@/components/common/kurrier-logo";
 import ThemeColorPicker from "@/components/common/theme-color-picker";
 import ThemeSwitch from "@/components/common/theme-switch";
@@ -149,7 +149,6 @@ export function AppSidebar({ ...props }: UnifiedSidebarProps) {
 	}, [section, pathName, data.navMain]);
 
 	const { setOpen, toggleSidebar } = useSidebar();
-	const router = useRouter();
 
 	return (
 		<Sidebar
@@ -198,22 +197,29 @@ export function AppSidebar({ ...props }: UnifiedSidebarProps) {
 												children: item.title,
 												hidden: false,
 											}}
-											onClick={() => {
-												setActiveItem(item);
-												setOpen(true);
-												router.push(item.url);
-											}}
+											asChild
 											isActive={activeItem?.title === item.title}
 											className={"px-2.5 md:px-2"}
 										>
-											<item.icon
-												className={
-													item.title === activeItem?.title
-														? "text-brand dark:text-white"
-														: ""
-												}
-											/>
-											<span>{item.title}</span>
+											{/* ss2i : vrai lien, pour ouvrir l'agenda ou la boite mail dans un autre
+											    onglet (clic molette, Ctrl+clic) ; Link laisse alors faire le navigateur. */}
+											<Link
+												href={item.url}
+												onClick={(e) => {
+													if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+													setActiveItem(item);
+													setOpen(true);
+												}}
+											>
+												<item.icon
+													className={
+														item.title === activeItem?.title
+															? "text-brand dark:text-white"
+															: ""
+													}
+												/>
+												<span>{item.title}</span>
+											</Link>
 										</SidebarMenuButton>
 									</SidebarMenuItem>
 								))}

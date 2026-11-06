@@ -11,6 +11,7 @@
 //   200 { body_text, body_html, model, sources: [{ title, url }] } ; erreur { message } en
 //   français, affiché tel quel.
 // Pas de dépendance ni de base : fetch direct (fetchImpl injectable pour les tests).
+import { stripSubjectPrefixes } from "./subject";
 import { htmlToText, messageBodyText } from "./html-text";
 import { stripQuotedText, textToHtml } from "./compose";
 
@@ -235,5 +236,5 @@ export function loreDraftRecipients(
 
 /** Objet du brouillon, comme l'éditeur pour une réponse (editor-header.tsx). */
 export function loreReplySubject(subject: string | null | undefined): string {
-	return `Re: ${(subject ?? "").trim().replace(/^(re|fwd)\s*:\s*/gi, "")}`;
+	return stripSubjectPrefixes(subject);
 }

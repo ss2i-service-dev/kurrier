@@ -1,3 +1,4 @@
+import { stripSubjectPrefixes } from "@common/subject";
 import { useK, useNouvelle } from "@/components/k/ui-context";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -144,14 +145,9 @@ function EditorHeader({
 	const computedSubject = useMemo(() => {
 		if (!state.message) return "";
 
-		const original = state.message.subject?.trim() || "";
-
-		const cleaned = original.replace(/^(re|fwd)\s*:\s*/gi, "");
-
-		if (mode === "reply" || mode === "replyAll") return `Re: ${cleaned}`;
-		if (mode === "forward") return `Fwd: ${cleaned}`;
-		return cleaned;
-	}, [state.message, mode]);
+		// ss2i : objet sans aucun préfixe Re:/Fwd:/RE:/TR:..., en réponse comme en transfert.
+		return stripSubjectPrefixes(state.message.subject);
+	}, [state.message]);
 
 	const [subject, setSubject] = useState(
 		draftRow ? (draftRow.subject ?? "") : computedSubject,

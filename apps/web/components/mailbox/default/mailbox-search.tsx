@@ -1,4 +1,5 @@
 "use client";
+import { stripSubjectPrefixes } from "@common/subject";
 
 import * as React from "react";
 import {
@@ -328,7 +329,7 @@ export default function MailboxSearch({
 											/>
 
 											<div className="truncate text-[15px] font-medium">
-												{t.subject || k("(no subject)", "(sans objet)")}
+												{stripSubjectPrefixes(t.subject) || k("(no subject)", "(sans objet)")}
 											</div>
 
 											{t.hasAttachment && (

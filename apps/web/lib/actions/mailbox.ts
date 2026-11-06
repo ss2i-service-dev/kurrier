@@ -44,6 +44,7 @@ import { isSignedIn } from "@/lib/actions/auth";
 import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
+import { searchFilters, SEARCH_EXCLUDED_KINDS } from "@/lib/search-scope";
 import { extractListUnsubscribe, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
@@ -686,6 +687,9 @@ export const initSearch = async (
 	onlyUnread: boolean,
 	starred: boolean,
 	page: number,
+	// ss2i : recherche etendue a tous les dossiers de l'identite (sauf Corbeille, Spam, Outbox),
+	// proposee par la modale quand le dossier courant ne donne rien (Samuel le 06/11).
+	allFolders = false,
 ): Promise<SearchThreadsResponse> => {
 	const q = query.trim();
 	if (!q) {
@@ -701,21 +705,39 @@ export const initSearch = async (
 	if (!workspace || workspace.id !== identity.workspaceId) {
 		throw new Error("Identity not found or access denied");
 	}
-	if (/["`\\&|]/.test(String(mailboxSlug ?? ""))) {
+	// Dossiers de l'identite (relus par RLS) : slugs a exclure et nom affiche de chaque resultat
+	// en recherche etendue.
+	let folderNames = new Map<string, string>();
+	let excludeSlugs: string[] = [];
+	if (allFolders) {
+		const rls = await rlsClient();
+		const rows = await rls((tx) =>
+			tx
+				.select({ slug: mailboxes.slug, name: mailboxes.name, kind: mailboxes.kind })
+				.from(mailboxes)
+				.where(eq(mailboxes.identityId, identity.id)),
+		);
+		for (const r of rows as Array<{ slug?: string | null; name?: string | null; kind?: string | null }>) {
+			if (!r.slug) continue;
+			if (SEARCH_EXCLUDED_KINDS.includes(String(r.kind))) excludeSlugs.push(r.slug);
+			else folderNames.set(r.slug, r.name || r.slug);
+		}
+	}
+
+	const filters = searchFilters({
+		workspacePublicId: workspace.publicId,
+		identityPublicId: identity.publicId,
+		mailboxSlug: allFolders ? null : String(mailboxSlug ?? ""),
+		excludeSlugs,
+		hasAttachment,
+		onlyUnread,
+		starred,
+	});
+	if (!filters) {
 		return { items: [], totalThreads: 0, totalMessages: 0 };
 	}
 
 	const client = getTypeSenseClient();
-
-	const filters = [
-		`workspacePublicId:=${JSON.stringify(workspace.publicId)}`,
-		`identityPublicId:=${JSON.stringify(identity.publicId)}`,
-		`mailboxSlug:=${JSON.stringify(String(mailboxSlug ?? ""))}`,
-	];
-
-	if (hasAttachment) filters.push("hasAttachment:=1");
-	if (onlyUnread) filters.push("unread:=1");
-	if (starred) filters.push("starred:=1");
 
 	const result = (await client.collections("messages").documents().search({
 		q,
@@ -753,6 +775,8 @@ export const initSearch = async (
 			starred: Number(d.starred) === 1,
 			createdAt: d.createdAt ?? 0,
 			lastInThreadAt: d.lastInThreadAt ?? d.createdAt ?? 0,
+			mailboxSlug: d.mailboxSlug ?? null,
+			mailboxName: allFolders ? (folderNames.get(d.mailboxSlug) ?? d.mailboxSlug ?? null) : null,
 		})),
 		totalThreads: result?.found ?? sourceHits.length,
 		totalMessages: result?.found_docs ?? sourceHits.length,

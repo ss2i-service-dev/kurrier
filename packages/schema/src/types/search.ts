@@ -65,6 +65,9 @@ export interface ThreadHit {
 	lastInThreadAt: number;
 
 	starred: boolean;
+	// ss2i : dossier du resultat (recherche etendue a tous les dossiers)
+	mailboxSlug?: string | null;
+	mailboxName?: string | null;
 }
 
 

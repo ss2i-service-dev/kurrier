@@ -1,6 +1,7 @@
 "use client";
 import { draftTimesOf } from "@common/draft-send";
 import { useK } from "@/components/k/ui-context";
+import { createReadyGate } from "@/lib/ready-once";
 import React, {
 	useCallback,
 	useEffect,
@@ -158,19 +159,16 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 		);
 
 		// ss2i : onReady une seule fois, a l'ouverture de l'editeur. Les appelants passent une
-		// fonction flechee recreee a chaque rendu : l'effet sur [onReady] se rejouait a chaque
+		// fonction flechee recreee a chaque rendu : un effet dependant de onReady se rejouait a chaque
 		// rendu du parent (sauvegarde du brouillon, saisie dans le message transfere) et
 		// remettait le curseur sur « A » pendant qu'on supprimait du texte transfere
 		// (Samuel le 06/11 : « quand je supprime, ça me met dans la zone de saisie de destinataire »).
 		const onReadyRef = useRef(onReady);
 		onReadyRef.current = onReady;
-		const readyDoneRef = useRef(false);
+		// Test : apps/web/test/compose-focus.ts.
+		const readyGateRef = useRef(createReadyGate<HTMLElement>());
 		useEffect(() => {
-			if (readyDoneRef.current) return;
-			const el = textEditorRef.current?.getElement();
-			if (!el) return;
-			readyDoneRef.current = true;
-			onReadyRef.current?.(el);
+			readyGateRef.current.fire(textEditorRef.current?.getElement(), onReadyRef.current);
 		});
 
 		const params = useParams() as { identityPublicId?: string };

@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import { useKSignatureSlot } from "@/components/k/signature-slot";
 import { Checkbox } from "@mantine/core";
 import { ActionIcon, Button, Popover, Progress, Tooltip } from "@mantine/core";
-import { Baseline, Paperclip, Save, Trash2, X as IconX } from "lucide-react";
+import { Baseline, Eye, Paperclip, Save, Trash2, X as IconX } from "lucide-react";
 import type { DraftContext } from "@/components/mailbox/default/editor/email-editor";
 import { RichTextEditor } from "@mantine/tiptap";
 import { useK, useNouvelle } from "@/components/k/ui-context";
@@ -17,7 +17,9 @@ import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import { v4 as uuidv4 } from "uuid";
 import { MessageEntity } from "@db";
 import ScheduleSend from "@/components/mailbox/default/editor/schedule-send";
-import {createAttachmentDownloadUrl, createAttachmentUploadUrl} from "@/lib/actions/uploads-actions";
+import {createAttachmentUploadUrl, createComposeAttachmentPreview} from "@/lib/actions/uploads-actions";
+import { Viewer } from "@/components/k/attachments";
+import { previewModeFor, toPreviewFile } from "@/lib/compose-attachment-preview";
 
 type UploadItem = {
 	name: string;
@@ -236,6 +238,29 @@ export default function EditorFooter({
 		};
 	}, [nouvelle]);
 
+	// ss2i : ouvrir la piece jointe telle que le destinataire la recevra (Samuel le 06/11 :
+	// « pour etre sur d'avoir mis la bonne »). PDF, image, texte, video, audio : visionneuse
+	// plein ecran, comme a la lecture ; Word, Excel, archive : le fichier dans un nouvel onglet.
+	const [preview, setPreview] = useState<ReturnType<typeof toPreviewFile> | null>(null);
+	const openPreview = async (name: string) => {
+		const attachment = attachments.find((a) => a.filenameOriginal === name);
+		if (!attachment) return;
+		const viewer = previewModeFor(attachment) === "viewer";
+		// Onglet ouvert pendant le clic : apres l'appel serveur, le bloqueur de fenetres le refuserait.
+		const tab = viewer ? null : window.open("about:blank", "_blank");
+		try {
+			const urls = await createComposeAttachmentPreview(attachment.path, attachment.filenameOriginal);
+			if (viewer) setPreview(toPreviewFile(attachment, urls));
+			else if (tab) tab.location.href = urls.url;
+			else window.open(urls.url, "_blank");
+		} catch (err) {
+			tab?.close();
+			setUploads((prev) =>
+				prev.map((u) => (u.name === name ? { ...u, status: "error", error: String(err) } : u)),
+			);
+		}
+	};
+
 	const removeUpload = (name: string) => {
 		setUploads((prev) => prev.filter((u) => u.name !== name));
 		// La piece retiree ne doit plus partir avec le message ni rester dans le brouillon.
@@ -315,12 +340,7 @@ export default function EditorFooter({
 					{uploads.map((u) => {
 						const uploading = u.status === "uploading" && u.progress < 100;
 						const failed = u.status === "error";
-						const open = async () => {
-							const attachment = attachments.find((a) => a.filenameOriginal === u.name);
-							if (!attachment) return;
-							const { url } = await createAttachmentDownloadUrl(attachment.path);
-							window.open(url, "_blank");
-						};
+						const open = () => openPreview(u.name);
 						return (
 							<div
 								key={u.name}
@@ -341,6 +361,17 @@ export default function EditorFooter({
 								<span className="shrink-0 text-[11.5px] text-k-ink-3">
 									{failed ? "échec" : uploading ? `${u.progress} %` : kBytes(u.size)}
 								</span>
+								{u.status === "done" && (
+									<button
+										type="button"
+										onClick={open}
+										aria-label={`Aperçu de ${u.name}`}
+										title="Aperçu, tel que le destinataire le recevra"
+										className="flex h-6 w-6 shrink-0 items-center justify-center rounded-k-sm text-k-ink-3 hover:bg-k-hover hover:text-k-ink"
+									>
+										<Eye size={13} />
+									</button>
+								)}
 								<button
 									type="button"
 									onClick={() => removeUpload(u.name)}
@@ -376,18 +407,8 @@ export default function EditorFooter({
 											<button
 												type="button"
 												className="truncate font-semibold text-sm text-base-600 hover:underline text-left w-full underline"
-												onClick={async () => {
-													const attachment = attachments.find(
-														(a) => a.filenameOriginal === u.name
-													);
-													if (!attachment) return;
-
-													const { url } = await createAttachmentDownloadUrl(
-														attachment.path
-													);
-
-													window.open(url, "_blank");
-												}}
+												title="Aperçu, tel que le destinataire le recevra"
+												onClick={() => openPreview(u.name)}
 											>
 												{u.name}
 											</button>
@@ -397,9 +418,15 @@ export default function EditorFooter({
 											</div>
 										)}
 
-										<div className="text-xs text-neutral-500">
-											{formatBytes(u.size)}
-										</div>
+										{u.status === "error" ? (
+											<div className="text-xs text-red-600 dark:text-red-400" title={u.error}>
+												{t("Upload failed, this file will not be sent", "Échec de l'envoi, ce fichier ne partira pas")}
+											</div>
+										) : (
+											<div className="text-xs text-neutral-500">
+												{formatBytes(u.size)}
+											</div>
+										)}
 									</div>
 								</div>
 
@@ -415,6 +442,18 @@ export default function EditorFooter({
 									)}
 
 
+									{u.status === "done" && (
+										<Tooltip label={t("Preview as the recipient will see it", "Aperçu, tel que le destinataire le recevra")} withArrow fz="xs">
+											<ActionIcon
+												variant="subtle"
+												color="gray"
+												aria-label={`Aperçu de ${u.name}`}
+												onClick={() => openPreview(u.name)}
+											>
+												<Eye size={16} />
+											</ActionIcon>
+										</Tooltip>
+									)}
 									<ActionIcon
 										variant="subtle"
 										color="gray"
@@ -427,6 +466,10 @@ export default function EditorFooter({
 						);
 					})}
 				</div>
+			)}
+
+			{preview && (
+				<Viewer files={[preview] as any} index={0} onIndex={() => {}} onClose={() => setPreview(null)} />
 			)}
 
 			<div ref={footerRef} className="border-t items-center flex py-2 px-2">

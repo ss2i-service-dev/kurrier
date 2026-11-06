@@ -29,6 +29,7 @@ import { useAppearance } from "@/components/providers/appearance-provider";
 import { signOut } from "@/lib/actions/auth";
 import { switchWorkSpace } from "@/lib/actions/workspace";
 import { setInterfaceMode } from "@/lib/actions/interface-pref";
+import { WhatsNewButton } from "@/components/common/whats-new";
 
 type Identity = { publicId: string; value: string; displayName?: string | null };
 type Workspace = { publicId: string; id: string; name: string };
@@ -248,6 +249,8 @@ function SidebarContent({
 						</Tooltip>
 					);
 				})}
+				{/* ss2i (OI 10363) : Nouveautes, avec la pastille des notes non vues */}
+				<WhatsNewButton variant="k" />
 			</div>
 		</div>
 	);

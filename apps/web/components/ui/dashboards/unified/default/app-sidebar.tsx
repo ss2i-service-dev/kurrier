@@ -23,6 +23,7 @@ import Link from "next/link";
 import { useMediaQuery } from "@mantine/hooks";
 import { Divider } from "@mantine/core";
 import { IconFrame } from "@tabler/icons-react";
+import { WhatsNewButton } from "@/components/common/whats-new";
 
 type UnifiedSidebarProps = React.ComponentProps<typeof Sidebar> & {
 	navUserContent: React.ReactNode;
@@ -249,6 +250,10 @@ export function AppSidebar({ ...props }: UnifiedSidebarProps) {
 					</div>
 				</SidebarContent>
 				<SidebarFooter>
+					{/* ss2i (OI 10363) : Nouveautes, avec la pastille des notes non vues */}
+					<div className="flex justify-center">
+						<WhatsNewButton variant="classic" />
+					</div>
 					{navUserContent}
 				</SidebarFooter>
 			</Sidebar>

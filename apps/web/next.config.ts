@@ -4,6 +4,10 @@ const nextConfig: NextConfig = {
 	devIndicators: false,
 	output: "standalone",
 	serverExternalPackages: ["pino", "pino-pretty", "thread-stream"],
+	// ss2i (OI 10363) : les notes « Nouveautes » (apps/web/changelogs/*.md) sont lues a
+	// l'execution ; la sortie standalone ne les copierait pas toute seule, et l'image les
+	// perdrait sans que le Dockerfile ait a le savoir.
+	outputFileTracingIncludes: { "/**": ["./changelogs/**/*"] },
 	reactCompiler: true,
 	experimental: {
 		proxyClientMaxBodySize: "10gb",

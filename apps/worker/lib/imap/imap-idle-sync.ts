@@ -358,7 +358,7 @@ function scheduleReconnect(
 	if (imapAuthSuspended(identityId)) {
 		console.error(
 			`[realtime:${identityId}] IMAP authentication refused; automatic reconnect suspended ` +
-			"for 6 h, or until a successful connection or imap:start-idle",
+			"for 6 h, or until imap:start-idle",
 		);
 		return;
 	}

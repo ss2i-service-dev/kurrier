@@ -10,10 +10,11 @@ const BASE_DELAY = 5000;
 // Consecutive authentication failures per identity, all clients combined (after canAttemptImapConnection of
 // upstream 9b34ee91). Some IMAP servers ban the source IP after a number of authentication failures per day,
 // all mailboxes combined (Stalwart: 100): a refused password, retried at each imap:realtime-recovery sweep (144
-// times a day), would cut IMAP off for every mailbox. Beyond MAX_AUTH_FAILURES, imap-idle-sync.ts suspends its
-// automatic reconnections for AUTH_SUSPENSION_MS since the last failure, or until the identity connects
-// successfully or an explicit imap:start-idle; when the suspension expires, the sweep tries a LOGIN again, at most
-// 3 + 4 failures per day and per identity. An endless suspension silently cut the sync of a mailbox nobody opens.
+// times a day), would cut IMAP off for every mailbox. Beyond MAX_AUTH_FAILURES, no client of the identity (IDLE,
+// commands, catch-up, safeReconnect) attempts a LOGIN for AUTH_SUSPENSION_MS since the last failure, except after an
+// explicit imap:start-idle (password change); when the suspension expires, the first opening tries a LOGIN again (in
+// practice the sweep), at most 3 + 4 failures per day and per identity. An endless suspension silently cut the sync
+// of a mailbox nobody opens.
 // Any other failure (unreachable server, disconnection, transient refusal) interrupts the series.
 const MAX_AUTH_FAILURES = 3;
 const AUTH_SUSPENSION_MS = 6 * 60 * 60 * 1000;
@@ -166,6 +167,19 @@ const openImapClient = async (
 	} catch (err) {
 		console.error(`[IMAP:${identityId}] Existing instance check failed`, err);
 		retry();
+		return;
+	}
+
+	// Refused password, no more LOGIN whatever the client (IDLE, commands, catch-up, safeReconnect, queue jobs): the cap
+	// used to apply to IDLE only and the other clients made ~30 failures per day and per identity again (Stalwart bans
+	// the source IP at 100). Immediate failure, without counting a new failure or scheduling a reconnection; callers
+	// treat the absence of a client as a connection that failed. The suspension ends at the 6 h deadline or by
+	// imap:start-idle (reset before opening, startRealtimeForIdentity).
+	if (imapAuthSuspended(identityId)) {
+		console.warn(
+			`[IMAP:${identityId}] LOGIN skipped: authentication refused, suspended until the ` +
+			"6 h deadline or imap:start-idle",
+		);
 		return;
 	}
 

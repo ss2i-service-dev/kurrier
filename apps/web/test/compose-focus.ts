@@ -57,6 +57,30 @@ test("corps de l'editeur classique : min-h-96 seulement sans citation", () => {
 	assert.match(s, /hasQuote && state\.message \? "min-h-28" : "min-h-96"/);
 });
 
+// Cause reelle du curseur renvoye sur « A » (verifie dans Chrome le 06/11 : focus() appele par
+// rendreLeFocus de public/ss2i-shortcuts.js a la premiere frappe) : le message transfere est
+// un contenteditable dans un Shadow DOM ; la touche arrive avec pour cible la div hote, qui
+// n'est pas une saisie, et le verrou de saisie renvoyait le focus sur le dernier champ.
+const dansUneSaisie: (el: any) => boolean = (() => {
+	const s = src("public/ss2i-shortcuts.js");
+	const m = s.match(/const dansUneSaisie = (\(el\) => \{[\s\S]*?\n  \});/);
+	if (!m) throw new Error("dansUneSaisie introuvable dans ss2i-shortcuts.js");
+	return eval(m[1]);
+})();
+
+test("verrou de saisie : un contenteditable dans un Shadow DOM est une saisie", () => {
+	const article = { tagName: "ARTICLE", isContentEditable: true };
+	const hote = { tagName: "DIV", isContentEditable: false, shadowRoot: { activeElement: article } };
+	assert.equal(dansUneSaisie(hote), true, "la frappe dans le message transfere serait detournee vers « A »");
+	// Hote sans focus a l'interieur : pas une saisie.
+	assert.equal(dansUneSaisie({ tagName: "DIV", isContentEditable: false, shadowRoot: { activeElement: null } }), false);
+	// Cas existants inchanges.
+	assert.equal(dansUneSaisie({ tagName: "INPUT", type: "text" }), true);
+	assert.equal(dansUneSaisie({ tagName: "INPUT", type: "checkbox" }), false);
+	assert.equal(dansUneSaisie({ tagName: "DIV", isContentEditable: false }), false);
+	assert.equal(dansUneSaisie(null), false);
+});
+
 if (failures) {
 	console.log(`\n${failures} echec(s)`);
 	process.exit(1);

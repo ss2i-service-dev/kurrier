@@ -9,6 +9,8 @@ import MailPagination from "@/components/mailbox/default/mail-pagination";
 import WebmailList from "@/components/mailbox/default/webmail-list";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
 import { isNouvelleInterface } from "@/lib/actions/interface-pref";
+import ListSlot from "@/components/mailbox/default/list-slot";
+import { listUnderThread } from "@/lib/actions/list-under-thread";
 import KThreadList from "@/components/k/thread-list";
 import { fetchKPinnedThreads } from "@/lib/actions/k-pins";
 import { kRealAttachmentsOf } from "@/lib/actions/k-threads";
@@ -44,8 +46,10 @@ async function ClassicPage({
 		mailboxSlug,
 	)
 	const workspacePublicId = await getWorkspacePublicId()
+	// ss2i : liste masquee sous un fil ouvert (option par utilisateur).
+	const listMode = await listUnderThread();
 	return (
-		<>
+		<ListSlot mode={listMode}>
 			<div className="flex flex-1 flex-col gap-4 p-4 mb-12">
 				<WebmailList
 					mailboxThreadPromise={mailboxThreadPromise}
@@ -65,7 +69,7 @@ async function ClassicPage({
 					page={Number(page)}
 				/>
 			</div>
-		</>
+		</ListSlot>
 	);
 }
 

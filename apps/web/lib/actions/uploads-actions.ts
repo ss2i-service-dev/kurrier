@@ -10,6 +10,7 @@ import {messages} from "@db";
 import {eq} from "drizzle-orm";
 import {rlsClient} from "@/lib/actions/clients";
 import {assertOwnedS3Key, assertSignedIn, isSafeKeySegment, safeExtension} from "@/lib/authz";
+import {attachmentDisposition} from "@/lib/compose-attachment-preview";
 
 export async function createAttachmentUploadUrl(input: {
     fileName: string;
@@ -61,6 +62,28 @@ export async function createAttachmentDownloadUrl(path: string) {
     });
 
     return { url };
+}
+
+// ss2i : apercu d'une piece jointe pendant la redaction (visionneuse), meme controle d'acces que
+// createAttachmentDownloadUrl : url pour l'afficher, downloadUrl pour l'enregistrer sous son nom.
+export async function createComposeAttachmentPreview(path: string, fileName?: string | null) {
+    const user = await isSignedIn();
+    if (!user) throw new Error("Unauthorized");
+    const key = await assertOwnedS3Key(path, user.id);
+    const { S3_BUCKET } = getServerEnv();
+    const [url, downloadUrl] = await Promise.all([
+        getSignedUrl(s3, new GetObjectCommand({ Bucket: S3_BUCKET!, Key: key }), { expiresIn: 300 }),
+        getSignedUrl(
+            s3,
+            new GetObjectCommand({
+                Bucket: S3_BUCKET!,
+                Key: key,
+                ResponseContentDisposition: attachmentDisposition(fileName),
+            }),
+            { expiresIn: 300 },
+        ),
+    ]);
+    return { url, downloadUrl };
 }
 
 export async function getRawMessageDownloadUrl(messageId: string) {

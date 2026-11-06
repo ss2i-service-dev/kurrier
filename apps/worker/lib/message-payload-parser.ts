@@ -9,6 +9,7 @@ import {
 	MessageAttachmentCreate,
 	MessageAttachmentInsertSchema,
 	workspaces,
+	identities,
 } from "@db";
 import { generateSnippet, upsertMailboxThreadItem } from "@common";
 import { randomUUID } from "crypto";
@@ -20,6 +21,7 @@ import {PutObjectCommand} from "@aws-sdk/client-s3";
 import { upsertMailSubscription } from "./mail-subscriptions";
 import {upsertWorkspaceSharedContactFromMessage} from "../lib/message-parser-contacts";
 import { enqueueCrmLinks, type CrmLinkRequest } from "../lib/crm/enqueue";
+import { isOwnMessage } from "./own-message";
 
 const SEARCH_BATCH_SIZE = 100;
 const WEBHOOK_BATCH_SIZE = 100;
@@ -321,6 +323,18 @@ export async function storeMessageInThread(
 	}
 }
 
+/**
+ * ss2i : adresses des identites mail du proprietaire (kind email), en minuscules. Les identites de
+ * domaine n'y figurent pas (voir own-message.ts).
+ */
+export async function ownerEmailAddresses(ownerId: string): Promise<string[]> {
+	const rows = await db
+		.select({ value: identities.value })
+		.from(identities)
+		.where(and(eq(identities.ownerId, ownerId), eq(identities.kind, "email")));
+	return rows.map((r) => r.value.trim().toLowerCase());
+}
+
 export async function parseAndStoreEmail(
 	rawEmail: string,
 	opts: {
@@ -429,9 +443,36 @@ export async function parseAndStoreEmail(
 		(decoratedParsed as any).flagged = opts.flagged;
 	}
 
+	// ss2i : un message ecrit par le proprietaire (il s'est mis en copie, un alias dev@ le lui
+	// renvoie) entre lu, ligne de liste comprise : seen est pose avant l'insertion, donc compte
+	// dans mailbox_threads.unread_count par upsertMailboxThreadItem.
+	const own = isOwnMessage(getFromAddress(parsed)?.email, await ownerEmailAddresses(ownerId));
+	const serverSeen = (decoratedParsed as any).seen === true;
+	if (own) (decoratedParsed as any).seen = true;
+
 	const placed = await storeMessageInThread(parsed, decoratedParsed, { ownerId, workspaceId });
 	if (!placed) return null;
 	const message = placed.message;
+	// Le serveur IMAP a livre la copie sans \Seen : sans le drapeau, la synchro suivante (evenement
+	// flags sur ce message, par exemple une reponse) la remettrait non lue. Meme file que
+	// « marquer lu » de l'interface, limitee a ce message (les autres du fil ne sont pas touches).
+	if (own && !serverSeen && opts.metaData?.imap?.uid) {
+		try {
+			const { smtpQueue } = await getRedis();
+			await smtpQueue.add(
+				"mail:set-flags",
+				{ threadId: placed.threadId, mailboxId, op: "read", messageIds: [message.id] },
+				{
+					attempts: 3,
+					backoff: { type: "exponential", delay: 1500 },
+					removeOnComplete: true,
+					removeOnFail: false,
+				},
+			);
+		} catch (err: any) {
+			console.error("[parseAndStoreEmail] own-message seen flag enqueue failed:", err?.message ?? err);
+		}
+	}
 	const thread = { id: placed.threadId };
 	if (placed.merged) {
 		try {

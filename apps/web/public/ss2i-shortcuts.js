@@ -190,6 +190,10 @@
 
   // Ne jamais voler une frappe destinee a un champ de saisie.
   const dansUneSaisie = (el) => {
+    // Shadow DOM (message cite ou transfere modifiable, reply-quote-editor.tsx) : la touche
+    // et le focus visent la div hote ; la saisie est l'element actif a l'interieur. Sans cela
+    // le verrou renvoyait la frappe sur « A » (Samuel le 06/11). Test : test/compose-focus.ts.
+    while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
     if (!el) return false;
     if (el.isContentEditable) return true;
     const t = el.tagName;

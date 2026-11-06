@@ -1,6 +1,6 @@
 "use client";
 import React, { useRef, useEffect, useState } from "react";
-import { Archive, Building2, Inbox, ListChecks, MailOpen, RotateCw, Trash2 } from "lucide-react";
+import { Archive, Building2, Inbox, ListChecks, MailOpen, RotateCw, Trash2, X } from "lucide-react";
 import { findLikelyNotSpam } from "@/lib/actions/spam-triage";
 import { moveWithUndo } from "@/lib/pending-moves";
 import { fetchAllThreadIds, type SelectAllScope } from "@/lib/actions/select-all";
@@ -150,13 +150,18 @@ function MailListHeader({
 		}
 	};
 
+	// ss2i : l'action prise en compte, la selection se vide aussitot (Samuel le 06/11 :
+	// « une fois que l'action est prise en compte, il faut virer la selection »).
+	// Avant : on attendait le serveur et les fils restaient coches.
 	const markRead = async () => {
-		await markAsRead(
-			Array.from(state?.selectedThreadIds ?? []),
-			String(mailboxIdRef.current),
-			!!mailboxSync,
-			true,
-		);
+		const ids = Array.from(state?.selectedThreadIds ?? []);
+		if (!ids.length) return;
+		clearSelection();
+		try {
+			await markAsRead(ids, String(mailboxIdRef.current), !!mailboxSync, true);
+		} catch (e: any) {
+			toast.error(e?.message ?? "Mark read failed", { position: "bottom-left" });
+		}
 	};
 
 	// ss2i : la selection quitte la liste des le clic, toast avec « Undo » ; le serveur
@@ -280,6 +285,20 @@ function MailListHeader({
 						aria-label="Select all"
 						className="h-4 w-4 rounded border-muted-foreground/40"
 					/>
+				)}
+				{/* ss2i : tout deselectionner en un clic, sans passer par la case « tout
+				    selectionner » puis la decocher (Samuel le 06/11). */}
+				{!isOnSnoozedPage && hasSelected && (
+					<button
+						type="button"
+						onClick={clearSelection}
+						className="ml-2 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted"
+						title="Deselect all"
+						data-ss2i-shortcut="selection-clear"
+					>
+						<X className="h-4 w-4" />
+						{selectedSize} selected
+					</button>
 				)}
 
 				<div className="flex-1" />

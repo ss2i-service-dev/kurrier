@@ -50,7 +50,8 @@ import {getWorkspaceRole, rlsClient} from "@/lib/actions/clients";
 import {assertIdentityAccess, assertSignedIn, assertWorkspace, isUuid} from "@/lib/authz";
 import {assertPublicUrl} from "@common/safe-http";
 import { v4 as uuidv4 } from "uuid";
-import { backfillMailboxes, clearImapClients } from "@/lib/mail-jobs";
+import { backfillMailboxes, clearImapClients, restartImapIdle } from "@/lib/mail-jobs";
+import { restartIdleForSmtpAccount } from "@/lib/smtp-account-idle";
 import { kvGet } from "@common";
 import { nanoid } from "nanoid";
 import { getRedis } from "@/lib/actions/get-redis";
@@ -163,6 +164,21 @@ export async function upsertSMTPAccount(
 					value: JSON.stringify(smtpConfig),
 				});
 			}
+
+			// Corrected password: the identities of this account restart, and the IMAP suspension for
+			// refused credentials is lifted without waiting for its 6 hours.
+			await restartIdleForSmtpAccount(String(parsed.accountId), {
+				identityIdsOf: async (accountId) =>
+					(
+						await rls((tx) =>
+							tx
+								.select({ id: identities.id })
+								.from(identities)
+								.where(eq(identities.smtpAccountId, accountId)),
+						)
+					).map((row) => row.id),
+				enqueueStartIdle: restartImapIdle,
+			});
 		} else {
 			const secretMeta = await createSecret(session, workspaceId, {
 				name: String(parsed.ulid),

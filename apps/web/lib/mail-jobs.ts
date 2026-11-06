@@ -60,3 +60,20 @@ export const clearImapClients = async (identityId: string) => {
 		},
 	);
 };
+
+// Restarts the real-time sync of an identity and lifts its suspension for a refused password (the worker
+// resets the failures before opening). Called when an SMTP/IMAP account is saved, for each identity that
+// uses it (smtp-account-idle.ts).
+export const restartImapIdle = async (identityId: string) => {
+	const { smtpQueue } = await getRedis();
+	await smtpQueue.add(
+		"imap:start-idle",
+		{ identityId },
+		{
+			removeOnComplete: true,
+			removeOnFail: false,
+			attempts: 3,
+			backoff: { type: "exponential", delay: 1500 },
+		},
+	);
+};

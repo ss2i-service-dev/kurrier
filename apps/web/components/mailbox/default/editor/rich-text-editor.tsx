@@ -289,7 +289,8 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 					{nouvelle && formatOpen && <KFormatBar />}
 					{nouvelle && <KBubbleBar />}
 					<FocusTrap active={focusOnSubject}>
-						<RichTextEditor.Content className={nouvelle ? "k-editor-content" : "prose min-h-96 text-sm p-2 leading-5"} />
+						{/* ss2i : avec une citation (reponse, transfert), le corps ne reserve plus 384 px vides au-dessus du message cite (Samuel le 06/11 : « une enorme zone vide » au transfert) ; il grandit avec le texte. */}
+						<RichTextEditor.Content className={nouvelle ? "k-editor-content" : `prose text-sm p-2 leading-5 ${hasQuote && state.message ? "min-h-28" : "min-h-96"}`} />
 					</FocusTrap>
 					{nouvelle && !(state.rfcStyle && isForward) && <div ref={setSigSlot} className="k-sig-slot" />}
 					{!state.rfcStyle || isForward ? quoteEditor : null}

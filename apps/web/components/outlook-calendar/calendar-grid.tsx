@@ -88,7 +88,7 @@ function eventClass(e: CalendarEvent, t: ReturnType<typeof theme>) {
 const colorStyle = (e: CalendarEvent): React.CSSProperties =>
 	e.color && !e.ghost && !e.active
 		? {
-				background: `color-mix(in srgb, ${e.color} ${e.showAs === "free" ? 8 : 18}%, var(--k-surface, white))`,
+				background: `color-mix(in srgb, ${e.color} ${e.showAs === "free" ? 8 : 18}%, var(--k-surface, var(--background)))`,
 				borderColor: `color-mix(in srgb, ${e.color} 45%, transparent)`,
 				borderLeftColor: e.color,
 			}

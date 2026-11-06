@@ -12,6 +12,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { kInboxPulse } from "@/lib/actions/k-pulse";
+import { tabSectionOf, tabTitle } from "@/lib/tab-identity";
 
 // Apres un deploiement, un onglet reste sur l'ancienne version : ses actions
 // serveur n'existent plus (« Failed to find Server Action ») et la premiere
@@ -110,7 +111,12 @@ function iconLinks() {
 function drawBadge(n: number) {
 	const links = iconLinks();
 	if (!links.length) return;
-	if (baseHref === null) baseHref = links[0].dataset.kBase || links[0].href;
+	// L'icone de base change d'une section a l'autre (mail, agenda) : relue a chaque appel.
+	const href = links[0].dataset.kBase || links[0].href;
+	if (href !== baseHref) {
+		baseHref = href;
+		baseIcon = null;
+	}
 	if (n <= 0) {
 		links.forEach((l) => {
 			if (l.dataset.kBase) l.href = l.dataset.kBase;
@@ -151,39 +157,15 @@ function drawBadge(n: number) {
 	} else paint();
 }
 
-// --- Titre de l'onglet : « (3) Kurrier - Boite de reception » -------------
-const SLUG_TITLES: Record<string, string> = {
-	inbox: "Boîte de réception",
-	sent: "Envoyés",
-	drafts: "Brouillons",
-	archive: "Archives",
-	spam: "Spam",
-	trash: "Corbeille",
-	snoozed: "Reportés",
-	scheduled: "Programmés",
-	clients: "Clients",
-	settings: "Paramètres",
-};
+// --- Titre de l'onglet : « (3) Courrier - Boîte de réception », « Agenda » ---
+// ss2i : titre par section (lib/tab-identity.ts), pour distinguer un onglet de mail d'un
+// onglet d'agenda ; compteur et pastille de non lus seulement dans le mail.
 let unreadForTitle = 0;
 
-function sectionTitle(pathname: string) {
-	const parts = pathname.split("/").filter(Boolean);
-	if (parts.includes("contacts")) return "Contacts";
-	if (parts.includes("drive")) return "Drive";
-	if (parts.includes("platform")) return "Plateforme";
-	const i = parts.indexOf("mail");
-	const slug = i >= 0 ? parts[i + 2] : undefined;
-	if (!slug) return "Messagerie";
-	if (parts[i + 3] === "search") return "Recherche";
-	if (SLUG_TITLES[slug]) return SLUG_TITLES[slug];
+function wantedTitle() {
 	// Dossier personnel : son nom tel qu'affiche dans la barre laterale.
 	const active = document.querySelector<HTMLElement>('a[aria-current="page"] span.flex-1');
-	return active?.textContent?.trim() || "Messagerie";
-}
-
-function wantedTitle() {
-	const base = `Kurrier - ${sectionTitle(window.location.pathname)}`;
-	return unreadForTitle > 0 ? `(${unreadForTitle}) ${base}` : base;
+	return tabTitle(window.location.pathname, unreadForTitle, active?.textContent);
 }
 
 function applyTitle() {
@@ -194,6 +176,7 @@ function applyTitle() {
 function applyBadge(n: number) {
 	unreadForTitle = n;
 	applyTitle();
+	if (tabSectionOf(window.location.pathname) !== "mail") n = 0;
 	// Next peut remettre la balise d'origine en naviguant : on reapplique.
 	const stale = iconLinks().some((l) => (n > 0 ? !l.href.startsWith("data:") : l.href.startsWith("data:")));
 	if (n !== lastBadge || stale) drawBadge(n);

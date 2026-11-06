@@ -521,6 +521,40 @@ async function main() {
 		assert(rows.find((r) => r.id === arch.ids[0])?.mailboxId === archive.id, "deltaFetch : la copie de l'Archive n'a pas bouge");
 		assert((await cursorOf(archive.id)) === 1, "deltaFetch : curseur de l'Archive avance (1)");
 	}
+
+	// 11. Incident du 05/11 (reponse d'OPTI MARCHE rangee dans les Envoyes) : un message envoye
+	//     qui revient aussi dans l'INBOX (liste dev@ en copie) est une copie, pas un deplacement.
+	//     Avant : allers-retours INBOX <-> Envoyes, et le dernier emportait dans les Envoyes la
+	//     reponse recue entre-temps dans l'INBOX.
+	{
+		const f = await createUserFixture("delta-copie-envoye");
+		const x = `<envoye-liste-${Date.now()}@x>`;
+		const reply = `<reponse-cliente-${Date.now()}@x>`;
+		const sent = await thread(f, f.sent.id, [{ mid: x, uid: 7, path: "Sent" }]);
+		const [r] = await db
+			.insert(messages)
+			.values({
+				ownerId: f.user.id,
+				workspaceId: f.workspace.id,
+				mailboxId: f.inbox.id,
+				threadId: sent.id,
+				messageId: reply,
+				subject: "RE: fil",
+				text: "Merci Hugo",
+				date: new Date(),
+				seen: false,
+				metaData: { imap: { uid: 2, mailboxPath: "Inbox" } },
+			} as any)
+			.returning();
+		await upsertMailboxThreadItem(r.id);
+		for (const id of [f.inbox.id, f.sent.id]) await syncRow(f, id, 0).catch(() => {});
+		const imap = new FakeStalwart({ Inbox: { uidNext: 3, msgs: [[1, x], [2, reply]] }, Sent: { uidNext: 8, msgs: [[7, x]] } });
+		// deux passages : l'INBOX puis les Envoyes, comme le worker en production
+		for (let i = 0; i < 2; i++) await deltaFetch(f.identity.id, on(f, imap)).catch((e) => console.warn("deltaFetch", String(e)));
+		const rows = await msgRows([...sent.ids, r.id]);
+		assert(rows.find((m) => m.id === r.id)?.mailboxId === f.inbox.id, "copie d'un envoye : la reponse de la cliente reste dans l'INBOX");
+		assert(rows.find((m) => m.id === sent.ids[0])?.mailboxId === f.sent.id, "copie d'un envoye : le message envoye reste dans les Envoyes");
+	}
 }
 
 main()

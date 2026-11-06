@@ -15,6 +15,8 @@ import {
 	imapIdleSync,
 	startRealtimeForIdentity,
 	stopRealtimeForIdentity,
+	beginRealtimeShutdown,
+	recoverOfflineRealtime,
 } from "../../lib/imap/imap-idle-sync";
 import { discoverMailboxes } from "../../lib/imap/backfill/discover/discover-mailboxes";
 import {startBackfillForIdentity} from "../../lib/imap/backfill/backfill-full";
@@ -175,6 +177,13 @@ export default defineNitroPlugin(async (nitroApp) => {
 					idleImapInstances,
 					imapInstances,
 				);
+			} else if (job.name === "imap:realtime-recovery") {
+				// ss2i (OI 10346, repris de 6d079e4d amont) : relance les IDLE morts (plafond de
+				// reconnexion atteint, serveur redemarre). Sans attendre, comme imap:start-idle : une
+				// connexion qui traine (jusqu'a 90 s par identite) ne bloque pas les actions de la file.
+				void recoverOfflineRealtime(idleImapInstances, imapInstances).catch((err) =>
+					console.error("recoverOfflineRealtime failed", err),
+				);
 			}
 			return { success: true };
 		},
@@ -204,6 +213,21 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 	);
 
+	// ss2i (OI 10346, repris de 6d079e4d amont) : sans ce balayage, une identite dont la
+	// reconnexion IDLE avait atteint son plafond ne recevait plus rien jusqu'au redemarrage.
+	await scheduler.upsertJobScheduler(
+		"imap-realtime-recovery-scheduler",
+		{ every: 10 * 60 * 1000 },
+		"imap:realtime-recovery",
+		{},
+		{
+			removeOnComplete: true,
+			removeOnFail: true,
+			attempts: 1,
+		},
+		{ override: true },
+	);
+
 	worker.on("completed", async (job) => {
 		console.info("job", job.name);
 		console.info(`[SMTP] ${job.id} has completed!`);
@@ -218,10 +242,16 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 	nitroApp.hooks.hookOnce("close", async () => {
 		console.info("Closing nitro server...");
+		// ss2i (OI 10346, repris de 6d079e4d amont) : plus aucune reconnexion IDLE pendant l'arret.
+		beginRealtimeShutdown();
 		try {
 			const logoutAll = async (label: string, map: Map<string, ImapFlow>) => {
 				for (const [identityId, client] of map) {
 					try {
+						// Sans ses ecouteurs, le close du logout ne relance pas safeReconnect ; une RST
+						// pendant le LOGOUT ne doit pas lever une erreur 'error' que personne n'ecoute.
+						client.removeAllListeners();
+						client.on("error", () => {});
 						await client.logout();
 						console.info(
 							`[${label}] Logged out from IMAP server for identityId: ${identityId}`,
@@ -231,6 +261,9 @@ export default defineNitroPlugin(async (nitroApp) => {
 							`[${label}] Failed to logout cleanly for identityId: ${identityId}`,
 							err,
 						);
+						try {
+							client.close();
+						} catch {}
 					}
 				}
 				map.clear();

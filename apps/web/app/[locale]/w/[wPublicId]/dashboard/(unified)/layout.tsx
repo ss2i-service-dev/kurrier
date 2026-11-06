@@ -1,5 +1,6 @@
 import { SidebarProvider } from "@/components/ui/sidebar";
 import {fetchWorkspace} from "@/lib/actions/workspace";
+import MeetingAlerts from "@/components/outlook-calendar/meeting-alerts";
 
 export default async function DashboardLayout({
 	children,
@@ -23,6 +24,8 @@ export default async function DashboardLayout({
 			>
 				{children}
 			</SidebarProvider>
+			{/* ss2i : rappels des reunions de l'agenda Outlook dans tout courrier (bandeau en haut) */}
+			<MeetingAlerts />
 		</>
 	);
 }

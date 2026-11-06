@@ -48,6 +48,10 @@ const jetbrains = JetBrains_Mono({
 export const metadata: Metadata = {
 	title: "Kurrier",
 	description: "Mailbox, but nice.",
+	// ss2i : favicon declare ici (public/favicon.ico) et non plus par app/favicon.ico : le
+	// fichier special de app/ s'ajoutait toujours a l'icone d'une section (Courrier, Agenda),
+	// et Chrome pouvait garder celui-ci. Declare en metadata, une section le remplace.
+	icons: { icon: [{ url: "/favicon.ico", sizes: "any" }] },
 };
 
 export default async function RootLayout({

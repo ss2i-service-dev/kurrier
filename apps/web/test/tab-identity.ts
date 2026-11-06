@@ -81,6 +81,12 @@ test("section d'apres le chemin", () => {
 	assert.equal(tabSectionOf(`${ws}/mail/id1/inbox/threads/t1`), "mail");
 });
 
+test("le favicon racine n'est plus un fichier special de app/ (il s'ajouterait a l'icone de section)", () => {
+	assert.ok(!existsSync(join(web, "app/favicon.ico")), "app/favicon.ico present");
+	assert.ok(existsSync(join(web, "public/favicon.ico")), "public/favicon.ico absent");
+	assert.match(readFileSync(join(web, "app/layout.tsx"), "utf8"), /icons:\s*\{\s*icon:\s*\[\{\s*url:\s*"\/favicon\.ico"/);
+});
+
 if (failures) {
 	console.log(`\n${failures} echec(s)`);
 	process.exit(1);

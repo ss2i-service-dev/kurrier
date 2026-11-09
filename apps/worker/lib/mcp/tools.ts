@@ -33,6 +33,7 @@ import {
 	unreadCountsByMailbox,
 } from "./access";
 import { htmlToText, messageBodyText, truncate } from "@common/html-text";
+import { stripSubjectPrefixes } from "@common/subject";
 import { pickSenderIdentity } from "./sender-identity";
 import { type QuoteScope, stripQuotedText } from "@common";
 import { attachThreadsToCompany, crmSearchCompanies, detachThreadsFromCompany, searchKnownCrmCompanies, upsertCrmCompanies } from "@common/server-client-link";
@@ -495,7 +496,7 @@ async function saveDraftViaService(opts: {
 			to: opts.to,
 			cc: opts.cc,
 			bcc: opts.bcc,
-			subject: opts.subject,
+			subject: stripSubjectPrefixes(opts.subject),
 			html: opts.html,
 			text: opts.text,
 			mode: opts.mode,
@@ -1274,7 +1275,7 @@ export const TOOLS: ToolDefinition[] = [
 		name: "reply",
 		scope: (args) => (args.as_draft ? "emails:receive" : "emails:send"),
 		description:
-			"Reply to a message (by message_id from get_thread). Recipients, subject (Re:), quoting, In-Reply-To and References are computed like the web editor. quote chooses what is quoted: 'last' (default) quotes only the message replied to, without the history it quotes itself; 'thread' quotes it whole. Where the body goes depends on the user's composing setting: above the quote by default, or below it with the '-- ' signature separator when the user enabled the RFC style. reply_all adds the other recipients in cc. With as_draft, saves a draft attached to the thread for the user to review in courrier instead of sending.",
+			"Reply to a message (by message_id from get_thread). Recipients, subject (without Re:/Fwd: prefixes), quoting, In-Reply-To and References are computed like the web editor. quote chooses what is quoted: 'last' (default) quotes only the message replied to, without the history it quotes itself; 'thread' quotes it whole. Where the body goes depends on the user's composing setting: above the quote by default, or below it with the '-- ' signature separator when the user enabled the RFC style. reply_all adds the other recipients in cc. With as_draft, saves a draft attached to the thread for the user to review in courrier instead of sending.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -1334,7 +1335,7 @@ export const TOOLS: ToolDefinition[] = [
 		name: "forward",
 		scope: (args) => (args.as_draft ? "emails:receive" : "emails:send"),
 		description:
-			"Forward a message (by message_id from get_thread) to new recipients, with its original attachments unless include_attachments is false. Subject (Fwd:) and quoting are computed like the web editor. With as_draft, saves a draft for the user to review in courrier instead of sending (to may then be empty).",
+			"Forward a message (by message_id from get_thread) to new recipients, with its original attachments unless include_attachments is false. Subject (without Re:/Fwd: prefixes) and quoting are computed like the web editor. With as_draft, saves a draft for the user to review in courrier instead of sending (to may then be empty).",
 		inputSchema: {
 			type: "object",
 			properties: {

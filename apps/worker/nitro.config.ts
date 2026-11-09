@@ -22,9 +22,10 @@ export default defineNitroConfig({
 		"@common/server-client-link": "../../packages/common/src/server-client-link.ts",
 		// ss2i : HTML -> texte de l'MCP, partage avec « Ajouter a l'agenda » du web (OI 10280).
 		"@common/html-text": "../../packages/common/src/html-text.ts",
+		"@common/subject": "../../packages/common/src/subject.ts",
 	},
 	externals: {
-		inline: ["@db", "@schema", "@providers", "@common", "@common/mail-client", "@common/safe-http", "@common/server-client-link", "@common/html-text"],
+		inline: ["@db", "@schema", "@providers", "@common", "@common/mail-client", "@common/safe-http", "@common/subject", "@common/server-client-link", "@common/html-text"],
 	},
 	routeRules: {
 		"/**": {

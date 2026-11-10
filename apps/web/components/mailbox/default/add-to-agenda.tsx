@@ -9,6 +9,7 @@ import { addThreadEventsToAgenda, agendaAvailable, analyzeThreadForAgenda } from
 import { type AgendaEvent, type AgendaReminder, normalizeAgendaEvent } from "@common/thread-agenda";
 import { type AgendaRow, ConfirmStep, ProposalsStep } from "@/components/mailbox/default/add-to-agenda-steps";
 import { placeEvent } from "@common/outlook-calendar";
+import { agendaFromMailKey, removeFormBackup, restorableBackup, syncFormBackup } from "@/lib/form-backup";
 import PlanningPanel from "@/components/outlook-calendar/planning-panel";
 
 // ss2i : « Ajouter a l'agenda » depuis un fil ouvert (OI 10280), meme fenetre dans les deux
@@ -27,7 +28,19 @@ import PlanningPanel from "@/components/outlook-calendar/planning-panel";
 // Planification (Hugo, 05/11) : a l'etape 1, la fenetre s'elargit et montre a droite deux
 // semaines de l'agenda Outlook (PlanningPanel) ; la proposition encadree se place d'un clic
 // sur un creneau, en gardant sa duree.
+// Copie locale (lib/form-backup.ts, Samuel le 10/11 : « on est en 2026 ») : les propositions
+// corrigees et la demande en cours de saisie sont ecrites dans localStorage a chaque
+// modification, par fil (la cle est celle du fil ouvert). A la reouverture, une fois le fil
+// analyse, la copie prend la place des propositions fraiches (le LLM ne redonne pas deux fois
+// la meme liste) et un toast le dit. Elle part quand Outlook a tout cree ou sur « Annuler » ;
+// fermer par erreur (clic dehors, Echap) la garde.
 
+
+/** Etat saisi qui se compare a la copie locale : propositions (corrigees, decochees) et demande en cours. */
+type BackupValues = { rows: AgendaRow[]; wish: string };
+
+const isBackupValues = (x: any): x is BackupValues =>
+	!!x && typeof x.wish === "string" && Array.isArray(x.rows) && x.rows.every((r: any) => r && typeof r.key === "number" && typeof r.title === "string" && typeof r.start === "string");
 
 const availability = new Map<string, Promise<boolean>>();
 
@@ -92,6 +105,10 @@ export function AddToAgenda({
 	const busy = useRef(false);
 	const confirmShownAt = useRef(0);
 	const bodyRef = useRef<HTMLDivElement>(null);
+	// Copie locale du fil analyse : sa cle, et l'etat issu de l'analyse (ce que « Effacer » rend).
+	const [backup, setBackup] = useState<{ key: string; initial: BackupValues } | null>(null);
+	// Copie retiree (tout cree, « Annuler », « Effacer ») : plus rien ne la reecrit.
+	const discarded = useRef<string | null>(null);
 
 	// Apres un clic qui retire le bouton clique : focus rendu a la fenetre s'il est tombe dans le vide.
 	const keepFocusInDialog = () =>
@@ -110,6 +127,7 @@ export function AddToAgenda({
 		setRows([]);
 		setWish("");
 		setAskOpen(false);
+		setBackup(null);
 		analyzeThreadForAgenda({ threadId, identityPublicId })
 			.catch((e: any) => ({ ok: false as const, error: String(e?.message ?? e) }))
 			.then((res) => {
@@ -120,12 +138,67 @@ export function AddToAgenda({
 					setPhase("error");
 					return;
 				}
+				const fresh = res.events.map((e, i) => ({ ...e, key: i, checked: true }));
+				const initial: BackupValues = { rows: fresh, wish: "" };
+				const key = agendaFromMailKey(threadId);
+				const copy = restorableBackup(key, initial);
+				const saved = copy && isBackupValues(copy.values) ? copy.values : null;
+				discarded.current = null;
+				setBackup({ key, initial });
 				setMailbox(res.mailbox);
-				setRows(res.events.map((e, i) => ({ ...e, key: i, checked: true })));
-				setActiveKey(res.events.length ? 0 : null);
-				nextKey.current = res.events.length;
 				setPhase("ready");
+				if (!saved) {
+					setRows(fresh);
+					setActiveKey(res.events.length ? 0 : null);
+					nextKey.current = res.events.length;
+					return;
+				}
+				setRows(saved.rows);
+				setWish(saved.wish);
+				setAskOpen(!!saved.wish);
+				setActiveKey(saved.rows.find((r) => r.checked)?.key ?? saved.rows[0]?.key ?? null);
+				nextKey.current = saved.rows.reduce((n, r) => Math.max(n, r.key + 1), 0);
+				toast("Saisie restaurée depuis ce navigateur", {
+					id: `form-backup:${key}`,
+					position: toastPosition(),
+					duration: 12000,
+					action: {
+						label: "Effacer",
+						onClick: () => {
+							discarded.current = key;
+							removeFormBackup(key);
+							setRows(fresh);
+							setWish("");
+							setAskOpen(false);
+							setStep("edit");
+							setActiveKey(res.events.length ? 0 : null);
+							nextKey.current = res.events.length;
+						},
+					},
+				});
 			});
+	};
+
+	// Copie locale a chaque modification (propositions, demande en cours) ; retiree si tout revient a l'analyse.
+	useEffect(() => {
+		if (phase !== "ready" || !backup || discarded.current === backup.key) return;
+		syncFormBackup(backup.key, { rows, wish }, backup.initial);
+	}, [rows, wish, phase, backup]);
+
+	// « Annuler » : abandon voulu, la copie part et une prochaine ouverture repart de l'analyse.
+	const abandon = () => {
+		if (backup) {
+			discarded.current = backup.key;
+			removeFormBackup(backup.key);
+		}
+		analyzedFor.current = null;
+		setPhase("idle");
+		setStep("edit");
+		setRows([]);
+		setWish("");
+		setAskOpen(false);
+		setBackup(null);
+		close();
 	};
 
 	// Un autre fil dans la meme barre (nouvelle interface) : l'analyse precedente ne vaut plus.
@@ -139,6 +212,7 @@ export function AddToAgenda({
 			setAsking(false);
 			setWish("");
 			setAskOpen(false);
+			setBackup(null);
 		}
 	}, [threadId]);
 
@@ -262,7 +336,12 @@ export function AddToAgenda({
 			toast.success(`${plural(done.size, "Événement ajouté", "événements ajoutés")} à l'agenda de ${res.mailbox}`, { position });
 		}
 		if (!failed.size) {
-			// Tout est cree : une prochaine ouverture repart d'une nouvelle analyse.
+			// Tout est cree : la copie locale n'a plus d'objet, une prochaine ouverture repart d'une nouvelle analyse.
+			if (backup) {
+				discarded.current = backup.key;
+				removeFormBackup(backup.key);
+			}
+			setBackup(null);
 			analyzedFor.current = null;
 			setPhase("idle");
 			setStep("edit");
@@ -406,7 +485,7 @@ export function AddToAgenda({
 								Retour
 							</Button>
 						) : (
-							<Button key="close" variant="default" size="sm" onClick={close}>
+							<Button key="close" variant="default" size="sm" onClick={phase === "ready" && rows.length ? abandon : close}>
 								{phase === "ready" && rows.length ? "Annuler" : "Fermer"}
 							</Button>
 						)}

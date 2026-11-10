@@ -3,7 +3,7 @@
 // arriere-plan et on passe aussitot au fil suivant (ou a la liste).
 import React, { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Archive, ArrowLeft, Building2, CalendarPlus, ChevronDown, ChevronUp, ClipboardList, Mail, Sparkles, Trash2, X } from "lucide-react";
+import { Archive, ArrowLeft, Building2, CalendarPlus, ChevronDown, ChevronUp, ClipboardList, Inbox, Mail, Sparkles, Trash2, X } from "lucide-react";
 import { LinkClientPicker } from "@/components/mailbox/default/client-link-ui";
 import { AddToAgenda } from "@/components/mailbox/default/add-to-agenda";
 import { ReplyWithLore } from "@/components/mailbox/default/reply-with-lore";
@@ -27,6 +27,7 @@ export default function ThreadToolbar({
 	hasUnread,
 	pinned: serverPinned = false,
 	identityPublicId,
+	inboxMailboxId,
 }: {
 	threadId: string;
 	activeMailboxId: string;
@@ -36,6 +37,8 @@ export default function ThreadToolbar({
 	pinned?: boolean;
 	/** ss2i (OI 10270) : « Rattacher a un client... » (identites pro). */
 	identityPublicId?: string;
+	/** ss2i : boite de reception de l'identite quand le fil est ouvert dans le Spam. */
+	inboxMailboxId?: string | null;
 }) {
 	const pinOverride = useMailStore((s) => s.pinned.get(String(threadId)));
 	const pinned = pinOverride ?? serverPinned;
@@ -93,6 +96,11 @@ export default function ThreadToolbar({
 		advance();
 		mailActions.trash(threadId, activeMailboxId, markSmtp, activeMailboxKind === "trash");
 	};
+	const notSpam = () => {
+		if (!inboxMailboxId) return;
+		advance();
+		mailActions.notSpam(threadId, activeMailboxId, inboxMailboxId, markSmtp);
+	};
 	const unread = () => {
 		mailActions.unread(threadId, activeMailboxId, markSmtp, 1);
 		close();
@@ -115,6 +123,11 @@ export default function ThreadToolbar({
 				<X className="hidden lg:block" />
 			</KIconButton>
 			<span className="mx-1.5 h-5 w-px bg-k-line" />
+			{inboxMailboxId && (
+				<KIconButton label="Pas un spam : remettre dans la boîte de réception" onClick={notSpam}>
+					<Inbox />
+				</KIconButton>
+			)}
 			{activeMailboxKind !== "archive" && (
 				<KIconButton label="Archiver" shortcut={hint.archive} action="archive" onClick={archive}>
 					<Archive />

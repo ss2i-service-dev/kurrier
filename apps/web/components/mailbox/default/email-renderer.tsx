@@ -6,7 +6,7 @@ import { leaveThreadToList } from "@/lib/leave-thread";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
 import slugify from "@sindresorhus/slugify";
-import { Archive, Ban, Building2, CalendarPlus, ClipboardCopy, ClipboardList, Code, Download, EllipsisVertical, Forward, Mail, Reply, ReplyAll, Sparkles, Trash2 } from "lucide-react";
+import { Archive, Ban, Building2, Inbox, CalendarPlus, ClipboardCopy, ClipboardList, Code, Download, EllipsisVertical, Forward, Mail, Reply, ReplyAll, Sparkles, Trash2 } from "lucide-react";
 import { LinkClientPicker } from "@/components/mailbox/default/client-link-ui";
 import { AddToAgenda } from "@/components/mailbox/default/add-to-agenda";
 import { ReplyWithLore } from "@/components/mailbox/default/reply-with-lore";
@@ -18,7 +18,8 @@ import { ActionIcon, Button, Menu, Modal, Tooltip } from "@mantine/core";
 import { EmailEditorHandle } from "@/components/mailbox/default/editor/email-editor";
 import MessageAttachments from "@/components/mailbox/default/message-attachments";
 import { PublicConfig } from "@schema";
-import {archiveThread, fetchMailbox, FetchIdentityMailboxListResult, FetchThreadMailSubsResult, markAsRead, markAsUnread, moveToTrash} from "@/lib/actions/mailbox";
+import {archiveThread, fetchMailbox, FetchIdentityMailboxListResult, FetchThreadMailSubsResult, markAsRead, markAsUnread, moveToFolder, moveToTrash} from "@/lib/actions/mailbox";
+import { inboxIdForSpam } from "@/lib/not-spam";
 import { replyRecipients } from "@/lib/reply-recipients";
 import { toast } from "sonner";
 import { moveWithUndo } from "@/lib/pending-moves";
@@ -171,6 +172,21 @@ function EmailRenderer({
 			run: () => archiveThread(id, activeMailboxId, markSmtp, true),
 			failure: "Archive failed",
 			archive: true,
+		});
+		leaveThread();
+	};
+	// ss2i : message ouvert dans le Spam -> « Pas un spam » le remet dans la boite de
+	// reception de son identite et revient a la liste (Samuel le 10/11).
+	const notSpamInboxId = useMemo(() => inboxIdForSpam(identityMailboxes, activeMailboxId), [identityMailboxes, activeMailboxId]);
+	const notSpamMessage = () => {
+		if (!notSpamInboxId) return;
+		const id = String(threadId);
+		moveWithUndo({
+			mailboxId: activeMailboxId,
+			threadIds: [id],
+			message: "Moved to Inbox",
+			run: () => moveToFolder(id, activeMailboxId, notSpamInboxId, markSmtp, true),
+			failure: "Move to Inbox failed",
 		});
 		leaveThread();
 	};
@@ -490,6 +506,13 @@ function EmailRenderer({
 								</Tooltip>
 							)}
 						/>
+						{notSpamInboxId && (
+							<Tooltip label="Not spam: move to Inbox" withArrow>
+								<ActionIcon variant={"subtle"} color={"green"} aria-label="Not spam" onClick={notSpamMessage}>
+									<Inbox size={18} />
+								</ActionIcon>
+							</Tooltip>
+						)}
 						<Tooltip label="Archive (a)" withArrow>
 							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Archive" onClick={archiveMessage}>
 								<Archive size={18} />

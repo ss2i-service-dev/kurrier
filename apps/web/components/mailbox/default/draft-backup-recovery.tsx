@@ -54,8 +54,10 @@ export default function DraftBackupRecovery() {
 			busy.current = true;
 			let recovered = false;
 			try {
-				const now = Date.now();
 				for (const b of listBackups()) {
+					// Heure relue a chaque copie : un editeur qui vient de reprendre la copie
+					// (lib/draft-resume.ts) pose son battement pendant qu'on en recupere une autre.
+					const now = Date.now();
 					if (now - Math.max(aliveAt(b.id), b.updatedAt) < ORPHAN_MS) continue;
 					if (b.sentAt) {
 						if (now - b.sentAt > SENT_KEEP_MS) removeBackup(b.id);

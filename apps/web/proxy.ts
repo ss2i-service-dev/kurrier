@@ -1,6 +1,7 @@
 import {type NextRequest, NextResponse} from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 import { jwtVerify } from "jose";
+import { isUnknownRootFile } from "@/lib/root-file-not-found";
 
 const locales = ["en", "ko"];
 const defaultLocale = "en";
@@ -26,6 +27,16 @@ function getRedirectLocale(request: NextRequest) {
 
 
 export async function proxy(request: NextRequest) {
+
+	// An unknown root file (/.env, /docker-compose.yaml, /..%2F.env) is a real 404, decided
+	// before any rendering (lib/root-file-not-found.ts). It comes before the /api test below,
+	// which does not require a "/" and let /api%2F.env through.
+	if (isUnknownRootFile(request.nextUrl.pathname)) {
+		return new NextResponse("Not Found", {
+			status: 404,
+			headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+		});
+	}
 
 	// The routes of the MCP OAuth server (discovery and tokens) are outside the locale and
 	// the session guard, like /api.

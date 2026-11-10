@@ -95,6 +95,16 @@ export function touchAlive(id: string) {
 	} catch {}
 }
 
+// Page qui se ferme ou se recharge : son editeur n'est plus vivant, la copie est libre pour
+// l'editeur de la page suivante (lib/draft-resume.ts) sans attendre 10 s.
+export function clearAlive(id: string) {
+	const s = storage();
+	if (!s) return;
+	try {
+		s.removeItem(ALIVE_PREFIX + id);
+	} catch {}
+}
+
 export function aliveAt(id: string): number {
 	const s = storage();
 	if (!s) return 0;

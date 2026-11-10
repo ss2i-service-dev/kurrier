@@ -11,7 +11,7 @@ import React, { useEffect, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { Button, Loader, TagsInput, TextInput, Textarea } from "@mantine/core";
 import { toast } from "sonner";
-import { Building2, Check, CircleHelp, Clock, ExternalLink, Forward, Lock, MapPin, Paperclip, Pencil, Repeat, Settings2, Trash2, Users, Video, X } from "lucide-react";
+import { Building2, Check, CircleHelp, Clock, Copy, ExternalLink, Forward, Lock, MapPin, Paperclip, Pencil, Repeat, Settings2, Trash2, Users, Video, X } from "lucide-react";
 import { AGENDA_TIMEZONE, agendaWhen } from "@common/thread-agenda";
 import type { CalendarEvent } from "@common/outlook-calendar";
 import type { AttendeeResponse, EventDetail, EventScope, InviteResponse, OutlookCategory } from "@common/outlook-graph";
@@ -27,6 +27,8 @@ import {
 } from "@/lib/actions/outlook-calendar";
 import { type EditorTarget, inputFromDetail } from "@/components/outlook-calendar/event-editor";
 import TeamsOptionsModal from "@/components/outlook-calendar/teams-options";
+import { formatEventForCopy } from "@/lib/event-copy";
+import { htmlToText } from "@/lib/mail-copy";
 
 const toMin = (v: string) => Number(v.slice(0, 2)) * 60 + Number(v.slice(3, 5));
 const fromMin = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
@@ -241,6 +243,19 @@ export default function EventPopover({
 		});
 	};
 
+	// ss2i : toutes les informations de l'evenement en texte, pour un agent IA (Samuel le 10/11).
+	const copyEvent = () => {
+		const d = detail ?? undefined;
+		const text = formatEventForCopy(d ?? e, {
+			notes: d?.bodyHtml?.trim() ? htmlToText(d.bodyHtml) : undefined,
+			calendarName: source?.name,
+		});
+		navigator.clipboard.writeText(text).then(
+			() => toast.success("Événement copié dans le presse-papiers", { description: `${text.length.toLocaleString("fr-FR")} caractères` }),
+			() => toast.error("Événement non copié", { description: "Le presse-papiers a refusé l'écriture." }),
+		);
+	};
+
 	const body = detail?.bodyHtml?.trim() ? DOMPurify.sanitize(detail.bodyHtml, { FORBID_TAGS: ["style", "img"], FORBID_ATTR: ["style"] }) : "";
 
 	return (
@@ -265,22 +280,28 @@ export default function EventPopover({
 							</div>
 						)}
 					</div>
-					{perm.editable && detail && (
-						<button type="button" onClick={edit} aria-label="Modifier" title="Modifier" className={`shrink-0 rounded p-1 ${muted} hover:bg-black/5`}>
-							<Pencil className="h-4 w-4" />
+					{/* ss2i : Modifier et Supprimer, Copier en dessous (petite grille 2 x 2) */}
+					<div className="grid shrink-0 grid-cols-2 gap-0.5">
+						{perm.editable && detail && (
+							<button type="button" onClick={edit} aria-label="Modifier" title="Modifier" className={`shrink-0 rounded p-1 ${muted} hover:bg-black/5`}>
+								<Pencil className="h-4 w-4" />
+							</button>
+						)}
+						{(perm.editable || invitation) && detail && (
+							<button
+								type="button"
+								onClick={() => setConfirmDelete(true)}
+								aria-label="Supprimer"
+								title={detail.isOrganizer && meeting ? "Annuler la réunion" : "Supprimer"}
+								className={`shrink-0 rounded p-1 ${muted} hover:bg-black/5`}
+							>
+								<Trash2 className="h-4 w-4" />
+							</button>
+						)}
+						<button type="button" onClick={copyEvent} aria-label="Copier l'événement" title="Copier toutes les informations de l'événement" className={`shrink-0 rounded p-1 ${muted} hover:bg-black/5`}>
+							<Copy className="h-4 w-4" />
 						</button>
-					)}
-					{(perm.editable || invitation) && detail && (
-						<button
-							type="button"
-							onClick={() => setConfirmDelete(true)}
-							aria-label="Supprimer"
-							title={detail.isOrganizer && meeting ? "Annuler la réunion" : "Supprimer"}
-							className={`shrink-0 rounded p-1 ${muted} hover:bg-black/5`}
-						>
-							<Trash2 className="h-4 w-4" />
-						</button>
-					)}
+					</div>
 					<button type="button" onClick={onClose} aria-label="Fermer" className={`shrink-0 rounded p-1 ${muted} hover:bg-black/5`}>
 						<X className="h-4 w-4" />
 					</button>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { showsUnreadCount } from "@/lib/folder-unread-counts";
 import {
 	Inbox,
 	Send,
@@ -91,7 +92,7 @@ export function MailboxNav({
 				<span className="min-w-0 truncate">
 					{m.kind === "custom" ? (m.name ?? "Label") : titleFor(m.kind)}
 				</span>
-				{m.unreadCount ? (
+				{m.unreadCount && showsUnreadCount(m.kind) ? (
 					<Badge
 						variant={isActive ? "secondary" : "outline"}
 						className="ml-auto"

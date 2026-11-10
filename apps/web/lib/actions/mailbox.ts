@@ -27,8 +27,9 @@ import {
 	or,
 	sql,
 	gt,
-	ne,
+	notInArray,
 } from "drizzle-orm";
+import { NO_UNREAD_COUNT_KINDS } from "@/lib/folder-unread-counts";
 import { revalidatePath } from "next/cache";
 import {
 	FormState,
@@ -269,12 +270,13 @@ export const fetchMailboxUnreadCounts = cache(
 					`,
 				})
 				.from(mailboxThreads)
-				// ss2i : la corbeille n'affiche pas de compteur de non lus.
+				// ss2i : ni Envoyes, Boite d'envoi, Brouillons, Archive ni Corbeille n'affichent
+				// de compteur de non lus (lib/folder-unread-counts.ts).
 				.innerJoin(
 					mailboxes,
 					and(
 						eq(mailboxes.id, mailboxThreads.mailboxId),
-						ne(mailboxes.kind, "trash"),
+						notInArray(mailboxes.kind, [...NO_UNREAD_COUNT_KINDS]),
 					),
 				)
 				.where(

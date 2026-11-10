@@ -16,6 +16,10 @@ import KNewContactButton from "@/components/k/new-contact-button";
 import { loadKBooks } from "@/components/k/contacts-data";
 import KContactsNav from "@/components/k/contacts-nav";
 import RenderContactsLabelHomeSidebar from "@/components/dashboard/labels/render-contacts-label-home-sidebar";
+import { tabMetadata } from "@/lib/tab-identity";
+
+// Title and icon of the tab specific to the section.
+export const metadata = tabMetadata("contacts");
 
 async function ClassicDashboardLayout({
 	children

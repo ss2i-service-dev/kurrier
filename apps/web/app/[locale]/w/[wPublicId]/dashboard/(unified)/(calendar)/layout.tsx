@@ -14,6 +14,10 @@ import {Suspense} from "react";
 import Loading from "@/app/loading";
 import NavUserWrapper from "@/components/ui/dashboards/workspace/nav-user-wrapper";
 import CalendarSidebarWrapper from "@/components/dashboard/calendars/calendar-sidebar-wrapper";
+import { tabMetadata } from "@/lib/tab-identity";
+
+// Title and icon of the tab specific to the section.
+export const metadata = tabMetadata("calendar");
 
 export default async function DashboardLayout({
 												  children,

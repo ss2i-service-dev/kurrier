@@ -9,6 +9,10 @@ import NavUserWrapper from "@/components/ui/dashboards/workspace/nav-user-wrappe
 import * as React from "react";
 import NavMainWrapper from "@/components/nav-main-wrapper";
 import KPlatformNavWrapper from "@/components/k/platform/nav-wrapper";
+import { tabMetadata } from "@/lib/tab-identity";
+
+// Title and icon of the tab specific to the section.
+export const metadata = tabMetadata("platform");
 
 async function ClassicDashboardLayout({
 	children,

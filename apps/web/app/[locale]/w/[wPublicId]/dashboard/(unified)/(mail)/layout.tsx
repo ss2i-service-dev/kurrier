@@ -20,6 +20,10 @@ import { fetchWorkspaces } from "@/lib/actions/workspace";
 import KMailShell from "@/components/k/mail-shell";
 import KCompose from "@/components/k/compose";
 import KSidebarNavWrapper from "@/components/k/sidebar-nav-wrapper";
+import { tabMetadata } from "@/lib/tab-identity";
+
+// Title and icon of the tab specific to the section.
+export const metadata = tabMetadata("mail");
 
 export default async function DashboardLayout({
 	children

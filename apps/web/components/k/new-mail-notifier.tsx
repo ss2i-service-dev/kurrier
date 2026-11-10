@@ -4,7 +4,7 @@
 //  - a discreet sound (synthesized, no file), even with the tab in the
 //    background;
 //  - a red badge on the tab icon and the unread count in its title
-//    ("(3) Kurrier - Inbox");
+//    ("(3) Mail - Inbox");
 //  - the list refreshes by itself (immediately if the tab is visible, when
 //    returning to the tab otherwise).
 // The browser only allows sound after a first interaction with the page (click,
@@ -13,6 +13,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { kInboxPulse } from "@/lib/actions/k-pulse";
+import { tabSectionOf, tabTitle } from "@/lib/tab-identity";
 
 // After a deployment, an open tab stays on the old version: its server actions
 // no longer exist ("Failed to find Server Action") and the user's first action
@@ -109,7 +110,12 @@ function iconLinks() {
 function drawBadge(n: number) {
 	const links = iconLinks();
 	if (!links.length) return;
-	if (baseHref === null) baseHref = links[0].dataset.kBase || links[0].href;
+	// The base icon changes from one section to another (mail, calendar): read again on each call.
+	const href = links[0].dataset.kBase || links[0].href;
+	if (href !== baseHref) {
+		baseHref = href;
+		baseIcon = null;
+	}
 	if (n <= 0) {
 		links.forEach((l) => {
 			if (l.dataset.kBase) l.href = l.dataset.kBase;
@@ -150,38 +156,15 @@ function drawBadge(n: number) {
 	} else paint();
 }
 
-// --- Tab title: "(3) Kurrier - Inbox" ----------------------------------------
-const SLUG_TITLES: Record<string, string> = {
-	inbox: "Inbox",
-	sent: "Sent",
-	drafts: "Drafts",
-	archive: "Archive",
-	spam: "Spam",
-	trash: "Trash",
-	snoozed: "Snoozed",
-	scheduled: "Scheduled",
-settings: "Settings",
-};
+// --- Tab title: "(3) Mail - Inbox", "Calendar" ------------------------------
+// Title per section (lib/tab-identity.ts), to tell a mail tab from a calendar tab; unread count
+// and badge in the mail only.
 let unreadForTitle = 0;
 
-function sectionTitle(pathname: string) {
-	const parts = pathname.split("/").filter(Boolean);
-	if (parts.includes("contacts")) return "Contacts";
-	if (parts.includes("drive")) return "Drive";
-	if (parts.includes("platform")) return "Platform";
-	const i = parts.indexOf("mail");
-	const slug = i >= 0 ? parts[i + 2] : undefined;
-	if (!slug) return "Mail";
-	if (parts[i + 3] === "search") return "Search";
-	if (SLUG_TITLES[slug]) return SLUG_TITLES[slug];
+function wantedTitle() {
 	// Custom folder: its name as shown in the sidebar.
 	const active = document.querySelector<HTMLElement>('a[aria-current="page"] span.flex-1');
-	return active?.textContent?.trim() || "Mail";
-}
-
-function wantedTitle() {
-	const base = `Kurrier - ${sectionTitle(window.location.pathname)}`;
-	return unreadForTitle > 0 ? `(${unreadForTitle}) ${base}` : base;
+	return tabTitle(window.location.pathname, unreadForTitle, active?.textContent);
 }
 
 function applyTitle() {
@@ -192,6 +175,7 @@ function applyTitle() {
 function applyBadge(n: number) {
 	unreadForTitle = n;
 	applyTitle();
+	if (tabSectionOf(window.location.pathname) !== "mail") n = 0;
 	// Next may restore the original tag while navigating: reapply.
 	const stale = iconLinks().some((l) => (n > 0 ? !l.href.startsWith("data:") : l.href.startsWith("data:")));
 	if (n !== lastBadge || stale) drawBadge(n);

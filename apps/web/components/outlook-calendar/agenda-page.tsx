@@ -29,6 +29,11 @@ import MonthGrid from "@/components/outlook-calendar/month-grid";
 import { agendaStore, useAgendaState } from "@/components/outlook-calendar/agenda-store";
 import EventEditor, { type EditorTarget, blankInput } from "@/components/outlook-calendar/event-editor";
 import EventPopover from "@/components/outlook-calendar/event-popover";
+import { purgeFormBackups, recentFormBackup } from "@/lib/form-backup";
+
+// Reouverture de l'editeur apres un rechargement : une fois par chargement de la page web (pas a
+// chaque retour sur l'Agenda dans la meme session).
+let reopenChecked = false;
 
 const refOf = (s: CalendarSource): SourceRef => (s.kind === "own" ? { kind: "own", calendarId: s.calendarId } : { kind: "colleague", owner: s.owner });
 
@@ -49,6 +54,42 @@ export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookC
 	useEffect(() => {
 		agendaStore.init(boxes.map((b) => b.identityPublicId));
 	}, [boxes]);
+
+	// Copie locale d'un evenement en cours de saisie (lib/form-backup.ts) : les copies de plus de
+	// 7 jours sont purgees ; apres un rechargement (deploiement, F5, plantage) une copie de moins
+	// de 24 h rouvre l'editeur pre-rempli, une seule fois. Editeur deja ouvert entre-temps : un
+	// toast propose de reprendre. La boite de la copie est reprise si ce n'est pas celle affichee.
+	useEffect(() => {
+		purgeFormBackups();
+	}, []);
+	const hasSources = sources.length > 0;
+	useEffect(() => {
+		if (reopenChecked || !loaded || !boxId) return;
+		const b = recentFormBackup(["agenda:new:", "agenda:edit:"]);
+		const saved = b?.values as { target?: EditorTarget; identityPublicId?: string } | undefined;
+		const target = saved?.target;
+		const identity = saved?.identityPublicId;
+		if (!target?.initial || !identity || !boxes.some((x) => x.identityPublicId === identity)) {
+			reopenChecked = true;
+			return;
+		}
+		if (identity !== boxId) {
+			agendaStore.setBox(identity);
+			return;
+		}
+		if (!hasSources) return;
+		reopenChecked = true;
+		if (!editor) {
+			setEditor(target);
+			return;
+		}
+		toast("Un événement en cours de saisie a été conservé", {
+			id: "form-backup:agenda",
+			position,
+			duration: Number.POSITIVE_INFINITY,
+			action: { label: "Reprendre", onClick: () => setEditor(target) },
+		});
+	}, [loaded, boxId, boxes, hasSources, editor, position]);
 
 	// Agendas de la boite et des collegues, relus sur Graph (droits compris). Affichage immediat
 	// des derniers connus ; puis, en parallele, les agendas de la boite (rapides : la grille part

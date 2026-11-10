@@ -6,6 +6,11 @@
 // reunion (avec sa disponibilite), reunion Teams et ses options, lieu, agenda, categories,
 // disponibilite, prive, rappel, propositions d'horaire, notes, pieces jointes. Une occurrence
 // de serie se modifie seule ou avec toute la serie. Tout est ecrit par Microsoft Graph.
+// Copie locale (lib/form-backup.ts, Samuel le 10/11 : « on est en 2026 ») : tout l'etat saisi
+// est ecrit dans localStorage a chaque modification et repropose a la reouverture du meme
+// formulaire (creation : une copie par boite, modification : une par evenement). Elle ne part
+// que quand Graph a accepte l'enregistrement ou sur « Annuler » ; fermer par erreur (clic
+// dehors, Echap, croix) la garde. Les fichiers joints ne sont pas gardes (pas de copie binaire).
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Checkbox, Modal, NativeSelect, SegmentedControl, Select, Switch, TagsInput, TextInput, Textarea } from "@mantine/core";
 import { CalendarSearch, Paperclip, Settings2, X } from "lucide-react";
@@ -34,6 +39,7 @@ import {
 	saveOutlookEvent,
 } from "@/lib/actions/outlook-calendar";
 import { suggestRecipients } from "@/lib/actions/recipient-suggestions";
+import { agendaEditKey, agendaNewKey, removeFormBackup, restorableBackup, syncFormBackup } from "@/lib/form-backup";
 import SchedulingAssistant from "@/components/outlook-calendar/scheduling-assistant";
 import TeamsOptionsModal from "@/components/outlook-calendar/teams-options";
 
@@ -101,6 +107,12 @@ export function blankInput(date: string, minutes: number | null, endMinutes?: nu
 	};
 }
 
+/** Etat saisi qui se compare a la copie locale (la cible et la boite s'y ajoutent pour rouvrir l'editeur apres un rechargement). */
+type EditorValues = { v: EventInput; sourceKey: string; scope: EventScope; removed: string[] };
+
+const isEditorValues = (x: any): x is EditorValues =>
+	!!x && typeof x.v?.title === "string" && typeof x.v?.start === "string" && typeof x.v?.end === "string" && Array.isArray(x.v?.attendees) && Array.isArray(x.removed);
+
 const EMAIL_RE = /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/;
 
 /** Durees proposees ; une duree saisie a la main (champ Fin) s'ajoute a la liste. */
@@ -163,20 +175,66 @@ export default function EventEditor({
 	const [files, setFiles] = useState<File[]>([]);
 	const [removed, setRemoved] = useState<string[]>([]);
 	const [teamsOpen, setTeamsOpen] = useState(false);
+	// Cle et etat initial de la copie locale du formulaire ouvert (poses avec v, dans le meme rendu).
+	const [backup, setBackup] = useState<{ key: string; initial: EditorValues } | null>(null);
+	// Copie retiree (enregistre, annule, « Effacer ») : plus rien ne la reecrit.
+	const discarded = useRef<string | null>(null);
 	const busy = useRef(false);
 	const fileInput = useRef<HTMLInputElement>(null);
 
 	useEffect(() => {
 		if (!target) return;
-		setV({ categories: [], allowNewTimeProposals: true, ...target.initial, timeZone: target.initial.timeZone ?? tz, notesChanged: false });
-		setSourceKey(target.sourceKey);
-		setScope(target.isSeries ? "series" : "occurrence");
+		const base: EventInput = { categories: [], allowNewTimeProposals: true, ...target.initial, timeZone: target.initial.timeZone ?? tz, notesChanged: false };
+		const initialScope: EventScope = target.isSeries ? "series" : "occurrence";
+		const initial: EditorValues = { v: base, sourceKey: target.sourceKey, scope: initialScope, removed: [] };
+		const key = target.id ? agendaEditKey(target.id) : agendaNewKey(identityPublicId);
+		const copy = restorableBackup(key, initial);
+		const saved = copy && isEditorValues(copy.values) ? copy.values : null;
+		discarded.current = null;
+		setBackup({ key, initial });
+		// Pas de fusion avec base : un champ vide (undefined) a la sauvegarde ne doit pas reprendre sa valeur d'origine.
+		setV(saved ? saved.v : base);
+		setSourceKey(saved?.sourceKey ?? target.sourceKey);
+		setScope(saved?.scope ?? initialScope);
 		setError(null);
 		setSaving(false);
 		setFiles([]);
-		setRemoved([]);
+		setRemoved(saved?.removed ?? []);
 		setAssistant(true);
+		if (!saved) return;
+		toast("Saisie restaurée depuis ce navigateur", {
+			id: `form-backup:${key}`,
+			position: nouvelle ? "bottom-center" : "bottom-left",
+			duration: 12000,
+			action: {
+				label: "Effacer",
+				onClick: () => {
+					discarded.current = key;
+					removeFormBackup(key);
+					setV(base);
+					setSourceKey(target.sourceKey);
+					setScope(initialScope);
+					setRemoved([]);
+				},
+			},
+		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [target, tz]);
+
+	// Copie locale a chaque modification d'un champ ; retiree si la saisie revient a l'etat initial.
+	useEffect(() => {
+		if (!target || !v || !backup || discarded.current === backup.key) return;
+		syncFormBackup(backup.key, { v, sourceKey, scope, removed, identityPublicId, target }, backup.initial);
+	}, [v, sourceKey, scope, removed, backup]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// « Annuler » : abandon voulu, la copie part avec. Fermer sans ce bouton la garde.
+	const cancel = () => {
+		if (backup) {
+			discarded.current = backup.key;
+			removeFormBackup(backup.key);
+		}
+		onClose();
+	};
 
 	// Suggestions de participants : destinataires habituels (meme moteur que l'editeur de mail).
 	useEffect(() => {
@@ -356,6 +414,11 @@ export default function EventEditor({
 		if (!res.ok) {
 			setError(res.error);
 			return;
+		}
+		// Graph a accepte : la copie locale n'a plus d'objet.
+		if (backup) {
+			discarded.current = backup.key;
+			removeFormBackup(backup.key);
 		}
 		const invited = v.attendees.length > 0 || !!v.room;
 		onSaved(editing ? (invited ? "Événement modifié, participants prévenus" : "Événement modifié") : invited ? "Invitation envoyée" : "Événement ajouté");
@@ -694,7 +757,7 @@ export default function EventEditor({
 				)}
 				<div className="flex items-center justify-end gap-2 pt-1">
 					<span className={`mr-auto text-[12.5px] ${muted}`}>Enregistré dans Outlook{source ? ` · ${source.name}` : ""}</span>
-					<Button variant="default" size="sm" onClick={onClose}>
+					<Button variant="default" size="sm" onClick={cancel}>
 						Annuler
 					</Button>
 					<Button type="submit" size="sm" aria-disabled={saving}>

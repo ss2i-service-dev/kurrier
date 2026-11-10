@@ -15,6 +15,7 @@ import ThreadToolbar from "@/components/k/thread-toolbar";
 import { ThreadProvider } from "@/components/k/thread-context";
 import ThreadMessages from "@/components/k/thread-messages";
 import ReplyDock from "@/components/k/reply-dock";
+import { dedupeThreadMessages } from "@/lib/thread-dedupe";
 import MailUnsubscriber from "@/components/mailbox/default/mail-unsubscriber";
 
 // Reading pane. Action bar, subject, flat messages (older ones collapsed and
@@ -36,9 +37,11 @@ export default async function KThreadPage({
 		threadOrder(),
 		kPinnedMap(),
 	]);
-	const messages: MessageEntity[] = activeThread?.messages ?? [];
+	const allMessages: MessageEntity[] = activeThread?.messages ?? [];
 	// Actual folder of the thread (it may not be the folder in the URL).
-	const { activeMailbox, mailboxSync } = await fetchThreadMailbox(identityPublicId, mailboxSlug, messages);
+	const { activeMailbox, mailboxSync } = await fetchThreadMailbox(identityPublicId, mailboxSlug, allMessages);
+	// A mail present in two folders (Sent and Inbox) is shown once (thread-dedupe.ts).
+	const messages = dedupeThreadMessages(allMessages);
 	const { byMessageId } = await fetchThreadMailSubscriptions({
 		ownerId: activeMailbox.ownerId,
 		messages: messages.map((m) => ({ id: m.id, headersJson: m.headersJson, from: m.from })),

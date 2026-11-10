@@ -7,6 +7,7 @@ import ThreadItem from "@/components/mailbox/default/thread-item";
 import { Divider } from "@mantine/core";
 import {MessageEntity} from "@db";
 import { threadOrder } from "@/lib/actions/thread-order";
+import { dedupeThreadMessages } from "@/lib/thread-dedupe";
 import Loading from "@/app/loading";
 
 async function ClassicPage({
@@ -39,7 +40,8 @@ async function ClassicPage({
 	// Thread order chosen by the user (thread-order.ts). Messages arrive from
 	// oldest to newest; threadIndex keeps the chronological index (Reply goes
 	// under the newest), the subject goes above the first message shown.
-	const chronological = activeThread?.messages ?? [];
+	// A mail present in two folders (Sent and Inbox) is shown once (thread-dedupe.ts).
+	const chronological = dedupeThreadMessages(activeThread?.messages ?? []);
 	const newestFirst = (await threadOrder()) === "newest_first";
 	const shown = newestFirst ? [...chronological].reverse() : chronological;
 

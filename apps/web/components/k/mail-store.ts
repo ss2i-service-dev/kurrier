@@ -20,6 +20,7 @@ import {
 	archiveThread,
 	markAsRead,
 	markAsUnread,
+	moveToFolder,
 	moveToTrash,
 	toggleStar,
 } from "@/lib/actions/mailbox";
@@ -243,6 +244,18 @@ export const mailActions = {
 			run: () => moveToTrash(list, mailboxId, smtp, false),
 			onDone: () => scheduleRefresh(),
 			failure: "La suppression a échoué",
+		});
+	},
+	/** ss2i : fil du Spam remis dans la boite de reception (bouton « Pas un spam »). */
+	notSpam(threadIds: string | string[], spamMailboxId: string, inboxMailboxId: string, smtp: boolean) {
+		const list = ids(threadIds);
+		moveWithUndo({
+			mailboxId: spamMailboxId,
+			threadIds: list,
+			message: list.length > 1 ? `${list.length} fils remis en boîte de réception` : "Remis en boîte de réception",
+			run: () => moveToFolder(list, spamMailboxId, inboxMailboxId, smtp, false),
+			onDone: () => scheduleRefresh(),
+			failure: "Le déplacement a échoué",
 		});
 	},
 	/** Deplacement fait ailleurs (dossier, pas un spam) : masque seulement. */

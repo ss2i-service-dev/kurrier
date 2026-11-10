@@ -28,6 +28,7 @@ import {
 import { type EditorTarget, inputFromDetail } from "@/components/outlook-calendar/event-editor";
 import TeamsOptionsModal from "@/components/outlook-calendar/teams-options";
 import { formatEventForCopy } from "@/lib/event-copy";
+import { eventModalBox } from "@/lib/event-modal";
 import { htmlToText } from "@/lib/mail-copy";
 
 const toMin = (v: string) => Number(v.slice(0, 2)) * 60 + Number(v.slice(3, 5));
@@ -63,7 +64,6 @@ const refOf = (s: CalendarSource | undefined): SourceRef =>
 
 export default function EventPopover({
 	event,
-	rect,
 	source,
 	identityPublicId,
 	nouvelle,
@@ -75,7 +75,8 @@ export default function EventPopover({
 	onPreview,
 }: {
 	event: CalendarEvent;
-	rect: DOMRect;
+	/** Plus utilise pour placer la fenetre (centree depuis le 10/11). */
+	rect?: DOMRect;
 	source: CalendarSource | undefined;
 	identityPublicId: string;
 	nouvelle: boolean;
@@ -120,28 +121,16 @@ export default function EventPopover({
 		};
 	}, [event.id, identityPublicId, source, tz]);
 
+	// ss2i : Echap ferme ; le clic a cote est pris par le fond (data-event-backdrop), qui
+	// ferme sans laisser le clic atteindre la grille du calendrier (Samuel le 10/11).
 	useEffect(() => {
-		const down = (e: MouseEvent) => {
-			const target = e.target as HTMLElement;
-			// Les listes deroulantes de Mantine s'ouvrent hors de la fenetre.
-			if (ref.current && !ref.current.contains(target) && !target.closest("[data-portal]")) onClose();
-		};
 		const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-		const t = setTimeout(() => document.addEventListener("mousedown", down), 0);
 		document.addEventListener("keydown", key);
-		return () => {
-			clearTimeout(t);
-			document.removeEventListener("mousedown", down);
-			document.removeEventListener("keydown", key);
-		};
+		return () => document.removeEventListener("keydown", key);
 	}, [onClose]);
 
 	const e: CalendarEvent = detail ?? event;
-	const W = 440;
-	const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
-	const vh = typeof window !== "undefined" ? window.innerHeight : 800;
-	const left = rect.right + 8 + W < vw ? rect.right + 8 : Math.max(8, rect.left - 8 - W);
-	const top = Math.min(Math.max(8, rect.top), Math.max(8, vh - 640));
+	const box = eventModalBox(typeof window !== "undefined" ? window.innerWidth : 1280, typeof window !== "undefined" ? window.innerHeight : 800);
 	const muted = nouvelle ? "text-k-ink-3" : "text-muted-foreground";
 	const line = nouvelle ? "border-k-line" : "border-border";
 
@@ -259,21 +248,37 @@ export default function EventPopover({
 	const body = detail?.bodyHtml?.trim() ? DOMPurify.sanitize(detail.bodyHtml, { FORBID_TAGS: ["style", "img"], FORBID_ATTR: ["style"] }) : "";
 
 	return (
+		<>
+		<div
+			data-event-backdrop
+			aria-hidden
+			className="fixed inset-0 z-[299] bg-black/30"
+			onMouseDown={(ev) => {
+				// Appui et relachement restent sur le fond : rien n'atteint la grille.
+				ev.preventDefault();
+				ev.stopPropagation();
+			}}
+			onClick={(ev) => {
+				ev.stopPropagation();
+				onClose();
+			}}
+		/>
 		<div
 			ref={ref}
 			role="dialog"
+			aria-modal="true"
 			aria-label={e.title}
-			className={`fixed z-[300] flex max-h-[min(720px,calc(100vh-16px))] flex-col rounded-lg border text-sm shadow-lg ${
+			className={`fixed z-[300] flex flex-col rounded-lg border text-[15px] shadow-2xl ${
 				nouvelle ? "border-k-line bg-k-surface text-k-ink shadow-k-pop" : "bg-popover text-popover-foreground"
 			}`}
-			style={{ left, top, width: W }}
+			style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
 		>
-			<div className="k-scroll min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+			<div className="k-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
 				<div className="flex items-start gap-2">
 					<span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: e.color ?? source?.color ?? "#4f8de8" }} />
 					<div className="min-w-0 flex-1">
-						<div className="font-semibold leading-snug">{e.title}</div>
-						<div className="text-[13px]">{agendaWhen({ ...e, sourceQuote: "" })}</div>
+						<div className="text-xl font-semibold leading-snug">{e.title}</div>
+						<div className="text-[14px]">{agendaWhen({ ...e, sourceQuote: "" })}</div>
 						{detail?.recurrenceLabel && (
 							<div className={`flex items-center gap-1 text-[12px] ${muted}`}>
 								<Repeat className="h-3 w-3" /> {detail.recurrenceLabel}
@@ -594,5 +599,6 @@ export default function EventPopover({
 				<TeamsOptionsModal identityPublicId={identityPublicId} eventId={event.id} opened={teamsOpen} onClose={() => setTeamsOpen(false)} onSaved={(m) => toast.success(m)} />
 			)}
 		</div>
+		</>
 	);
 }

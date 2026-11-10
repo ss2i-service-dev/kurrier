@@ -3,6 +3,8 @@ import React, {use, useEffect, useState} from "react";
 import { Pagination } from "@mantine/core";
 import { usePathname, useRouter } from "next/navigation";
 import {FetchMailboxResult} from "@/lib/actions/mailbox";
+import { PAGE_SIZE } from "@common/mail-client";
+import { clampPage, pageCount } from "@/lib/mail-pagination";
 
 function MailPagination({
 	// count,
@@ -21,15 +23,19 @@ function MailPagination({
 }) {
 	const {count, activeMailbox} = use(fetchMailboxPromise)
 	const mailboxSlug = activeMailbox?.slug || null;
-	const [activePage, setPage] = useState(page || 1);
+	// Whole number of pages over the visible threads (the raw quotient left 0.04 page: an active
+	// next arrow that led nowhere). Last page -> arrow greyed out.
+	const total = pageCount(count, PAGE_SIZE);
+	const [activePage, setPage] = useState(clampPage(page || 1, total));
 	const router = useRouter();
 	const pathname = usePathname();
 	// Real URL path: useParams keeps the old threadId (the parallel @thread route is preserved).
 	const onThread = /\/threads\/[^/]+/.test(pathname ?? "");
 
 	const updatePageNumber = async (number: number) => {
-		if (number < 1) return;
+		if (number < 1 || number > total) return;
 		if (Number(number) === 1) {
+			setPage(1);
 			router.push(
 				`/w/${workspacePublicId}/dashboard/mail/${identityPublicId}/${mailboxSlug}`,
 			);
@@ -46,7 +52,7 @@ function MailPagination({
 			<Pagination
 				value={activePage}
 				onChange={updatePageNumber}
-				total={count > 0 ? count / 50 : 0}
+				total={total}
 			/>
 		</div>
 	);

@@ -139,11 +139,22 @@ export const fetchMailbox = cache(
 		}
 
 		const [messagesCountRow, sync] = await Promise.all([
+			// Number of listed threads (same filter as fetchMailboxThreads), not of messages:
+			// the pagination takes its number of pages from it (lib/mail-pagination.ts).
 			rls((tx) =>
 				tx
 					.select({ count: count() })
-					.from(messages)
-					.where(eq(messages.mailboxId, activeMailbox.id))
+					.from(mailboxThreads)
+					.where(
+						and(
+							eq(mailboxThreads.identityPublicId, identityPublicId),
+							eq(mailboxThreads.mailboxSlug, mailboxSlug),
+							or(
+								isNull(mailboxThreads.snoozedUntil),
+								lte(mailboxThreads.snoozedUntil, new Date()),
+							),
+						),
+					)
 			).then((rows) => rows[0]),
 
 			rls((tx) =>

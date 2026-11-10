@@ -63,7 +63,12 @@ export function WhatsNewProvider({
 					onClose={() => setOpened(false)}
 					centered
 					size="lg"
-					title={<span className="font-semibold">Nouveautés</span>}
+					title={
+						<span className="font-semibold">
+							Nouveautés
+							<span className="ml-2 text-xs font-normal opacity-60">version {process.env.NEXT_PUBLIC_BUILD_VERSION}</span>
+						</span>
+					}
 				>
 					<div className="text-xs opacity-60">
 						{versionDateLabel(entry.version)} · {entries.length - index} / {entries.length}

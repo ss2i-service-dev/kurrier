@@ -1,7 +1,15 @@
 import type { NextConfig } from "next";
+import { existsSync, readFileSync } from "node:fs";
+import { formatBuildVersion } from "./lib/app-version";
+
+// ss2i : numero de build (regle appli-web-js), le meme dans le bundle et dans /api/version.
+// .patch-level est ecrit par Dockerfile.web (mail-souverain) : numero du dernier patch applique.
+const patchLevel = existsSync(".patch-level") ? readFileSync(".patch-level", "utf8").trim() : "";
+const buildVersion = process.env.NEXT_PUBLIC_BUILD_VERSION || formatBuildVersion(new Date(), patchLevel);
 
 const nextConfig: NextConfig = {
 	devIndicators: false,
+	env: { NEXT_PUBLIC_BUILD_VERSION: buildVersion },
 	output: "standalone",
 	serverExternalPackages: ["pino", "pino-pretty", "thread-stream"],
 	// ss2i (OI 10363) : les notes « Nouveautes » (apps/web/changelogs/*.md) sont lues a

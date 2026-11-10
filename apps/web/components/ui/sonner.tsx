@@ -30,6 +30,8 @@ function burst(x: number, y: number) {
 				{ duration: 520, delay: p.delay, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)", fill: "forwards" },
 			)
 			.finished.finally(() => dot.remove());
+		// Onglet en arriere-plan : l'animation peut ne jamais finir, la bulle part quand meme.
+		setTimeout(() => dot.remove(), 520 + p.delay + 200);
 	}
 }
 
@@ -43,7 +45,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
 			const target = e.target instanceof Element ? e.target : null;
 			// La croix ferme deja par sonner : on ajoute seulement l'eclat.
 			if (target?.closest("[data-sonner-toast] [data-close-button]")) {
-				if (!calm()) burst(e.clientX, e.clientY);
+				// Fermeture lancee par nous apres l'animation (pas un vrai clic) : rien de plus.
+				if (e.isTrusted && !calm()) burst(e.clientX, e.clientY);
 				return;
 			}
 			const close = toastCloseButtonForClick(target);

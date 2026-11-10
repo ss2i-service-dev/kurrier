@@ -225,7 +225,8 @@ test("derniere version vue : par utilisateur, cote serveur, dans workspaces.meta
 	const migrationsDir = join(__dirname, "../../../db/init/migrations");
 	if (existsSync(migrationsDir)) {
 		const migrations = readdirSync(migrationsDir);
-		assert.ok(!migrations.some((m) => /ss2i_007/.test(m)), "pas de migration pour les nouveautes");
+		const touchesChangelogs = migrations.some((m) => /changelog/i.test(readFileSync(join(migrationsDir, m), "utf8")));
+		assert.ok(!touchesChangelogs, "pas de migration pour les nouveautes");
 	}
 });
 

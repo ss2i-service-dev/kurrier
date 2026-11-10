@@ -11,7 +11,7 @@ import {
 	workspaces,
 	identities,
 } from "@db";
-import { generateSnippet, upsertMailboxThreadItem } from "@common";
+import { generateSnippet, hasRealAttachments, upsertMailboxThreadItem } from "@common";
 import { randomUUID } from "crypto";
 import { and, desc, eq, inArray, sql, TransactionRollbackError } from "drizzle-orm";
 import { lockOwnerThreads, mergeLinkedThreads } from "./thread-links";
@@ -413,7 +413,7 @@ export async function parseAndStoreEmail(
 		workspaceId,
 		ownerId,
 		headersJson: Object.fromEntries(parsed.headers as Map<string, any>),
-		hasAttachments: (parsed.attachments?.length ?? 0) > 0,
+		hasAttachments: hasRealAttachments(parsed.attachments),
 		rawStorageKey,
 		references: Array.isArray(parsed.references)
 			? parsed.references

@@ -6,6 +6,7 @@ import { fetchMailboxThreadLabels } from "@/lib/actions/labels";
 import { and, desc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
 import { mailboxThreads } from "@db";
 import { PAGE_SIZE } from "@common/mail-client";
+import { REAL_ATTACHMENT_SQL } from "@common/real-attachments";
 import { rlsClient } from "@/lib/actions/clients";
 
 export async function fetchKThreadPage(identityPublicId: string, mailboxSlug: string, page: number) {
@@ -53,7 +54,8 @@ export async function fetchKUnreadPage(identityPublicId: string, mailboxSlug: st
  * SS2i (Outlook) : fils qui ont une vraie piece jointe. has_attachments (calcule
  * par le worker) compte aussi les images integrees au corps (signatures, logos) :
  * la liste affichait un trombone pour une simple signature. Ne comptent pas :
- * les pieces marquees inline et les images referencees dans le corps (cid).
+ * les images inline ou referencees dans le corps (cid) ; un PDF avec cid compte.
+ * Regle commune : packages/common/src/real-attachments.ts.
  */
 // ss2i (controle d'acces) : helper serveur, plus exporte (tout export d'un fichier "use server" est une action appelable).
 async function fetchKRealAttachmentThreads(threadIds: string[]): Promise<string[]> {
@@ -66,8 +68,7 @@ async function fetchKRealAttachmentThreads(threadIds: string[]): Promise<string[
 			from message_attachments a
 			join messages m on m.id = a.message_id
 			where m.thread_id in (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)})
-			  and not a.is_inline
-			  and not (a.cid is not null and coalesce(a.content_type, '') ilike 'image/%')
+			  and ${sql.raw(REAL_ATTACHMENT_SQL)}
 		`),
 	);
 	return ((res?.rows ?? res ?? []) as any[]).map((r) => String(r.id));

@@ -1,5 +1,7 @@
 "use client";
 
+import { useStripSubjectPrefixes } from "@/components/mailbox/default/compose-style-context";
+import { subjectForDisplay } from "@common/subject";
 import * as React from "react";
 import {
 	CommandDialog,
@@ -31,6 +33,7 @@ export default function MailboxSearch({
 	// Trigger button styled for the modern interface (per-user option).
 	modern?: boolean;
 }) {
+	const stripPrefixes = useStripSubjectPrefixes();
 
 	// Pages without a folder (settings, scheduled, snoozed) have no mailboxSlug
 	// (URL .../undefined/search, server error "Mailbox not found"): the search then
@@ -288,7 +291,7 @@ export default function MailboxSearch({
 											/>
 
 											<div className="truncate text-[15px] font-medium">
-												{t.subject || "(no subject)"}
+												{subjectForDisplay(t.subject, stripPrefixes) || "(no subject)"}
 											</div>
 
 											{t.hasAttachment && (

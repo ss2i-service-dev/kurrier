@@ -336,6 +336,10 @@ export default defineNitroPlugin(async (nitroApp) => {
 			const senderUserId =
 				String(decodedForm.senderUserId ?? "") || mailbox.identity.ownerId;
 			const rfcStyle = await rfcStyleEnabled(mailbox.mailbox.workspaceId, senderUserId);
+			const stripSubjectPrefixes = await stripSubjectPrefixesEnabled(
+				mailbox.mailbox.workspaceId,
+				senderUserId,
+			);
 			const quoteScope = quoteScopeOf(decodedForm.quoteScope);
 			// Quote edited in the editor (quoteMode custom + quoteHtml) or removed (none).
 			const quoteOverride = quoteOverrideOf(decodedForm.quoteMode, decodedForm.quoteHtml);
@@ -345,6 +349,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 				orig: origRow,
 				signatureHtml,
 				rfcStyle,
+				stripSubjectPrefixes,
 				quoteScope,
 				quoteOverride,
 			});
@@ -549,6 +554,24 @@ export default defineNitroPlugin(async (nitroApp) => {
 		}
 	}
 
+	// The sending user's "subject without Re:/Fwd:" option (workspaces.meta.prefStripSubjectPrefixes,
+	// see apps/web/lib/actions/subject-prefixes.ts), off by default.
+	async function stripSubjectPrefixesEnabled(workspaceId: string, userId: string) {
+		try {
+			const [row] = await db
+				.select({
+					on: sql<boolean>`coalesce((${workspaces.metaData}->'prefStripSubjectPrefixes'->>${userId}::text)::boolean, false)`,
+				})
+				.from(workspaces)
+				.where(eq(workspaces.id, workspaceId))
+				.limit(1);
+			return Boolean(row?.on);
+		} catch (err: any) {
+			console.error("[send-mail] subject prefixes lookup failed:", err?.message ?? err);
+			return false;
+		}
+	}
+
 	// Subject, text and HTML of the message to send: the assembly (quote, signature, order) is
 	// in packages/common/src/compose.ts, shared with the web editor.
 	const generateMailAttrs = ({
@@ -556,6 +579,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 		orig,
 		signatureHtml,
 		rfcStyle,
+		stripSubjectPrefixes,
 		quoteScope,
 		quoteOverride,
 	}: {
@@ -563,6 +587,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 		orig: GetOriginalMessageType | null;
 		signatureHtml?: string;
 		rfcStyle: boolean;
+		stripSubjectPrefixes: boolean;
 		quoteScope: QuoteScope;
 		quoteOverride: QuoteOverride;
 	}) => {
@@ -584,6 +609,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 			html: data.html,
 			signatureHtml,
 			rfcStyle,
+			stripSubjectPrefixes,
 			quoteScope,
 			quoteOverride,
 			orig: origMsg

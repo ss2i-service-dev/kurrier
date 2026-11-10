@@ -1,4 +1,6 @@
 "use client";
+import { useStripSubjectPrefixes } from "@/components/mailbox/default/compose-style-context";
+import { subjectForDisplay } from "@common/subject";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -48,6 +50,7 @@ export default function UnreadPanel({
 	identityPublicId: string;
 	mailboxSlug: string;
 }) {
+	const stripPrefixes = useStripSubjectPrefixes();
 	const pathname = usePathname() ?? "";
 	const currentThreadId = pathname.match(/\/threads\/([^/?#]+)/)?.[1] ?? null;
 	// The panel is hidden in CSS below 1280 px; also avoid loading its data there.
@@ -134,7 +137,7 @@ export default function UnreadPanel({
 									</div>
 									<div className="mt-0.5 flex items-center gap-1">
 										<span className={`truncate text-sm ${isUnread ? "font-medium" : "text-muted-foreground"}`}>
-											{t.subject?.trim() || "(no subject)"}
+											{subjectForDisplay(t.subject?.trim(), stripPrefixes) || "(no subject)"}
 										</span>
 										{t.messageCount > 1 && (
 											<span className="shrink-0 text-xs text-muted-foreground">({t.messageCount})</span>

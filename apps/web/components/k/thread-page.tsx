@@ -7,6 +7,8 @@ import {
 } from "@/lib/actions/mailbox";
 import { fetchThreadMailbox } from "@/lib/thread-mailbox";
 import { threadOrder } from "@/lib/actions/thread-order";
+import { stripSubjectPrefixesEnabled } from "@/lib/actions/subject-prefixes";
+import { subjectForDisplay } from "@common/subject";
 import { kPinnedMap } from "@/lib/actions/k-pins";
 import KThreadItem from "@/components/k/thread-item";
 import { MessageEntity } from "@db";
@@ -30,6 +32,8 @@ export default async function KThreadPage({
 	}>;
 }) {
 	const { threadId, identityPublicId, mailboxSlug } = await params;
+	// Subject without Re:/Fwd: (per-user option, off by default).
+	const stripPrefixes = await stripSubjectPrefixesEnabled();
 	const [activeThread, identityMailboxes, sent, order0, pins] = await Promise.all([
 		fetchWebMailThreadDetail(threadId),
 		fetchIdentityMailboxList(),
@@ -90,7 +94,7 @@ export default async function KThreadPage({
 						<div className="mb-4">
 							<div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
 								<h1 className="min-w-0 flex-1 basis-[320px] text-[21px] font-semibold leading-snug tracking-[-0.015em] text-k-ink">
-									{first.subject || "(no subject)"}
+									{subjectForDisplay(first.subject, stripPrefixes) || "(no subject)"}
 								</h1>
 							</div>
 							<div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-k-ink-3">

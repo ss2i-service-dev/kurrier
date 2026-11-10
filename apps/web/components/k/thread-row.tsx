@@ -7,6 +7,8 @@
 // selection mode (a click ticks when a box is already ticked, Shift = range),
 // drafts "To: ..." and pending-send badge, trash without read/unread,
 // "subject only" option, archive and delete with Undo (pending-moves).
+import { useStripSubjectPrefixes } from "@/components/mailbox/default/compose-style-context";
+import { subjectForDisplay } from "@common/subject";
 import React from "react";
 import { Archive, Mail, MailOpen, Paperclip, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -55,6 +57,7 @@ export default function KThreadRow({
 	isOnSnoozedPage = false,
 	pinned,
 }: Props) {
+	const stripPrefixes = useStripSubjectPrefixes();
 	const router = useRouter();
 	// Pinned: sender and subject only, for a compact block at the top of the list.
 	const showSnippet = useShowSnippet() && !pinned;
@@ -229,7 +232,7 @@ export default function KThreadRow({
 				<div className="mt-0.5 flex items-center gap-1.5">
 					{isDrafts && <DraftSendBadge state={item.draftSend} />}
 					<span className={`truncate text-[13px] ${isUnread ? "font-medium text-k-ink" : "text-k-ink-2"}`}>
-						{item.subject || "(no subject)"}
+						{subjectForDisplay(item.subject, stripPrefixes) || "(no subject)"}
 					</span>
 					{isDrafts && <DraftTimesLabel times={item.draftTimes} className="ml-auto text-[11.5px] text-k-ink-3" />}
 					{!showSnippet && starButton}

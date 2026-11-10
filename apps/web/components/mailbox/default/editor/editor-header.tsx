@@ -1,4 +1,6 @@
 import { useModernUi } from "@/components/k/ui-context";
+import { useStripSubjectPrefixes } from "@/components/mailbox/default/compose-style-context";
+import { stripSubjectPrefixes } from "@common/subject";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActionIcon,
@@ -138,8 +140,12 @@ function EditorHeader({
 	const CurrentIcon = (options.find((o) => o.value === mode)?.Icon ??
 		Reply) as typeof Reply;
 
+	const stripPrefixes = useStripSubjectPrefixes();
 	const computedSubject = useMemo(() => {
 		if (!state.message) return "";
+
+		// Option on: subject without any Re:/Fwd:/RE:/TR:... prefix, in reply and forward alike.
+		if (stripPrefixes) return stripSubjectPrefixes(state.message.subject);
 
 		const original = state.message.subject?.trim() || "";
 
@@ -148,7 +154,7 @@ function EditorHeader({
 		if (mode === "reply" || mode === "replyAll") return `Re: ${cleaned}`;
 		if (mode === "forward") return `Fwd: ${cleaned}`;
 		return cleaned;
-	}, [state.message, mode]);
+	}, [state.message, mode, stripPrefixes]);
 
 	const [subject, setSubject] = useState(
 		draftRow ? (draftRow.subject ?? "") : computedSubject,

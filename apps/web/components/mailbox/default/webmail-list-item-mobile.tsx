@@ -1,4 +1,6 @@
 "use client";
+import { useStripSubjectPrefixes } from "@/components/mailbox/default/compose-style-context";
+import { subjectForDisplay } from "@common/subject";
 import React from "react";
 import { Mail, MailOpen, Paperclip, Trash2 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
@@ -34,6 +36,7 @@ export default function WebmailListItemMobile({
 	mailboxSync,
 	labelsByThreadId,
 }: Props) {
+	const stripPrefixes = useStripSubjectPrefixes();
 	const showSnippet = useShowSnippet();
 	const router = useRouter();
 
@@ -199,7 +202,7 @@ export default function WebmailListItemMobile({
 					{activeMailbox.kind === "drafts" && (
 						<DraftSendBadge state={mailboxThreadItem.draftSend} />
 					)}
-					<span className="truncate">{mailboxThreadItem.subject}</span>
+					<span className="truncate">{subjectForDisplay(mailboxThreadItem.subject, stripPrefixes)}</span>
 					{showSnippet && (
 						<>
 							<span className="hidden sm:inline mx-1 text-muted-foreground">–</span>

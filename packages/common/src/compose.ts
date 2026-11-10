@@ -1,4 +1,5 @@
 import { joinSurrogateEntities } from "./html-entities";
+import { stripSubjectPrefixes } from "./subject";
 // Assembly of the body of an outgoing message (reply, forward, new), shared by the
 // worker (send-mail.ts, which sends), the web editor (quote preview) and the MCP.
 // Pure functions, no dependency: this file is imported on the browser side.
@@ -9,6 +10,9 @@ import { joinSurrogateEntities } from "./html-entities";
 // - `rfcStyle` (per-user option, workspaces.meta.prefRfcStyle): reply below the quote,
 //   signature at the very bottom preceded by the "-- " line (RFC 3676 section 4.3).
 //   Absent = reply above, signature between the text and the quote (default behaviour).
+// - `stripSubjectPrefixes` (per-user option, workspaces.meta.prefStripSubjectPrefixes): the
+//   subject of a reply or a forward carries no "Re:" or "Fwd:" and loses those stacked by
+//   other clients. Absent = "Re:" and "Fwd:" added (default behaviour).
 
 export type ComposeMode = "new" | "reply" | "forward";
 export type QuoteScope = "last" | "thread";
@@ -36,6 +40,7 @@ export type ComposeInput = {
 	signatureHtml?: string | null;
 	orig?: ComposeOriginal | null;
 	rfcStyle?: boolean;
+	stripSubjectPrefixes?: boolean;
 	quoteScope?: QuoteScope | null;
 	// Quoted body edited by the user (reply or forward), or quote removed (reply only).
 	quoteOverride?: QuoteOverride;
@@ -510,7 +515,11 @@ export function composeMessage(rawInput: ComposeInput) {
 
 	const baseSubj = (input.subject ?? "").trim();
 	let subject = baseSubj;
-	if (isReply) {
+	if ((isReply || isForward) && input.stripSubjectPrefixes) {
+		// Option on: neither "Re:" nor "Fwd:", and those stacked by other clients removed
+		// (subject.ts). The subject typed in the editor wins, else the original one.
+		subject = stripSubjectPrefixes(baseSubj || orig.subject) || "(no subject)";
+	} else if (isReply) {
 		const s = (orig.subject ?? "").trim();
 		subject = s.startsWith("Re:") ? s : `Re: ${s || "(no subject)"}`;
 	} else if (isForward) {

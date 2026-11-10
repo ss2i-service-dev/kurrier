@@ -8,6 +8,7 @@ import { listPreviewMode } from "@/lib/actions/list-preview";
 import { threadOrder } from "@/lib/actions/thread-order";
 import { listUnderThread } from "@/lib/actions/list-under-thread";
 import { rfcStyleEnabled } from "@/lib/actions/rfc-style";
+import { stripSubjectPrefixesEnabled } from "@/lib/actions/subject-prefixes";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
 import SettingsInterface from "@/components/mailbox/settings/settings-interface";
 import { interfaceMode } from "@/lib/actions/interface-pref";
@@ -27,6 +28,7 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
     const listPreview = await listPreviewMode();
     const conversationOrder = await threadOrder();
     const listUnder = await listUnderThread();
+    const stripPrefixes = await stripSubjectPrefixesEnabled();
     // RFC style on send (per user, stored server-side).
     const rfcStyle = await rfcStyleEnabled();
     // Undo-send delay (per user).
@@ -86,7 +88,7 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
     return <>
         <SettingsGeneral updateName={updateName} identity={identity} />
         <SettingsSignature updateSignature={updateSignature} identity={identity} />
-        <SettingsUnreadPanel enabled={unreadPanelOn} listPreview={listPreview} threadOrder={conversationOrder} listUnderThread={listUnder} />
+        <SettingsUnreadPanel enabled={unreadPanelOn} listPreview={listPreview} threadOrder={conversationOrder} listUnderThread={listUnder} stripPrefixes={stripPrefixes} />
         <SettingsComposeStyle enabled={rfcStyle} undoSeconds={undoSeconds} />
         <SettingsInterface mode={uiMode} />
     </>

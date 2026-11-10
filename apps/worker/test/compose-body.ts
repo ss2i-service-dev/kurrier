@@ -93,6 +93,15 @@ test("default, Re:/Fwd: already present and empty subject", () => {
 	assert.equal(composeMessage({ mode: "forward", orig: { ...orig, subject: "" } }).subject, "Fwd: (no subject)");
 });
 
+test("subject prefixes option: off keeps Re:/Fwd:, on strips the stacked ones", () => {
+	const stacked = { ...orig, subject: "RE: TR: Server quote" };
+	assert.equal(composeMessage({ mode: "reply", orig: stacked }).subject, "Re: RE: TR: Server quote");
+	assert.equal(composeMessage({ mode: "reply", stripSubjectPrefixes: false, orig: stacked }).subject, "Re: RE: TR: Server quote");
+	assert.equal(composeMessage({ mode: "reply", stripSubjectPrefixes: true, orig: stacked }).subject, "Server quote");
+	assert.equal(composeMessage({ mode: "forward", stripSubjectPrefixes: true, orig: stacked }).subject, "Server quote");
+	assert.equal(composeMessage({ mode: "forward", orig: stacked }).subject, "Fwd: RE: TR: Server quote");
+});
+
 test("default, thread scope without HTML: textAsHtml then unescaped <pre> (unchanged)", () => {
 	const r = composeMessage({ mode: "reply", text: "ok", html: "<p>ok</p>", orig: { ...orig, html: null, textAsHtml: "<p>Hello</p>" } });
 	assert.ok(r.html.includes("<p>Hello</p>"));

@@ -12,6 +12,7 @@ import {fetchIdentityMailboxList} from "@/lib/actions/mailbox";
 import {listPreviewMode} from "@/lib/actions/list-preview";
 import {ListPreviewProvider} from "@/components/mailbox/default/list-preview-context";
 import {rfcStyleEnabled} from "@/lib/actions/rfc-style";
+import {stripSubjectPrefixesEnabled} from "@/lib/actions/subject-prefixes";
 import {ComposeStyleProvider} from "@/components/mailbox/default/compose-style-context";
 import DraftBackupRecovery from "@/components/mailbox/default/draft-backup-recovery";
 import { isModernUi } from "@/lib/actions/interface-pref";
@@ -37,12 +38,14 @@ export default async function DashboardLayout({
 	const previewMode = await listPreviewMode();
 	// RFC style on send (preview of the quote in the reply editor).
 	const rfcStyle = await rfcStyleEnabled();
+	// Subject without Re:/Fwd: (editor, lists and threads).
+	const stripPrefixes = await stripSubjectPrefixesEnabled();
 
 	// Modern interface (per-user option, Settings > General > Interface).
 	if (await isModernUi()) {
 		const [user, userWorkspaces] = await Promise.all([isSignedIn(), fetchWorkspaces()]);
 		return (
-			<ComposeStyleProvider rfcStyle={rfcStyle}>
+			<ComposeStyleProvider rfcStyle={rfcStyle} stripSubjectPrefixes={stripPrefixes}>
 				<ListPreviewProvider mode={previewMode}>
 					<KMailShell
 						workspacePublicId={workspacePublicId}
@@ -78,7 +81,7 @@ export default async function DashboardLayout({
 	}
 
 	return (
-		<ComposeStyleProvider rfcStyle={rfcStyle}>
+		<ComposeStyleProvider rfcStyle={rfcStyle} stripSubjectPrefixes={stripPrefixes}>
 			<DraftBackupRecovery />
 			<AppSidebar
 				workspacePublicId={workspacePublicId}

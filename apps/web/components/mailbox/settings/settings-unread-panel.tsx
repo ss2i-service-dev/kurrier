@@ -10,6 +10,7 @@ import type { ListPreviewMode } from "@/lib/actions/list-preview";
 import SettingsThreadOrder from "@/components/mailbox/settings/settings-thread-order";
 import type { ThreadOrder } from "@/lib/actions/thread-order";
 import { setListUnderThread } from "@/lib/actions/list-under-thread";
+import { setStripSubjectPrefixesEnabled } from "@/lib/actions/subject-prefixes";
 import type { ListUnderThread } from "@/lib/list-under-thread";
 
 
@@ -20,17 +21,40 @@ function SettingsUnreadPanel({
 	listPreview,
 	threadOrder,
 	listUnderThread,
+	stripPrefixes: initialStrip = false,
 }: {
 	enabled: boolean;
 	listPreview: ListPreviewMode;
 	threadOrder: ThreadOrder;
 	listUnderThread: ListUnderThread;
+	stripPrefixes?: boolean;
 }) {
 	const [enabled, setEnabled] = useState(initial);
 	const [pending, startTransition] = useTransition();
 	const router = useRouter();
 	const [listHidden, setListHidden] = useState(listUnderThread === "hidden");
 	const [listPending, startListTransition] = useTransition();
+	const [strip, setStrip] = useState(initialStrip);
+	const [stripPending, startStripTransition] = useTransition();
+
+	// Subject without Re:/Fwd: (lists, threads, replies and forwards).
+	const onStripChange = (next: boolean) => {
+		setStrip(next);
+		startStripTransition(async () => {
+			const r = await setStripSubjectPrefixesEnabled(next);
+			if (r?.success === false) {
+				setStrip(!next);
+				toast.error(r.error ?? "Could not save the preference");
+				return;
+			}
+			toast.success(
+				next
+					? "Subjects are shown and sent without Re:/Fwd:."
+					: "Subjects are shown and sent as received.",
+			);
+			router.refresh();
+		});
+	};
 
 	// Folder list under the open conversation (classic interface).
 	const onListChange = (hidden: boolean) => {
@@ -82,6 +106,14 @@ function SettingsUnreadPanel({
 				checked={listHidden}
 				disabled={listPending}
 				onChange={(e) => onListChange(e.currentTarget.checked)}
+				mt="md"
+			/>
+			<Switch
+				label={"Subjects without Re: and Fwd:"}
+				description={"Off by default: subjects are shown as received, and replies and forwards start with Re: or Fwd:. On: the prefixes stacked by mail clients (RE: TR: Fwd: AW:) are hidden in the lists, the search and the conversations, and a reply or a forward is sent with the plain subject. The conversation holds through the message headers, not the subject."}
+				checked={strip}
+				disabled={stripPending}
+				onChange={(e) => onStripChange(e.currentTarget.checked)}
 				mt="md"
 			/>
 			<Switch

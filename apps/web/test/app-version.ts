@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatBuildVersion, onNewVersion } from "../lib/app-version";
+import { formatBuildVersion, isStaleActionResponse, onNewVersion } from "../lib/app-version";
 
 let failures = 0;
 const test = (label: string, fn: () => void) => {
@@ -28,24 +28,43 @@ test("numero de build : date et heure de Paris, puis niveau de patch", () => {
 });
 
 test("meme version : rien", () => {
-	assert.equal(onNewVersion({ loaded: "a", served: "a", reloadedFor: null, composing: false }), "none");
+	assert.equal(onNewVersion({ loaded: "a", served: "a", reloadedFor: null }), "none");
 });
 
 test("version servie inconnue (route en panne, serveur qui redemarre) : rien", () => {
-	assert.equal(onNewVersion({ loaded: "a", served: null, reloadedFor: null, composing: false }), "none");
-	assert.equal(onNewVersion({ loaded: "a", served: "", reloadedFor: null, composing: false }), "none");
+	assert.equal(onNewVersion({ loaded: "a", served: null, reloadedFor: null }), "none");
+	assert.equal(onNewVersion({ loaded: "a", served: "", reloadedFor: null }), "none");
 });
 
-test("nouvelle version, rien en cours de redaction : rechargement", () => {
-	assert.equal(onNewVersion({ loaded: "a", served: "b", reloadedFor: null, composing: false }), "reload");
+// Samuel le 10/11 : « quand il y a besoin de refresh une application et qu'elle n'est pas
+// fonctionnelle tant que tu l'as pas refresh, ce que tu fais, c'est que tu forces la personne
+// à refresh et tu la laisses pas interagir avec l'application ». Plus de proposition : la page
+// est bloquee puis rechargee, redaction en cours ou non (les brouillons ont leur copie locale,
+// lib/draft-backup.ts, recuperee au chargement suivant).
+test("nouvelle version : rechargement force, meme pendant la redaction", () => {
+	assert.equal(onNewVersion({ loaded: "a", served: "b", reloadedFor: null }), "reload");
 });
 
-test("nouvelle version pendant la redaction d'un mail : on propose, on ne recharge pas", () => {
-	assert.equal(onNewVersion({ loaded: "a", served: "b", reloadedFor: null, composing: true }), "prompt");
+test("deja recharge pour cette version et toujours l'ancien bundle : page bloquee, sans boucle", () => {
+	assert.equal(onNewVersion({ loaded: "a", served: "b", reloadedFor: "b" }), "block");
 });
 
-test("deja recharge pour cette version (boucle evitee) : on propose seulement", () => {
-	assert.equal(onNewVersion({ loaded: "a", served: "b", reloadedFor: "b", composing: false }), "prompt");
+test("action serveur inconnue (en-tete x-nextjs-action-not-found) : onglet perime", () => {
+	assert.equal(isStaleActionResponse(new Headers({ "x-nextjs-action-not-found": "1" })), true);
+	assert.equal(isStaleActionResponse(new Headers({ "content-type": "text/x-component" })), false);
+	assert.equal(isStaleActionResponse(null), false);
+});
+
+const src = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");
+
+test("plus aucune proposition de recharger : voile bloquant et rechargement", () => {
+	const watcher = src("components/common/version-watcher.tsx");
+	assert.doesNotMatch(watcher, /contenteditable/);
+	assert.match(watcher, /isStaleActionResponse\(/);
+	assert.match(watcher, /role="alertdialog"/);
+	const notifier = src("components/k/new-mail-notifier.tsx");
+	assert.doesNotMatch(notifier, /new version of Kurrier/);
+	assert.doesNotMatch(notifier, /Nouvelle version de Kurrier/);
 });
 
 test("la route de version existe, en no-store, et le surveillant est monte a la racine", () => {

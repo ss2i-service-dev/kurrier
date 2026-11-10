@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { toastCloseButtonForClick } from "../lib/toast-click-dismiss";
+import { burstParticles, toastCloseButtonForClick, TOAST_POP_MS } from "../lib/toast-click-dismiss";
 
 let failures = 0;
 const test = (label: string, fn: () => void) => {
@@ -88,6 +88,34 @@ test("le Toaster est monte avec le bouton de fermeture et l'ecoute du clic", () 
 	const src = readFileSync(join(__dirname, "../components/ui/sonner.tsx"), "utf8");
 	assert.match(src, /closeButton/);
 	assert.match(src, /toastCloseButtonForClick/);
+});
+
+// Fermeture « mignonne » (Samuel le 10/11 : « un truc qui eclate [...] que ce soit un peu mignon »).
+test("eclat : des bulles reparties tout autour du clic, de tailles et couleurs variees", () => {
+	const ps = burstParticles(14, () => 0.5);
+	assert.equal(ps.length, 14);
+	const angles = ps.map((p) => Math.atan2(p.dy, p.dx));
+	assert.ok(Math.max(...angles) - Math.min(...angles) > 1.6 * Math.PI, "tout le tour");
+	for (const p of ps) {
+		const d = Math.hypot(p.dx, p.dy);
+		assert.ok(d >= 20 && d <= 80, `distance ${d}`);
+		assert.ok(p.size >= 4 && p.size <= 12, `taille ${p.size}`);
+		assert.match(p.color, /^#[0-9a-f]{6}$/i);
+	}
+	assert.ok(new Set(ps.map((p) => p.color)).size >= 4, "plusieurs couleurs");
+});
+
+test("eclat bref : la notification part en moins d'un tiers de seconde", () => {
+	assert.ok(TOAST_POP_MS >= 120 && TOAST_POP_MS <= 300);
+});
+
+test("animation : gonfle puis disparait, rien si le systeme demande moins de mouvement", () => {
+	const css = readFileSync(join(__dirname, "../app/globals.css"), "utf8");
+	assert.match(css, /@keyframes ss2i-toast-pop/);
+	assert.match(css, /prefers-reduced-motion/);
+	const ui = readFileSync(join(__dirname, "../components/ui/sonner.tsx"), "utf8");
+	assert.match(ui, /burstParticles/);
+	assert.match(ui, /prefers-reduced-motion/);
 });
 
 if (failures) {

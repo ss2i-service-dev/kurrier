@@ -9,6 +9,7 @@ import {
 	MessageAttachmentCreate,
 	MessageAttachmentInsertSchema,
 	workspaces,
+	identities,
 } from "@db";
 import { generateSnippet, upsertMailboxThreadItem } from "@common";
 import { randomUUID } from "crypto";
@@ -19,6 +20,7 @@ import {s3} from "../lib/create-s3-client";
 import {PutObjectCommand} from "@aws-sdk/client-s3";
 import { upsertMailSubscription } from "./mail-subscriptions";
 import {upsertWorkspaceSharedContactFromMessage} from "../lib/message-parser-contacts";
+import { isOwnMessage } from "./own-message";
 
 const SEARCH_BATCH_SIZE = 100;
 const WEBHOOK_BATCH_SIZE = 100;
@@ -311,6 +313,18 @@ export async function storeMessageInThread(
 	}
 }
 
+/**
+ * Addresses of the owner's e-mail identities (kind email), lowercase. Domain identities are not
+ * included (see own-message.ts).
+ */
+export async function ownerEmailAddresses(ownerId: string): Promise<string[]> {
+	const rows = await db
+		.select({ value: identities.value })
+		.from(identities)
+		.where(and(eq(identities.ownerId, ownerId), eq(identities.kind, "email")));
+	return rows.map((r) => r.value.trim().toLowerCase());
+}
+
 export async function parseAndStoreEmail(
 	rawEmail: string,
 	opts: {
@@ -418,9 +432,37 @@ export async function parseAndStoreEmail(
 		(decoratedParsed as any).flagged = opts.flagged;
 	}
 
+	// A message written by the owner (copied to themselves, or returned by an alias) is stored
+	// as read, list row included: seen is set before the insertion, hence counted in
+	// mailbox_threads.unread_count by upsertMailboxThreadItem.
+	const own = isOwnMessage(getFromAddress(parsed)?.email, await ownerEmailAddresses(ownerId));
+	const serverSeen = (decoratedParsed as any).seen === true;
+	if (own) (decoratedParsed as any).seen = true;
+
 	const placed = await storeMessageInThread(parsed, decoratedParsed, { ownerId, workspaceId });
 	if (!placed) return null;
 	const message = placed.message;
+	// The IMAP server delivered the copy without \Seen: without the flag, the next sync (a flags
+	// event on this message, a reply for instance) would turn it unread again. Same queue as the
+	// "mark as read" of the interface, limited to this message (the others of the thread are not
+	// touched).
+	if (own && !serverSeen && opts.metaData?.imap?.uid) {
+		try {
+			const { smtpQueue } = await getRedis();
+			await smtpQueue.add(
+				"mail:set-flags",
+				{ threadId: placed.threadId, mailboxId, op: "read", messageIds: [message.id] },
+				{
+					attempts: 3,
+					backoff: { type: "exponential", delay: 1500 },
+					removeOnComplete: true,
+					removeOnFail: false,
+				},
+			);
+		} catch (err: any) {
+			console.error("[parseAndStoreEmail] own-message seen flag enqueue failed:", err?.message ?? err);
+		}
+	}
 	const thread = { id: placed.threadId };
 	if (placed.merged) {
 		try {

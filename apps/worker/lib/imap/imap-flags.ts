@@ -1,13 +1,16 @@
 import { db, messages, mailboxThreads, mailboxes } from "@db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { initSmtpClient } from "./imap-client";
 import { ImapFlow } from "imapflow";
 
 export async function mailSetFlags(
-	data: { threadId: string; mailboxId: string; op: string },
+	// messageIds limits the operation to these messages of the thread (a received message written
+	// by the owner, see own-message.ts); without it, the whole thread in this folder.
+	data: { threadId: string; mailboxId: string; op: string; messageIds?: string[] },
 	imapInstances: Map<string, ImapFlow>,
 ) {
 	const { threadId, mailboxId, op } = data;
+	const only = data.messageIds?.length ? new Set(data.messageIds) : null;
 
 	const [mailbox] = await db
 		.select()
@@ -18,13 +21,16 @@ export async function mailSetFlags(
 	const client = await initSmtpClient(mailbox.identityId, imapInstances);
 	if (!client?.authenticated || !client?.usable) return;
 
-	const threadMessages = await db
+	const allThreadMessages = await db
 		.select()
 		.from(messages)
 		.where(
 			and(eq(messages.threadId, threadId), eq(messages.mailboxId, mailboxId)),
 		)
 		.orderBy(desc(sql`coalesce(${messages.date}, ${messages.createdAt})`));
+	const threadMessages = only
+		? allThreadMessages.filter((m) => only.has(m.id))
+		: allThreadMessages;
 
 	const newest = threadMessages[0];
 	if (!newest) return;
@@ -98,7 +104,11 @@ export async function mailSetFlags(
 			.update(messages)
 			.set(update)
 			.where(
-				and(eq(messages.threadId, threadId), eq(messages.mailboxId, mailboxId)),
+				and(
+					eq(messages.threadId, threadId),
+					eq(messages.mailboxId, mailboxId),
+					only ? inArray(messages.id, [...only]) : undefined,
+				),
 			);
 
 		// Compute unread count and starred status

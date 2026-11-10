@@ -116,6 +116,8 @@ test("animation : gonfle puis disparait, rien si le systeme demande moins de mou
 	const ui = readFileSync(join(__dirname, "../components/ui/sonner.tsx"), "utf8");
 	assert.match(ui, /burstParticles/);
 	assert.match(ui, /prefers-reduced-motion/);
+	assert.match(ui, /e\.isTrusted/, "la fermeture programmee ne relance pas une gerbe");
+	assert.match(ui, /setTimeout\(\(\) => dot\.remove\(\)/, "bulles retirees meme onglet en arriere-plan");
 });
 
 if (failures) {

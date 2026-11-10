@@ -4,10 +4,10 @@
 // couverte d'un voile qui bloque toute interaction, puis rechargee. Samuel le 10/11 : « tu
 // forces la personne à refresh et tu la laisses pas interagir avec l'application ».
 // Detection : version servie differente (ouverture, retour sur l'onglet, toutes les 30 s),
-// ou reponse « action serveur inconnue » de Next sur n'importe quel appel.
+// ou tout appel d'action serveur en echec (verification immediate de la version).
 // Les brouillons en cours ont leur copie locale (lib/draft-backup.ts), recuperee au chargement.
 import { useEffect, useSyncExternalStore } from "react";
-import { isStaleActionResponse, onNewVersion } from "@/lib/app-version";
+import { isFailedActionCall, isStaleActionResponse, onNewVersion } from "@/lib/app-version";
 import { forceReload, getStale, subscribeStale } from "@/lib/stale-tab";
 
 const LOADED = process.env.NEXT_PUBLIC_BUILD_VERSION ?? "";
@@ -16,6 +16,7 @@ const CHECK_MS = 30_000;
 const RELOAD_DELAY_MS = 1500;
 
 let fetchPatched = false;
+let checkNow: (() => void) | null = null;
 function watchServerActions() {
 	if (fetchPatched || typeof window === "undefined") return;
 	fetchPatched = true;
@@ -24,6 +25,11 @@ function watchServerActions() {
 		const res = await original(...args);
 		try {
 			if (isStaleActionResponse(res.headers)) forceReload(null);
+			else {
+				const [input, init] = args;
+				const headers = init?.headers ?? (input instanceof Request ? input.headers : undefined);
+				if (isFailedActionCall(headers as Headers | Record<string, string> | undefined, res)) checkNow?.();
+			}
 		} catch {}
 		return res;
 	};
@@ -61,6 +67,7 @@ export function VersionWatcher() {
 				busy = false;
 			}
 		};
+		checkNow = () => void check();
 		void check();
 		const onVisible = () => void check();
 		document.addEventListener("visibilitychange", onVisible);
@@ -70,6 +77,7 @@ export function VersionWatcher() {
 			document.removeEventListener("visibilitychange", onVisible);
 			window.removeEventListener("focus", onVisible);
 			clearInterval(timer);
+			checkNow = null;
 		};
 	}, []);
 

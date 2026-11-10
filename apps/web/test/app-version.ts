@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatBuildVersion, isStaleActionResponse, onNewVersion } from "../lib/app-version";
+import { formatBuildVersion, isFailedActionCall, isStaleActionResponse, onNewVersion } from "../lib/app-version";
 
 let failures = 0;
 const test = (label: string, fn: () => void) => {
@@ -49,6 +49,17 @@ test("deja recharge pour cette version et toujours l'ancien bundle : page bloque
 	assert.equal(onNewVersion({ loaded: "a", served: "b", reloadedFor: "b" }), "block");
 });
 
+// En prod, Traefik (custom-errors@file sur le 443) remplace toute reponse 400-599 par sa page
+// d'erreur : l'en-tete de Next est perdu. Un appel d'action serveur en echec declenche donc
+// une verification immediate de la version (differente = onglet perime ; egale = vraie erreur).
+test("action serveur en echec : verification immediate de la version", () => {
+	assert.equal(isFailedActionCall({ "Next-Action": "abc" }, { ok: false, status: 409 }), true);
+	assert.equal(isFailedActionCall(new Headers({ "next-action": "abc" }), { ok: false, status: 404 }), true);
+	assert.equal(isFailedActionCall({ "Next-Action": "abc" }, { ok: true, status: 200 }), false);
+	assert.equal(isFailedActionCall({ Accept: "text/html" }, { ok: false, status: 500 }), false);
+	assert.equal(isFailedActionCall(undefined, { ok: false, status: 500 }), false);
+});
+
 test("action serveur inconnue (en-tete x-nextjs-action-not-found) : onglet perime", () => {
 	assert.equal(isStaleActionResponse(new Headers({ "x-nextjs-action-not-found": "1" })), true);
 	assert.equal(isStaleActionResponse(new Headers({ "content-type": "text/x-component" })), false);
@@ -61,6 +72,7 @@ test("plus aucune proposition de recharger : voile bloquant et rechargement", ()
 	const watcher = src("components/common/version-watcher.tsx");
 	assert.doesNotMatch(watcher, /contenteditable/);
 	assert.match(watcher, /isStaleActionResponse\(/);
+	assert.match(watcher, /isFailedActionCall\(/);
 	assert.match(watcher, /role="alertdialog"/);
 	const notifier = src("components/k/new-mail-notifier.tsx");
 	assert.doesNotMatch(notifier, /new version of Kurrier/);

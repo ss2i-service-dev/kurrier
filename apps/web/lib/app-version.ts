@@ -39,3 +39,14 @@ export function onNewVersion(s: { loaded: string; served: string | null; reloade
 export function isStaleActionResponse(headers: { get(name: string): string | null } | null | undefined): boolean {
 	return headers?.get("x-nextjs-action-not-found") === "1";
 }
+
+// Appel d'action serveur (en-tete Next-Action) en echec. Derriere Traefik (custom-errors sur
+// le 443), la reponse 404 de Next est remplacee par une page d'erreur sans son en-tete : on ne
+// peut pas distinguer « action inconnue » d'une vraie erreur, d'ou une verification de version.
+type HeaderBag = Headers | Record<string, string> | [string, string][] | null | undefined;
+export function isFailedActionCall(headers: HeaderBag, res: { ok: boolean; status: number }): boolean {
+	if (res.ok || !headers) return false;
+	if (typeof (headers as Headers).get === "function") return !!(headers as Headers).get("next-action");
+	const entries = Array.isArray(headers) ? headers : Object.entries(headers);
+	return entries.some(([k, v]) => k.toLowerCase() === "next-action" && !!v);
+}

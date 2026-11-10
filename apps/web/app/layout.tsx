@@ -8,6 +8,7 @@ import "dayjs/locale/fr";
 import "./globals.css";
 import { ConfigProvider } from "@/components/providers/config-provider";
 import { AppearanceProvider } from "@/components/providers/appearance-provider";
+import { VersionWatcher } from "@/components/common/version-watcher";
 import {
 	MODE_COOKIE,
 	RESOLVED_COOKIE,
@@ -117,6 +118,7 @@ export default async function RootLayout({
 							</KUiProvider>
 						</MantineProvider>
 					</ConfigProvider>
+					<VersionWatcher />
 				</AppearanceProvider>
 				<Script src="/ss2i-shortcuts.js" strategy="afterInteractive" />
 			</body>

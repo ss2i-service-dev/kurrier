@@ -60,3 +60,27 @@ export function draftTimesOf(row: {
 	const savedAt = meta?.savedAt ?? iso(row.updatedAt) ?? iso(row.date) ?? createdAt;
 	return { createdAt, savedAt };
 }
+
+// ss2i : garde « envoi en attente ». Un brouillon dont l'envoi est en attente (delai d'annulation
+// ou envoi programme) ne se modifie ni ne se supprime en douce : l'envoi emporte une copie du
+// contenu, une modification serait perdue sans que l'utilisateur le sache.
+export const DRAFT_PENDING_ERROR = "This draft is scheduled; cancel the scheduled send first";
+// Decompte d'annulation sans resultat depuis 3 minutes : etat inconnu, la marque ne bloque plus.
+export const PENDING_STALE_MS = 3 * 60_000;
+
+// Un envoi programme a pour jobId la ligne draft_messages ; un decompte, « undo-send-<uuid> ».
+export const isScheduledMark = (pending: DraftPendingSend | null | undefined) =>
+	!!pending?.jobId && !pending.jobId.startsWith("undo-send-");
+
+export function pendingSendAlive(
+	pending: DraftPendingSend | null | undefined,
+	now: number = Date.now(),
+): boolean {
+	if (!pending) return false;
+	const at = Date.parse(pending.sendAt);
+	if (Number.isNaN(at)) return false;
+	// Un envoi programme reste vivant tant que sa marque existe (l'heure peut etre depassee si
+	// le worker est arrete) : seuls l'envoi, l'echec definitif et l'annulation l'effacent.
+	if (isScheduledMark(pending)) return true;
+	return at > now - PENDING_STALE_MS;
+}

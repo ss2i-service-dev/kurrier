@@ -19,7 +19,7 @@ import { usePathname } from "next/navigation";
 import {use} from "react";
 import { useHiddenThreads } from "@/lib/pending-moves";
 import { useListReturn } from "@/lib/list-return";
-import { anySendTracked, isSendingDraft, useSendRefresh } from "@/components/mailbox/default/draft-send-status";
+import { isSendingDraft, useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
 import { IconSend } from "@tabler/icons-react";
 
 type WebListProps = {
@@ -98,7 +98,7 @@ export default function WebmailList({
 								);
 
 	// ss2i : tant qu'un brouillon de la liste est en cours d'envoi, la liste est actualisee.
-	useSendRefresh(anySendTracked(mailboxThreads.map((t) => t.draftSend)));
+	useSendListRefresh(mailboxThreads.map((t) => t.draftSend));
 
 	return (
 		<div ref={listRef} className={onThread ? "hidden" : ""} data-ss2i-mail-list="">

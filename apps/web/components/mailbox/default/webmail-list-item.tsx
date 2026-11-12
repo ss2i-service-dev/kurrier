@@ -223,6 +223,8 @@ export default function WebmailListItem({
 
 	// ss2i : dans la corbeille, aucune distinction lu / non lu (pas de gras, pas d'icone).
 	const isTrash = activeMailbox.kind === "trash";
+	// Brouillon dont l'envoi est en attente : ni archive ni suppression (annuler l'envoi d'abord).
+	const sendPending = activeMailbox.kind === "drafts" && isSendingDraft(mailboxThreadItem.draftSend);
 	const isUnread = !isTrash && mailboxThreadItem.unreadCount > 0;
 	const isRead = !isUnread;
 
@@ -420,7 +422,7 @@ export default function WebmailListItem({
 						activeMailboxId={activeMailbox.id}
 					/>
 
-					{activeMailbox.kind !== "archive" && (
+					{!sendPending && activeMailbox.kind !== "archive" && (
 						<button
 							onClick={() => {
 								const id = String(mailboxThreadItem.threadId);
@@ -438,23 +440,25 @@ export default function WebmailListItem({
 							<Archive className="h-4 w-4" />
 						</button>
 					)}
-					<button
-						onClick={() => {
-							// ss2i : la ligne part des le clic, le serveur suit (cf. lib/pending-moves).
-							const id = String(mailboxThreadItem.threadId);
-							moveWithUndo({
-								mailboxId: activeMailbox.id,
-								threadIds: [id],
-								message: activeMailbox.kind === "trash" ? "Deleted forever" : "Moved to Trash",
-								run: () => moveToTrash(id, activeMailbox.id, !!mailboxSync, true),
-								failure: "Delete failed",
-							});
-						}}
-						className="rounded p-1 hover:bg-muted"
-						title="Delete"
-					>
-						<Trash2 className="h-4 w-4" />
-					</button>
+					{!sendPending && (
+						<button
+							onClick={() => {
+								// ss2i : la ligne part des le clic, le serveur suit (cf. lib/pending-moves).
+								const id = String(mailboxThreadItem.threadId);
+								moveWithUndo({
+									mailboxId: activeMailbox.id,
+									threadIds: [id],
+									message: activeMailbox.kind === "trash" ? "Deleted forever" : "Moved to Trash",
+									run: () => moveToTrash(id, activeMailbox.id, !!mailboxSync, true),
+									failure: "Delete failed",
+								});
+							}}
+							className="rounded p-1 hover:bg-muted"
+							title="Delete"
+						>
+							<Trash2 className="h-4 w-4" />
+						</button>
+					)}
 				</div>
 			</li>
 		</>

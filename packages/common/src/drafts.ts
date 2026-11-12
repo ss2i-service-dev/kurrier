@@ -14,7 +14,14 @@ import { addressObjToList } from "./mail-client";
 
 export { addressObjToList };
 export * from "./draft-send";
-import { draftTimesOf, mergeDraftMeta, type DraftPendingSend, type DraftSendError } from "./draft-send";
+import {
+	DRAFT_PENDING_ERROR,
+	draftTimesOf,
+	mergeDraftMeta,
+	pendingSendAlive,
+	type DraftPendingSend,
+	type DraftSendError,
+} from "./draft-send";
 
 /**
  * ss2i : brouillons, couche base de donnees (partagee par le web et le worker).
@@ -257,6 +264,11 @@ export async function upsertDraftRow(input: DraftInput) {
 			)[0] as DraftRow | undefined) ?? null)
 		: null;
 	if (input.draftMessageId && !existing) throw new Error("Draft not found");
+	// ss2i : un envoi en attente emporte une copie du contenu ; modifier le brouillon derriere
+	// son dos serait perdu. Annuler l'envoi d'abord (la marque est alors effacee).
+	if (existing && pendingSendAlive(draftMetaOf(existing)?.pendingSend)) {
+		throw new Error(DRAFT_PENDING_ERROR);
+	}
 
 	// L'expediteur (From) a change d'identite : le brouillon change de dossier Drafts. On
 	// repart d'une ligne neuve et l'appelant supprime l'ancienne version IMAP (`replaced`).
@@ -518,9 +530,15 @@ export function draftImapRef(
 export async function deleteDraftRow(opts: {
 	ownerId: string;
 	draftMessageId: string;
+	// Nettoyage apres un envoi reussi (le brouillon part avec le message) : la garde « envoi en
+	// attente » ne s'applique pas.
+	afterSend?: boolean;
 }): Promise<DraftImapRef | null> {
 	const row = await getDraftRow(opts);
 	if (!row) return null;
+	if (!opts.afterSend && pendingSendAlive(draftMetaOf(row)?.pendingSend)) {
+		throw new Error(DRAFT_PENDING_ERROR);
+	}
 	const [box] = await db
 		.select()
 		.from(mailboxes)

@@ -22,11 +22,11 @@ import { Suspense, use, useEffect } from "react";
 import {
 	FetchIdentityMailboxListResult,
 	FetchMailboxUnreadCountsResult,
+	ScheduledDraftCount,
 } from "@/lib/actions/mailbox";
 import { MailboxKind } from "@schema";
 import { showsSidebarCount } from "@/lib/folder-unread-counts";
 import {
-	DraftMessageEntity,
 	IdentityEntity,
 	MailboxEntity,
 	MailboxThreadEntity,
@@ -133,7 +133,7 @@ function IdentityExtraCounts({
 								 currentSlug,
 							 }: {
 	identity: IdentityEntity;
-	scheduledDraftsPromise: Promise<DraftMessageEntity[]>;
+	scheduledDraftsPromise: Promise<ScheduledDraftCount[]>;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
 	workspacePublicId: string | undefined;
 	currentSlug: string;
@@ -376,7 +376,7 @@ export default function IdentityMailboxesList({
 											  }: {
 	identityMailboxes: FetchIdentityMailboxListResult;
 	unreadCounts: FetchMailboxUnreadCountsResult;
-	scheduledDraftsPromise: Promise<DraftMessageEntity[]>;
+	scheduledDraftsPromise: Promise<ScheduledDraftCount[]>;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
 	// ss2i : clients (CRM) des identites pro, section sous les dossiers.
 	clientsPromise?: Promise<IdentityClientsData[]>;

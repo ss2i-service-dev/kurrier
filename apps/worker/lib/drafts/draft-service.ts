@@ -17,10 +17,13 @@
  *     Supprime en base puis en IMAP (sur place si on a les connexions, sinon par le job
  *     `draft:delete`). Suppression definitive, pas de passage par la corbeille : c'est la
  *     convention des clients (Gmail, Thunderbird, Roundcube) pour un brouillon.
- *   sendDraft({ ownerId, identityId, draftMessageId, delayMs?, senderUserId? })
- *     -> { pendingSendId, undoMs }
+ *   sendDraft({ ownerId, identityId, draftMessageId, delayMs?, sendAt?, senderUserId? })
+ *     -> { pendingSendId, undoMs, scheduledAt? }
  *     Meme chemin que le composeur (job `send-and-reconcile`, differe et annulable) ; le
- *     brouillon est supprime par send-mail.ts une fois l'envoi reussi.
+ *     brouillon est supprime par send-mail.ts une fois l'envoi reussi. Avec `sendAt` (envoi
+ *     programme) : ligne draft_messages « scheduled » + job `send-scheduled-draft` differe,
+ *     comme le menu « Programmer l'envoi » du composeur ; le brouillon porte la marque
+ *     pendingSend jusqu'a l'heure (annulable depuis courrier).
  *
  * Jobs (file smtp-worker, un a la fois, donc jamais deux APPEND concurrents) :
  *   draft:sync   { draftMessageId }   -> syncDraftToImap
@@ -47,13 +50,17 @@ import {
 	draftDomain,
 	draftMetaOf,
 	draftSendPayload,
+	pendingSendAlive,
+	scheduledJobOf,
+	scheduledPendingSend,
+	validateScheduledAt,
 	draftSyncJobOptions,
 	getDraftRow,
 	listDraftRows,
 	setDraftSendState,
 	upsertDraftRow,
 } from "@common";
-import { db, identities, mailboxes, messages } from "@db";
+import { db, draftMessages, identities, mailboxes, messages } from "@db";
 import { getServerEnv } from "@schema";
 import { and, eq, sql } from "drizzle-orm";
 import type { ImapFlow } from "imapflow";
@@ -169,7 +176,13 @@ export async function getDraft(opts: {
 }
 
 export async function deleteDraft(
-	opts: { ownerId: string; identityId: string; draftMessageId: string },
+	opts: {
+		ownerId: string;
+		identityId: string;
+		draftMessageId: string;
+		// Nettoyage apres un envoi reussi : la garde « envoi en attente » ne s'applique pas.
+		afterSend?: boolean;
+	},
 	imapInstances?: Map<string, ImapFlow>,
 ) {
 	const ref = await deleteDraftRow(opts);
@@ -184,12 +197,77 @@ export async function sendDraft(opts: {
 	identityId: string;
 	draftMessageId: string;
 	delayMs?: number;
+	// Envoi programme : heure d'envoi (a verifier par l'appelant, revalidee ici).
+	sendAt?: Date;
 	senderUserId?: string | null;
 }) {
 	const payload = await draftSendPayload(opts);
 	if (payload.identityId !== opts.identityId)
 		throw new Error("Draft not found");
+	// Un envoi deja en attente (delai d'annulation ou programme) n'est pas redouble ; une marque
+	// perimee de plus de 3 minutes (etat inconnu de l'interface) ne bloque plus.
+	const row = await getDraftRow(opts);
+	if (pendingSendAlive(row ? draftMetaOf(row)?.pendingSend : null)) {
+		throw new Error("This draft already has a send in progress; cancel it from courrier first.");
+	}
 	const { sendMailQueue } = await getRedis();
+	if (opts.sendAt) {
+		const check = validateScheduledAt(opts.sendAt);
+		if (!check.ok) {
+			throw new Error(
+				check.reason === "past" ? "send_at is in the past." : "send_at is not a valid date.",
+			);
+		}
+		const [identity] = await db
+			.select({ workspaceId: identities.workspaceId })
+			.from(identities)
+			.where(eq(identities.id, payload.identityId));
+		if (!identity) throw new Error("Identity not found");
+		const [created] = await db
+			.insert(draftMessages)
+			.values({
+				ownerId: opts.ownerId,
+				workspaceId: identity.workspaceId,
+				identityId: payload.identityId,
+				mailboxId: payload.mailboxId,
+				status: "scheduled",
+				scheduledAt: check.at,
+				payload,
+			})
+			.returning({ id: draftMessages.id, scheduledAt: draftMessages.scheduledAt });
+		const job = scheduledJobOf({
+			id: created.id,
+			identityId: payload.identityId,
+			scheduledAt: created.scheduledAt,
+			payload,
+		});
+		try {
+			await sendMailQueue.add(job.name, job.data, job.opts);
+		} catch (e) {
+			// Sans job, la ligne ne partirait qu'au prochain demarrage du worker : on la retire.
+			await db.delete(draftMessages).where(eq(draftMessages.id, created.id));
+			throw e;
+		}
+		try {
+			await setDraftSendState(opts.draftMessageId, {
+				pendingSend: scheduledPendingSend(created),
+				sendError: null,
+			});
+		} catch (e) {
+			// Sans marque, le brouillon resterait modifiable et l'envoi invisible : on retire le job
+			// et la ligne plutot que de laisser un envoi programme sans marque.
+			await (await sendMailQueue.getJob(created.id))?.remove().catch(() => {});
+			await db.delete(draftMessages).where(eq(draftMessages.id, created.id));
+			throw new Error(
+				`Scheduling failed, nothing was scheduled: ${(e as Error)?.message ?? e}`,
+			);
+		}
+		return {
+			pendingSendId: created.id,
+			undoMs: job.opts.delay,
+			scheduledAt: check.at.toISOString(),
+		};
+	}
 	const delay = opts.delayMs ?? UNDO_SEND_MS;
 	const job = await sendMailQueue.add("send-and-reconcile", payload, {
 		jobId: `undo-send-${crypto.randomUUID()}`,
@@ -203,7 +281,7 @@ export async function sendDraft(opts: {
 		},
 		sendError: null,
 	});
-	return { pendingSendId: String(job.id), undoMs: delay };
+	return { pendingSendId: String(job.id), undoMs: delay, scheduledAt: undefined };
 }
 
 // ---------------------------------------------------------------------------

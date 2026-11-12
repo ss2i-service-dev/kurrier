@@ -22,11 +22,11 @@ import { syncServerCounts, useMailStore } from "@/components/k/mail-store";
 import {
 	FetchIdentityMailboxListResult,
 	FetchMailboxUnreadCountsResult,
+	ScheduledDraftCount,
 } from "@/lib/actions/mailbox";
 import { MailboxKind } from "@schema";
 import { showsSidebarCount } from "@/lib/folder-unread-counts";
 import {
-	DraftMessageEntity,
 	IdentityEntity,
 	MailboxEntity,
 	MailboxThreadEntity,
@@ -132,7 +132,7 @@ function IdentityExtraCounts({
 								 currentSlug,
 							 }: {
 	identity: IdentityEntity;
-	scheduledDraftsPromise: Promise<DraftMessageEntity[]>;
+	scheduledDraftsPromise: Promise<ScheduledDraftCount[]>;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
 	workspacePublicId: string | undefined;
 	currentSlug: string;
@@ -192,7 +192,7 @@ export default function KSidebarNav({
 }: {
 	identityMailboxes: FetchIdentityMailboxListResult;
 	unreadCounts: FetchMailboxUnreadCountsResult;
-	scheduledDraftsPromise: Promise<DraftMessageEntity[]>;
+	scheduledDraftsPromise: Promise<ScheduledDraftCount[]>;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
 	workspacePublicId: string | undefined;
 	onComplete?: () => void;

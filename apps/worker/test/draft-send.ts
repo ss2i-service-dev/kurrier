@@ -4,8 +4,10 @@
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/draft-send.ts
 import assert from "node:assert/strict";
 import {
+	DRAFT_PENDING_ERROR,
 	draftSendStateOf,
 	mergeDraftMeta,
+	pendingSendAlive,
 	type DraftSendFields,
 } from "../../../packages/common/src/draft-send";
 
@@ -52,6 +54,28 @@ test("premiere ecriture sans meta precedente", () => {
 test("draftSendStateOf lit les deux marques", () => {
 	assert.deepEqual(draftSendStateOf({ pendingSend, sendError }), { pendingSend, sendError });
 	assert.deepEqual(draftSendStateOf(null), { pendingSend: null, sendError: null });
+});
+
+// Garde : un brouillon dont l'envoi est en attente ne se modifie ni ne se supprime en douce.
+test("pendingSendAlive : decompte en cours, programme, perime", () => {
+	const now = Date.parse("2026-11-12T10:00:00.000Z");
+	const countdown = (offsetMs: number) => ({ jobId: "undo-send-abc", sendAt: new Date(now + offsetMs).toISOString() });
+	assert.equal(pendingSendAlive(null, now), false);
+	assert.equal(pendingSendAlive(undefined, now), false);
+	assert.equal(pendingSendAlive(countdown(30_000), now), true);
+	assert.equal(pendingSendAlive(countdown(-2 * 60_000), now), true);
+	// Decompte sans resultat depuis plus de 3 minutes : etat inconnu, ne bloque plus.
+	assert.equal(pendingSendAlive(countdown(-4 * 60_000), now), false);
+	// Envoi programme (jobId = ligne draft_messages) : vivant tant que la marque existe,
+	// meme si l'heure est depassee (worker arrete) : seule l'annulation ou l'envoi l'efface.
+	const scheduled = (offsetMs: number) => ({ jobId: "5c1e0f6e-1111-4222-8333-444455556666", sendAt: new Date(now + offsetMs).toISOString() });
+	assert.equal(pendingSendAlive(scheduled(24 * 3600_000), now), true);
+	assert.equal(pendingSendAlive(scheduled(-3600_000), now), true);
+	assert.equal(pendingSendAlive({ jobId: "x", sendAt: "pas une date" }, now), false);
+});
+
+test("message de refus de la garde", () => {
+	assert.equal(DRAFT_PENDING_ERROR, "This draft is scheduled; cancel the scheduled send first");
 });
 
 if (failures) {

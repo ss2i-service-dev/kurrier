@@ -35,7 +35,7 @@ import {
 import { htmlToText, messageBodyText, truncate } from "@common/html-text";
 import { stripSubjectPrefixes } from "@common/subject";
 import { pickSenderIdentity } from "./sender-identity";
-import { type QuoteScope, stripQuotedText } from "@common";
+import { type QuoteScope, stripQuotedText, validateScheduledAt } from "@common";
 import { attachThreadsToCompany, crmSearchCompanies, detachThreadsFromCompany, searchKnownCrmCompanies, upsertCrmCompanies } from "@common/server-client-link";
 import { isProIdentityValue } from "../crm/link-thread";
 
@@ -1544,7 +1544,13 @@ export const TOOLS: ToolDefinition[] = [
 		},
 		handler: async (ctx, args) => {
 			const { identity, message } = await ownedDraft(ctx, args.draft_id);
-			const result = await (await drafts()).deleteDraft({ ownerId: ctx.userId, identityId: identity.id, draftMessageId: message.id });
+			let result: { deleted: boolean };
+			try {
+				result = await (await drafts()).deleteDraft({ ownerId: ctx.userId, identityId: identity.id, draftMessageId: message.id });
+			} catch (err: any) {
+				// Envoi en attente : « This draft is scheduled; cancel the scheduled send first ».
+				throw new McpToolError(err?.message ?? "Draft could not be deleted");
+			}
 			if (!result.deleted) throw new McpToolError(`Draft not found: ${message.id}`);
 			return { status: "deleted", draft_id: message.id };
 		},
@@ -1553,21 +1559,43 @@ export const TOOLS: ToolDefinition[] = [
 		name: "send_draft",
 		scope: "emails:send",
 		description:
-			"Send a draft through the regular pipeline, with the same 30-second undo delay as the web editor (the send can still be cancelled from courrier during that delay). Confirm with the user first.",
+			"Send a draft through the regular pipeline, with the same 30-second undo delay as the web editor (the send can still be cancelled from courrier during that delay). With 'send_at' (ISO 8601 with a UTC offset, e.g. 2026-11-13T08:00:00+01:00) the send is scheduled instead: the draft stays in Drafts (pending send) until that time and can be cancelled or sent immediately from courrier (Drafts > pending sends, or the scheduled sends page). A time already past by more than a minute is refused. Confirm with the user first.",
 		inputSchema: {
 			type: "object",
-			properties: { draft_id: { type: "string" } },
+			properties: {
+				draft_id: { type: "string" },
+				send_at: {
+					type: "string",
+					description: "Optional. ISO 8601 date-time WITH a UTC offset or Z, in the future (e.g. 2026-11-13T08:00:00+01:00).",
+				},
+			},
 			required: ["draft_id"],
 			additionalProperties: false,
 		},
 		handler: async (ctx, args) => {
 			const { identity, message } = await ownedDraft(ctx, args.draft_id);
-			let result: { pendingSendId: string; undoMs: number };
+			const sendAtRaw = str(args.send_at, "send_at", { optional: true });
+			let sendAt: Date | undefined;
+			if (sendAtRaw !== undefined) {
+				// Sans decalage horaire, l'heure serait lue dans le fuseau du serveur : refusee.
+				if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i.test(sendAtRaw)) {
+					throw new McpToolError("'send_at' must be an ISO 8601 date-time with a UTC offset, e.g. 2026-11-13T08:00:00+01:00");
+				}
+				const check = validateScheduledAt(sendAtRaw);
+				if (!check.ok) {
+					throw new McpToolError(
+						check.reason === "past" ? "'send_at' is in the past" : "'send_at' is not a valid date-time",
+					);
+				}
+				sendAt = check.at;
+			}
+			let result: { pendingSendId: string; undoMs: number; scheduledAt?: string };
 			try {
 				result = await (await drafts()).sendDraft({
 					ownerId: ctx.userId,
 					identityId: identity.id,
 					draftMessageId: message.id,
+					sendAt,
 					senderUserId: ctx.userId,
 				});
 			} catch (err: any) {
@@ -1578,7 +1606,10 @@ export const TOOLS: ToolDefinition[] = [
 				draft_id: message.id,
 				pending_send_id: result.pendingSendId,
 				sends_in_ms: result.undoMs,
-				note: "The message leaves after the undo delay; the draft is removed once sent.",
+				...(result.scheduledAt ? { scheduled_at: result.scheduledAt } : {}),
+				note: result.scheduledAt
+					? "The message leaves at scheduled_at; the draft stays in Drafts (pending send) until then and can be cancelled from courrier."
+					: "The message leaves after the undo delay; the draft is removed once sent.",
 			};
 		},
 	},

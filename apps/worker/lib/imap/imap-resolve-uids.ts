@@ -21,28 +21,40 @@ const norm = (v?: string | null) =>
  * dossiers de taille raisonnable.
  *
  * A appeler verrou du dossier tenu. Retourne UID reel -> id de la ligne `messages`.
+ *
+ * ss2i (12/11) : `absent`, si fourni, recoit les lignes dont l'absence du dossier est prouvee :
+ * ni a leur UID, ni par SEARCH, ni dans la lecture COMPLETE des enveloppes du dossier (dossier
+ * lisible, d'au plus SCAN_LIMIT messages, lecture sans erreur). Une ligne seulement « pas
+ * trouvee » (dossier trop gros, lecture en erreur) n'y est pas.
  */
 const SCAN_LIMIT = 5000;
 
 export async function resolveUids(
 	client: ImapFlow,
 	rows: UidRow[],
+	absent?: Set<string>,
 ): Promise<Map<number, string>> {
 	const resolved = new Map<number, string>();
 
 	// Enveloppes du dossier, lues une seule fois et seulement si SEARCH n'a rien rendu.
+	// scanComplete : le dossier entier a ete lu (ou il est vide), l'absence y est prouvee.
 	let scanned: Map<string, number[]> | undefined;
+	let scanComplete = false;
 	const scan = async () => {
 		if (scanned) return scanned;
 		scanned = new Map();
 		const box = client.mailbox;
-		const exists = box && typeof box === "object" ? Number(box.exists ?? 0) : 0;
-		if (!exists || exists > SCAN_LIMIT) return scanned;
-		for await (const m of client.fetch("1:*", { uid: true, envelope: true })) {
-			const key = norm(m.envelope?.messageId);
-			if (!key) continue;
-			scanned.set(key, [...(scanned.get(key) ?? []), m.uid]);
+		if (!box || typeof box !== "object") return scanned;
+		const exists = Number(box.exists ?? 0);
+		if (exists > SCAN_LIMIT) return scanned;
+		if (exists > 0) {
+			for await (const m of client.fetch("1:*", { uid: true, envelope: true })) {
+				const key = norm(m.envelope?.messageId);
+				if (!key) continue;
+				scanned.set(key, [...(scanned.get(key) ?? []), m.uid]);
+			}
 		}
+		scanComplete = true;
 		return scanned;
 	};
 
@@ -84,8 +96,9 @@ export async function resolveUids(
 			uids = (await scan().catch(() => undefined))?.get(wanted) ?? [];
 		}
 		if (!uids.length) {
+			if (scanComplete) absent?.add(row.id);
 			console.warn(
-				`[imap:resolve-uids] message ${row.id} introuvable dans le dossier (uid en base ${row.uid}), ignore`,
+				`[imap:resolve-uids] message ${row.id} introuvable dans le dossier (uid en base ${row.uid}${scanComplete ? ", dossier lu en entier" : ""}), ignore`,
 			);
 			continue;
 		}

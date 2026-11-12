@@ -366,14 +366,30 @@ async function moveGroupOnImap(
 		);
 	}
 	try {
-		const wanted = await resolveUids(client, rows);
+		const absent = new Set<string>();
+		const wanted = await resolveUids(client, rows, absent);
 		for (const [uid, id] of wanted) if (!srcUid.has(id)) srcUid.set(id, uid);
+
+		// ss2i (12/11, Spam Gmail de sam.legros@) : absence de la source PROUVEE (dossier lu en
+		// entier) : le message n'est plus sur le serveur (supprime depuis un autre client, Gmail
+		// qui vide son Spam), seule la base l'avait encore. Le remettre dans la source le faisait
+		// revenir a chaque « vider le spam » et le job echouait sans fin : il reste a destination
+		// sans UID, comme un message envoye mais arrive nulle part (etape 5).
+		const gone = rows.filter((r) => !srcUid.has(r.id) && absent.has(r.id));
+		if (gone.length) {
+			gone.forEach((r) => settled.add(r.id));
+			console.warn(
+				`[mail:move] ${gone.length} message(s) absents de ${srcPath} (dossier lu en entier, ${tag}) : deja supprimes du serveur, laisses a destination sans UID`,
+				gone.slice(0, 20).map((r) => r.id),
+			);
+		}
 
 		// Jamais envoyes dans le MOVE : resolveUids ne les a pas trouves dans la source (UID
 		// perime que Stalwart ne retrouve pas : SEARCH HEADER vide, balayage borne a 5 000
-		// messages ; ou lecture en erreur). Le serveur ne les a pas deplaces : remis dans la
-		// source en base, sans relire leur UID en base, qui designe peut-etre un autre message.
-		const notSent = rows.filter((r) => !srcUid.has(r.id));
+		// messages ; ou lecture en erreur). Le serveur ne les a peut-etre pas deplaces : remis
+		// dans la source en base, sans relire leur UID en base, qui designe peut-etre un autre
+		// message.
+		const notSent = rows.filter((r) => !srcUid.has(r.id) && !absent.has(r.id));
 		if (notSent.length) {
 			const back = notSent.filter((r) => !isDup(r.id));
 			reverted += await revertToSource(back.map((r) => ({ id: r.id, uid: r.uid })), srcPath, ctx);

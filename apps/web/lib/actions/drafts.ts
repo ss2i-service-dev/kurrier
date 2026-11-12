@@ -184,18 +184,18 @@ export const fetchDraftCounts = cache(async () => {
 	const ids = draftBoxes.map((b) => b.id);
 	const counts = new Map<string, number>();
 	if (!ids.length) return counts;
+	// ss2i : meme compte que la liste du dossier (une ligne par fil, les envois en attente a part
+	// dans la section Outbox). Sans exiger le drapeau draft : Gmail ne pose pas \Draft sur ses
+	// brouillons en IMAP (Samuel le 12/11 : « ca n'en compte qu'un alors qu'il y en a plein dedans »).
+	const pending = sql`coalesce(jsonb_typeof(${messages.metaData}->'draft'->'pendingSend'), 'null') <> 'null'`;
 	const rows = await rls((tx) =>
 		tx
-			.select({ mailboxId: messages.mailboxId, n: sql<number>`count(*)` })
+			.select({
+				mailboxId: messages.mailboxId,
+				n: sql<number>`count(distinct ${messages.threadId}) - count(distinct ${messages.threadId}) filter (where ${pending})`,
+			})
 			.from(messages)
-			.where(
-				and(
-					inArray(messages.mailboxId, ids),
-					eq(messages.draft, true),
-					// ss2i : un envoi en attente (meta.draft.pendingSend) n'est plus un brouillon.
-					sql`coalesce(jsonb_typeof(${messages.metaData}->'draft'->'pendingSend'), 'null') = 'null'`,
-				),
-			)
+			.where(inArray(messages.mailboxId, ids))
 			.groupBy(messages.mailboxId),
 	);
 	for (const r of rows) counts.set(r.mailboxId, Number(r.n ?? 0));

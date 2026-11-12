@@ -58,6 +58,18 @@ test("les barres latérales nourries par fetchDraftCounts appliquent showsSideba
 	]) assert.match(src(p), /fetchDraftCounts\(\)/, p);
 });
 
+// Samuel le 12/11 : « sur ma boite perso, ca n'en compte qu'un alors qu'il y en a plein dedans ! ».
+// Gmail ne pose pas \Draft sur ses brouillons en IMAP (55 sur 56 en prod n'ont que \Seen) : le
+// compteur suit la liste du dossier (un fil par ligne, envois en attente a part), pas le drapeau.
+test("fetchDraftCounts compte les fils du dossier Drafts, sans exiger le drapeau draft", () => {
+	const s = src("lib/actions/drafts.ts");
+	const body = s.slice(s.indexOf("export const fetchDraftCounts"), s.indexOf("export type FetchDraftCountsResult"));
+	assert.ok(body.length > 0);
+	assert.doesNotMatch(body, /eq\(messages\.draft, true\)/);
+	assert.match(body, /count\(distinct \$\{messages\.threadId\}\)/);
+	assert.match(body, /pendingSend/);
+});
+
 if (failures) {
 	console.log(`\n${failures} test(s) en echec`);
 	process.exit(1);

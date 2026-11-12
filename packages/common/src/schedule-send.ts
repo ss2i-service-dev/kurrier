@@ -46,8 +46,8 @@ export function schedulePresets(now: Date, tz: string): SchedulePreset[] {
 	return [
 		{ key: "in1h", labelEn: "In 1 hour", labelFr: "Dans 1 h", date: minute(1) },
 		{ key: "in2h", labelEn: "In 2 hours", labelFr: "Dans 2 h", date: minute(2) },
-		{ key: "tomorrow8", labelEn: "Tomorrow 8 am", labelFr: "Demain 8 h", date: at8(shiftYmd(today, 1).ymd) },
-		{ key: "monday8", labelEn: "Monday 8 am", labelFr: "Lundi 8 h", date: at8(shiftYmd(today, daysToMonday).ymd) },
+		{ key: "tomorrow8", labelEn: "Tomorrow 08:00", labelFr: "Demain 8 h", date: at8(shiftYmd(today, 1).ymd) },
+		{ key: "monday8", labelEn: "Monday 08:00", labelFr: "Lundi 8 h", date: at8(shiftYmd(today, daysToMonday).ymd) },
 	];
 }
 

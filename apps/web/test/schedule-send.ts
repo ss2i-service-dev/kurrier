@@ -45,6 +45,9 @@ test("raccourcis du jeudi 12/11 10:00 : +1 h, +2 h, demain 8 h, lundi 8 h", () =
 	assert.equal(hhmm(p[3].date), "16/11 08:00");
 	assert.equal(p[3].labelFr, "Lundi 8 h");
 	assert.equal(p[2].labelFr, "Demain 8 h");
+	assert.equal(p[2].labelEn, "Tomorrow 08:00");
+	assert.equal(p[3].labelEn, "Monday 08:00");
+	for (const x of p) assert.doesNotMatch(x.labelEn, /\b(am|pm)\b/i);
 	assert.equal(p[0].labelFr, "Dans 1 h");
 	assert.equal(p[0].labelEn, "In 1 hour");
 });

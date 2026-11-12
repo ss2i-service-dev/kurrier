@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { NO_UNREAD_COUNT_KINDS, showsUnreadCount } from "../lib/folder-unread-counts";
+import { NO_UNREAD_COUNT_KINDS, showsUnreadCount, showsSidebarCount } from "../lib/folder-unread-counts";
 
 let failures = 0;
 const test = (label: string, fn: () => void) => {
@@ -36,12 +36,26 @@ test("le serveur ne calcule plus le compteur de ces dossiers (toutes les barres 
 	assert.match(src("lib/actions/mailbox.ts"), /notInArray\(mailboxes\.kind, \[\.\.\.NO_UNREAD_COUNT_KINDS\]\)/);
 });
 
-test("les trois barres latérales appliquent la même règle", () => {
+// Samuel le 12/11 : « ce qui serait intéressant, c'est qu'on ait le nombre de drafts en attente
+// d'envoi à côté de drafts ». Drafts affiche son nombre de brouillons (fetchDraftCounts, envois en
+// attente exclus), pas des non lus : les autres dossiers de la liste restent sans compteur.
+test("Drafts affiche son nombre de brouillons dans la barre latérale", () => {
+	assert.equal(showsSidebarCount("drafts"), true);
+	for (const k of ["sent", "outbox", "archive", "trash"]) assert.equal(showsSidebarCount(k), false, k);
+	for (const k of ["inbox", "spam", "custom"]) assert.equal(showsSidebarCount(k), true, k);
+});
+
+test("les barres latérales nourries par fetchDraftCounts appliquent showsSidebarCount", () => {
 	for (const p of [
 		"components/dashboard/identity-mailboxes-list.tsx",
 		"components/k/sidebar-nav.tsx",
-		"components/mailbox/default/mailbox-nav.tsx",
-	]) assert.match(src(p), /showsUnreadCount\(/, p);
+	]) assert.match(src(p), /showsSidebarCount\(/, p);
+	// l'ancienne barre (mailbox-nav) ne recoit que des non lus : Drafts y reste sans compteur
+	assert.match(src("components/mailbox/default/mailbox-nav.tsx"), /showsUnreadCount\(/);
+	for (const p of [
+		"components/dashboard/workspaces/identity-mailboxes-list-wrapper.tsx",
+		"components/k/sidebar-nav-wrapper.tsx",
+	]) assert.match(src(p), /fetchDraftCounts\(\)/, p);
 });
 
 if (failures) {

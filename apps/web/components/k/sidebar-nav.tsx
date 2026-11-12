@@ -24,7 +24,7 @@ import {
 	FetchMailboxUnreadCountsResult,
 } from "@/lib/actions/mailbox";
 import { MailboxKind } from "@schema";
-import { showsUnreadCount } from "@/lib/folder-unread-counts";
+import { showsSidebarCount } from "@/lib/folder-unread-counts";
 import {
 	DraftMessageEntity,
 	IdentityEntity,
@@ -246,8 +246,8 @@ export default function KSidebarNav({
 		const hasChildren = m.children.length > 0;
 		// compteur serveur + ajustement immediat des actions en cours (mail-store)
 		const unread = Math.max(0, m.unread + (countAdj.get(m.id)?.delta ?? 0));
-		// pas de compteur sur Envoyes, Boite d'envoi, Brouillons, Archive ni Corbeille
-		const showCount = unread > 0 && showsUnreadCount(m.kind);
+		// pas de compteur sur Envoyes, Boite d'envoi, Archive ni Corbeille ; Drafts : nombre de brouillons
+		const showCount = unread > 0 && showsSidebarCount(m.kind);
 
 		return (
 			<div>

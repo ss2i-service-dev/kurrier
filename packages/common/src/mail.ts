@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { db, identities, mailboxes, mailboxThreads, messages } from "@db";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { AddressObjectJSON } from "@schema";
+import { parseAddressField } from "./address-field";
 import { PgTransaction } from "drizzle-orm/pg-core";
 
 type Mini = { n?: string | null; e: string | null };
@@ -10,10 +10,11 @@ export const generateSnippet = (text: string) =>
 	text ? text.toString().replace(/\s+/g, " ").slice(0, 100) : null;
 
 export function buildParticipantsSnapshot(msg: typeof messages.$inferSelect) {
-	const extract = (addrObj?: AddressObjectJSON | null) =>
-		(addrObj?.value ?? [])
-			.map((a) => ({ n: a?.name || null, e: a?.address || null }))
-			.filter((x) => x.e)
+	// ss2i : parseAddressField lit aussi la simple chaine des messages envoyes depuis kurrier
+	// (« samuel@ss2i-digital.fr ») ; avant, leur expediteur sortait vide dans la liste des fils.
+	const extract = (field: unknown) =>
+		parseAddressField(field)
+			.map((a) => ({ n: a.name, e: a.address }))
 			.slice(0, 5);
 
 	return {
@@ -209,8 +210,10 @@ export async function upsertMailboxThreadItem(
 				hasAttachments: sql`${mailboxThreads.hasAttachments} OR EXCLUDED.has_attachments`,
 				starred: sql`${mailboxThreads.starred} OR EXCLUDED.starred`,
 
-				// shallow-merge participants (keeps existing keys, fills new)
-				participants: sql`jsonb_strip_nulls(${mailboxThreads.participants} || EXCLUDED.participants)`,
+				// shallow-merge participants (keeps existing keys, fills new). ss2i : une ligne aux
+				// participants NULL (laissee par ss2i_merge_threads pour le dossier du message qui
+				// arrive) restait NULL, car NULL || x = NULL : expediteur vide dans la liste.
+				participants: sql`jsonb_strip_nulls(coalesce(${mailboxThreads.participants}, '{}'::jsonb) || EXCLUDED.participants)`,
 
 				// ids/slugs are stable but keep them consistent
 				identityId: sql`EXCLUDED.identity_id`,

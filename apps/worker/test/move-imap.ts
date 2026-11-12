@@ -422,6 +422,36 @@ async function main() {
 		assert(!!(await threadRow(t8.id, f.inbox.id)) && !!(await threadRow(t8.id, trash.id)), "UID perime : fil reparti, une ligne par dossier");
 	}
 
+	// 6 bis. Incident du 12/11 (Spam Gmail de sam.legros@) : messages deja supprimes du serveur
+	//    (absents de la source, relue en entier : dossier de moins de 5 000 messages) mais
+	//    restes en base. Ils ne sont plus remis dans la source (ils revenaient a chaque « vider
+	//    le spam ») : ils restent a destination sans UID, le reste du lot part, le job reussit.
+	{
+		const f = await createUserFixture("move-fantome");
+		const trash = await trashOf(f);
+		await syncRow(f, f.inbox.id, 300);
+		await syncRow(f, trash.id, 0);
+		const g = `<fantome-${Date.now()}@x>`;
+		const p = `<present-${Date.now()}@x>`;
+		const imap = new FakeStalwart({
+			INBOX: { uidNext: 301, msgs: [[201, p]] },
+			"Deleted Items": { uidNext: 1, msgs: [] },
+		});
+		const tg = await thread(f, f.inbox.id, [{ mid: g, uid: 200 }]);
+		const tp = await thread(f, f.inbox.id, [{ mid: p, uid: 201 }]);
+		let error: unknown = null;
+		await moveMail(job([tg.id, tp.id], f.inbox.id, true), on(f, imap)).catch((e) => (error = e));
+		assert(error === null, `message supprime du serveur : le job ne leve pas (${error})`);
+		const [rg] = await msgRows(tg.ids);
+		assert(
+			rg.mailboxId === trash.id && (rg.metaData as any).imap.uid === undefined,
+			"message supprime du serveur : laisse a destination sans UID, pas remis dans la source",
+		);
+		const [rp] = await msgRows(tp.ids);
+		assert(rp.mailboxId === trash.id && (rp.metaData as any).imap.uid === 1, "l'autre fil du lot est parti (UID 1)");
+		assert(!(await threadRow(tg.id, f.inbox.id)), "plus de ligne source pour le fil supprime du serveur");
+	}
+
 	// 7. Meme Message-ID deja dans le dossier d'arrivee (index unique mailbox_id + message_id) :
 	//    la ligne source est supprimee, la copie IMAP part quand meme, le curseur la compte.
 	{

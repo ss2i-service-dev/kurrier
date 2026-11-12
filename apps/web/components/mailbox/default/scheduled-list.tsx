@@ -7,7 +7,9 @@ import dayjs from "dayjs";
 import { ReusableFormButton } from "@/components/common/reusable-form-button";
 import { deleteScheduledDraft } from "@/lib/actions/mailbox";
 import { useNouvelle } from "@/components/k/ui-context";
+import { formatScheduledWhen } from "@common/schedule-send";
 import { KEmptyState } from "@/components/k/section";
+import { useLocalTz } from "@/components/mailbox/default/draft-send-status";
 
 type DraftMessageRow = {
 	id: string;
@@ -31,23 +33,14 @@ type ScheduledListProps = {
 	onCancel?: (draft: DraftMessageRow) => void;
 };
 
-function formatDateLabel(input?: string | number | Date) {
-	if (!input) return "";
-
+// tz = fuseau du navigateur (useLocalTz) ; null avant le montage : pas d'heure, le rendu serveur
+// (fuseau du serveur) et le premier rendu client restent identiques.
+function formatDateLabel(input: string | number | Date | undefined, tz: string | null) {
+	if (!input || tz === null) return "";
 	const d = dayjs(input);
 	if (!d.isValid()) return "";
-
-	const now = dayjs();
-
-	if (d.isSame(now, "day")) {
-		return d.format("h:mm A");
-	}
-
-	if (d.isSame(now, "year")) {
-		return d.format("MMM D, h:mm A");
-	}
-
-	return d.format("MMM D, YYYY, h:mm A");
+	// 24 h, jour de la semaine (meme formatage que l'editeur et la banniere).
+	return formatScheduledWhen(d.toDate(), "en", tz);
 }
 
 function getToLabel(payload: Record<string, any>) {
@@ -85,8 +78,10 @@ function hasAttachments(payload: Record<string, any>) {
 }
 
 function ScheduledListItem({ draft }: { draft: DraftMessageRow }) {
+	const tz = useLocalTz();
 	const scheduledLabel = formatDateLabel(
 		draft.scheduledAt ?? draft.updatedAt ?? draft.createdAt ?? Date.now(),
+		tz,
 	);
 	const toLabel = getToLabel(draft.payload);
 	const subject = getSubject(draft.payload);
@@ -138,12 +133,10 @@ function ScheduledListItem({ draft }: { draft: DraftMessageRow }) {
 
 // ss2i : ligne de la nouvelle interface (meme donnees, meme action de suppression).
 function KScheduledItem({ draft }: { draft: DraftMessageRow }) {
+	const tz = useLocalTz();
 	const when = draft.scheduledAt ?? draft.updatedAt ?? draft.createdAt;
 	const d = when ? new Date(when) : null;
-	const whenLabel =
-		d && !Number.isNaN(d.getTime())
-			? d.toLocaleString("fr-FR", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
-			: "";
+	const whenLabel = d && !Number.isNaN(d.getTime()) && tz !== null ? formatScheduledWhen(d, "fr", tz) : "";
 	const raw = draft.payload?.to;
 	const toLabel = !raw
 		? "Aucun destinataire"
@@ -165,7 +158,7 @@ function KScheduledItem({ draft }: { draft: DraftMessageRow }) {
 				</div>
 				<div className="mt-1 flex items-center gap-1.5 text-[12px] text-k-accent">
 					<Clock className="h-3.5 w-3.5" />
-					<span className="whitespace-nowrap">Envoi prévu le {whenLabel}</span>
+					<span className="whitespace-nowrap">Envoi prévu : {whenLabel}</span>
 				</div>
 			</div>
 			<ReusableFormButton

@@ -2,6 +2,7 @@
 
 import {
 	DRAFT_DELETE_JOB,
+	DRAFT_PENDING_ERROR,
 	DRAFT_SYNC_JOB,
 	type DraftAttachment,
 	type DraftMode,
@@ -56,6 +57,12 @@ async function identityFor(identityPublicId: string) {
 	return identity ?? null;
 }
 
+// Garde « envoi en attente » (packages/common/src/draft-send.ts), en francais pour l'editeur.
+const draftErrorMessage = (err: any, fallback: string) =>
+	err?.message === DRAFT_PENDING_ERROR
+		? "Ce brouillon est programmé : annulez d'abord l'envoi programmé."
+		: (err?.message ?? fallback);
+
 export async function saveDraft(
 	payload: DraftFormPayload,
 ): Promise<SaveDraftResult> {
@@ -106,7 +113,7 @@ export async function saveDraft(
 			createdAt: saved.createdAt,
 		};
 	} catch (err: any) {
-		return { error: err?.message ?? "Draft could not be saved." };
+		return { error: draftErrorMessage(err, "Draft could not be saved.") };
 	}
 }
 
@@ -142,10 +149,12 @@ export async function discardDraft(
 	const identity = await identityFor(identityPublicId);
 	if (!identity)
 		return { deleted: false as const, error: "Identity not found." };
-	const ref = await deleteDraftRow({
-		ownerId: identity.ownerId,
-		draftMessageId,
-	});
+	let ref: Awaited<ReturnType<typeof deleteDraftRow>>;
+	try {
+		ref = await deleteDraftRow({ ownerId: identity.ownerId, draftMessageId });
+	} catch (err: any) {
+		return { deleted: false as const, error: draftErrorMessage(err, "Draft could not be deleted.") };
+	}
 	if (!ref) return { deleted: false as const };
 	const { smtpQueue } = await getRedis();
 	await smtpQueue.add(DRAFT_DELETE_JOB, ref, draftDeleteJobOptions());

@@ -277,19 +277,22 @@ export default function KThreadRow({
 						</KIconButton>
 					)}
 					<SnoozeMail mailboxThreadId={item.threadId} activeMailboxId={activeMailbox.id} />
-					{activeMailbox.kind !== "archive" && (
+					{/* Un brouillon dont l'envoi est en attente ne s'archive ni ne se supprime : annuler l'envoi d'abord. */}
+					{!sending && activeMailbox.kind !== "archive" && (
 						<KIconButton size="sm" label="Archiver" onClick={() => mailActions.archive(item.threadId, activeMailbox.id, smtp, isUnread ? 1 : 0)}>
 							<Archive />
 						</KIconButton>
 					)}
-					<KIconButton
-						size="sm"
-						tone="danger"
-						label={isTrash ? "Supprimer définitivement" : "Supprimer"}
-						onClick={() => mailActions.trash(item.threadId, activeMailbox.id, smtp, isTrash, isUnread ? 1 : 0)}
-					>
-						<Trash2 />
-					</KIconButton>
+					{!sending && (
+						<KIconButton
+							size="sm"
+							tone="danger"
+							label={isTrash ? "Supprimer définitivement" : "Supprimer"}
+							onClick={() => mailActions.trash(item.threadId, activeMailbox.id, smtp, isTrash, isUnread ? 1 : 0)}
+						>
+							<Trash2 />
+						</KIconButton>
+					)}
 				</div>
 			)}
 		</li>

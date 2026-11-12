@@ -66,6 +66,8 @@ export default function EditorFooter({
 		? draftMeta.attachments
 		: [];
 
+	// ss2i : moment programme (« ven. 13/11 08:00 »), affiche sur le bouton Envoyer.
+	const [scheduledLabel, setScheduledLabel] = useState<string | null>(null);
 	const [includeSignature, setIncludeSignature] = useState(
 		draftMeta ? draftMeta.includeSignature !== false : true,
 	);
@@ -482,9 +484,9 @@ export default function EditorFooter({
 						title={nouvelle ? "Envoyer (Ctrl+Entrée)" : undefined}
 						className={nouvelle ? "!rounded-l-[10px] !rounded-r-[3px] !px-4" : "!rounded-l-4xl !rounded-r-xs"}
 					>
-						{t("Send", "Envoyer")}
+						{scheduledLabel ? `${t("Scheduled", "Programmé")} · ${scheduledLabel}` : t("Send", "Envoyer")}
 					</Button>
-					<ScheduleSend />
+					<ScheduleSend onLabelChange={setScheduledLabel} />
 				</div>
 
 				{nouvelle ? (

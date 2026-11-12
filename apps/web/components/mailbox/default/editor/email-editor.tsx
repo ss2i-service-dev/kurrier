@@ -41,6 +41,7 @@ import {
 	writeBackup,
 } from "@/lib/draft-backup";
 import { backupToDraftRow, pickBackupForEditor } from "@/lib/draft-resume";
+import { formatScheduledWhen } from "@common/schedule-send";
 
 export type EmailEditorHandle = {
 	focus: () => void;
@@ -608,6 +609,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				const pending = (formState.data ?? {}) as {
 					pendingSendId?: string;
 					undoMs?: number;
+					scheduledAt?: string;
 				};
 				if (pending.pendingSendId) {
 					startUndoWindow(pending.pendingSendId, pending.undoMs ?? 30_000);
@@ -615,6 +617,16 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				}
 				dropBackup();
 				handleClose();
+				if (pending.scheduledAt) {
+					// Envoi programme : le brouillon reste dans Drafts (section envoi en attente).
+					const lang = t("en", "fr") as "en" | "fr";
+					toast.success(
+						`${t("Scheduled for", "Programmé pour")} ${formatScheduledWhen(pending.scheduledAt, lang)}`,
+						{ description: t("You can cancel it from Drafts or Scheduled sends.", "Vous pouvez l'annuler depuis Brouillons ou Envois programmés.") },
+					);
+					router.refresh();
+					return;
+				}
 				toast.success(t("Success", "Envoyé"), {
 					description: formState.message,
 				});

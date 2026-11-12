@@ -2,60 +2,93 @@
 import type { DraftSendState } from "@common";
 import type { DraftTimes } from "@common/draft-send";
 import { useRouter } from "next/navigation";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { IconSend } from "@tabler/icons-react";
+import { toast } from "sonner";
+import { isScheduledMark } from "@common/draft-send";
 import { cancelPendingSend, sendPendingNow } from "@/lib/actions/mailbox";
 import { useK, useNouvelle } from "@/components/k/ui-context";
+import { SEND_REFRESH_MS, sendLabel, sendPhaseOf, sendTrackingOf } from "@/lib/send-phase";
 
-// ss2i : etat d'envoi d'un brouillon (marque pendingSend / sendError de meta.draft).
-// Un envoi dont l'heure est depassee de plus de 3 minutes sans que le brouillon ait
-// disparu est d'etat inconnu : on n'actualise plus indefiniment.
-export const SEND_UNKNOWN_AFTER_MS = 3 * 60_000;
-export const SEND_REFRESH_MS = 3_000;
+// ss2i : etat d'envoi d'un brouillon (marque pendingSend / sendError de meta.draft). Phases et
+// libelles dans lib/send-phase.ts (partie pure, testee) : « programme » au-dela de 2 minutes
+// d'attente, decompte en dessous, « inconnu » apres 3 minutes de depassement.
+export {
+	SCHEDULED_AFTER_MS,
+	SEND_REFRESH_MS,
+	SEND_UNKNOWN_AFTER_MS,
+	sendLabel,
+	sendPhaseOf,
+	sendTrackingOf,
+	type SendPhase,
+} from "@/lib/send-phase";
 
-export type SendPhase = "countdown" | "sending" | "unknown";
-
-export function sendPhaseOf(sendAt: string, now: number): SendPhase {
-	const at = new Date(sendAt).getTime();
-	if (Number.isNaN(at) || now - at > SEND_UNKNOWN_AFTER_MS) return "unknown";
-	return at > now ? "countdown" : "sending";
+// Fuseau du navigateur, lu apres le montage (null avant : le rendu serveur et le premier rendu
+// client sont identiques).
+export function useLocalTz() {
+	const [tz, setTz] = useState<string | null>(null);
+	useEffect(() => setTz(Intl.DateTimeFormat().resolvedOptions().timeZone), []);
+	return tz;
 }
 
-// Horloge locale (1 s) tant que l'envoi est en cours.
-export function useNow(active: boolean) {
+// Horloge d'un envoi suivi : tic d'une seconde pendant le decompte et l'envoi ; rien tant
+// qu'il est programme (un seul reveil quand le decompte commence) ni quand l'etat est inconnu.
+export function useSendClock(sendAt: string | null | undefined) {
 	const [now, setNow] = useState(() => Date.now());
+	const [wakes, setWakes] = useState(0);
+	const phase = sendAt ? sendPhaseOf(sendAt, now) : "unknown";
 	useEffect(() => {
-		if (!active) return;
+		if (!sendAt || phase === "unknown") return;
 		setNow(Date.now());
+		if (phase === "scheduled") {
+			// setTimeout plafonne a ~24 jours : au-dela, on se reveille puis on se re-arme.
+			const wait = Math.min(
+				Math.max(0, (sendTrackingOf([sendAt], Date.now()).wakeAt ?? Date.now()) - Date.now()) + 50,
+				2 ** 31 - 1,
+			);
+			const t = setTimeout(() => {
+				setNow(Date.now());
+				setWakes((n) => n + 1);
+			}, wait);
+			return () => clearTimeout(t);
+		}
 		const t = setInterval(() => setNow(Date.now()), 1000);
 		return () => clearInterval(t);
-	}, [active]);
+	}, [sendAt, phase, wakes]);
 	return now;
 }
 
-// Actualise la page (router.refresh) toutes les 3 s tant qu'un envoi est suivi.
-export function useSendRefresh(active: boolean) {
+// Actualise la page (router.refresh) toutes les 3 s tant qu'un decompte ou un envoi est suivi
+// (`active`), et une fois au passage d'un envoi programme au decompte (`wakeAt`). Un envoi
+// programme ne declenche aucune actualisation periodique.
+export function useSendRefresh(active: boolean, wakeAt: number | null = null) {
 	const router = useRouter();
+	const [wakes, setWakes] = useState(0);
+	// Reveil deja traite : un re-armement (wakes) ne rafraichit pas deux fois pour le meme instant.
+	const firedFor = useRef<number | null>(null);
 	useEffect(() => {
 		if (!active) return;
 		const t = setInterval(() => router.refresh(), SEND_REFRESH_MS);
 		return () => clearInterval(t);
 	}, [active, router]);
+	useEffect(() => {
+		if (wakeAt === null || firedFor.current === wakeAt) return;
+		const wait = Math.min(Math.max(0, wakeAt - Date.now()) + 50, 2 ** 31 - 1);
+		const t = setTimeout(() => {
+			if (Date.now() >= wakeAt) {
+				firedFor.current = wakeAt;
+				router.refresh();
+			}
+			setWakes((n) => n + 1);
+		}, wait);
+		return () => clearTimeout(t);
+	}, [wakeAt, router, wakes]);
 }
 
-// Vrai si l'un des etats donnes est un envoi encore suivi (pas d'etat inconnu).
-export function anySendTracked(states: (DraftSendState | null | undefined)[], now = Date.now()) {
-	return states.some(
-		(s) => s?.pendingSend && sendPhaseOf(s.pendingSend.sendAt, now) !== "unknown",
-	);
-}
-
-export function sendLabel(sendAt: string, now: number, k: (en: string, fr: string) => string = (en) => en) {
-	const phase = sendPhaseOf(sendAt, now);
-	if (phase === "unknown") return k("Sending status unknown", "État d'envoi inconnu");
-	if (phase === "sending") return k("Sending…", "Envoi en cours…");
-	const s = Math.max(1, Math.ceil((new Date(sendAt).getTime() - now) / 1000));
-	return k(`Sending in ${s}s`, `Envoi dans ${s} s`);
+// Suivi d'une liste de brouillons : actualisation rapide et reveil des envois programmes.
+export function useSendListRefresh(states: (DraftSendState | null | undefined)[]) {
+	const { fast, wakeAt } = sendTrackingOf(states.map((s) => s?.pendingSend?.sendAt), Date.now());
+	useSendRefresh(fast, wakeAt);
 }
 
 // Boutons « Undo » / « Send now » ; onDone apres l'action (rafraichissement de la page).
@@ -63,10 +96,13 @@ export function SendActions({
 	jobId,
 	onUndone,
 	size = "sm",
+	cancelOnly = false,
 }: {
 	jobId: string;
 	onUndone?: () => void;
 	size?: "xs" | "sm";
+	// Etat inconnu d'un envoi programme : seule l'annulation reste proposee.
+	cancelOnly?: boolean;
 }) {
 	const k = useK();
 	const nouvelle = useNouvelle();
@@ -93,19 +129,21 @@ export function SendActions({
 			>
 				{k("Undo", "Annuler l'envoi")}
 			</button>
-			<button
-				type="button"
-				disabled={busy}
-				className={cls}
-				onClick={async () => {
-					setBusy(true);
-					await sendPendingNow(jobId);
-					setBusy(false);
-					router.refresh();
-				}}
-			>
-				{k("Send now", "Envoyer maintenant")}
-			</button>
+			{!cancelOnly && (
+				<button
+					type="button"
+					disabled={busy}
+					className={cls}
+					onClick={async () => {
+						setBusy(true);
+						await sendPendingNow(jobId);
+						setBusy(false);
+						router.refresh();
+					}}
+				>
+					{k("Send now", "Envoyer maintenant")}
+				</button>
+			)}
 		</span>
 	);
 }
@@ -120,16 +158,19 @@ export function DraftSendBadge({ state }: { state: DraftSendState | null | undef
 	const k = useK();
 	const nouvelle = useNouvelle();
 	const pending = state?.pendingSend ?? null;
-	const now = useNow(!!pending);
+	const now = useSendClock(pending?.sendAt);
+	const tz = useLocalTz();
 	if (pending) {
 		const phase = sendPhaseOf(pending.sendAt, now);
 		return (
 			<span className="inline-flex shrink-0 items-center gap-1.5">
 				<span className={`inline-flex items-center gap-1 whitespace-nowrap px-1.5 py-0.5 text-xs font-semibold ${nouvelle ? "rounded-k-sm bg-k-accent-soft text-k-accent-soft-ink" : "rounded bg-sky-600 text-white"}`}>
 					<IconSend size={12} aria-hidden />
-					{sendLabel(pending.sendAt, now, k)}
+					{sendLabel(pending.sendAt, now, k, tz)}
 				</span>
-				{phase !== "unknown" && <SendActions jobId={pending.jobId} size="xs" />}
+				{(phase !== "unknown" || isScheduledMark(pending)) && (
+					<SendActions jobId={pending.jobId} size="xs" cancelOnly={phase === "unknown"} />
+				)}
 			</span>
 		);
 	}
@@ -159,15 +200,19 @@ export function DraftSendingBanner({
 }) {
 	const k = useK();
 	const nouvelle = useNouvelle();
-	const now = useNow(true);
+	const now = useSendClock(pendingSend.sendAt);
+	const tz = useLocalTz();
 	const phase = sendPhaseOf(pendingSend.sendAt, now);
-	useSendRefresh(phase !== "unknown");
+	const tracking = sendTrackingOf([pendingSend.sendAt], now);
+	useSendRefresh(tracking.fast, tracking.wakeAt);
 	return (
 		<div className={`mt-3 border p-4 text-sm ${nouvelle ? "rounded-k border-k-line-strong bg-k-warn-soft text-k-ink" : "rounded-lg border-amber-300 bg-amber-50 text-amber-900"}`}>
 			<div className="font-medium">
 				{phase === "unknown"
 					? k("Sending status unknown", "État d'envoi inconnu")
-					: k("This message is being sent", "Ce message est en cours d'envoi")}
+					: phase === "scheduled"
+						? k("This message is scheduled", "Ce message est programmé")
+						: k("This message is being sent", "Ce message est en cours d'envoi")}
 			</div>
 			<div className="mt-1 text-xs">
 				{phase === "unknown"
@@ -175,19 +220,25 @@ export function DraftSendingBanner({
 							"No result was received for this send. Check the Sent folder before sending again.",
 							"Aucun résultat n'a été reçu pour cet envoi. Vérifiez le dossier Envoyés avant de renvoyer.",
 						)
-					: sendLabel(pendingSend.sendAt, now, k)}
+					: sendLabel(pendingSend.sendAt, now, k, tz)}
 			</div>
 			<div className="mt-3">
 				{phase !== "unknown" ? (
 					<SendActions jobId={pendingSend.jobId} onUndone={onUndone} />
 				) : (
-					<button
-						type="button"
-						className={nouvelle ? "k-focus rounded-k-sm border border-k-line-strong bg-k-surface px-3 py-1 text-[13px] text-k-ink-2 transition-colors hover:bg-k-hover hover:text-k-ink" : "rounded border px-3 py-1 text-sm hover:bg-amber-100"}
-						onClick={onOpenEditor}
-					>
-						{k("Open editor", "Ouvrir l'éditeur")}
-					</button>
+					<span className="inline-flex flex-wrap items-center gap-2">
+						{/* Envoi programme d'etat inconnu : la ligne est peut-etre encore « scheduled ». */}
+						{isScheduledMark(pendingSend) && (
+							<SendActions jobId={pendingSend.jobId} onUndone={onUndone} cancelOnly />
+						)}
+						<button
+							type="button"
+							className={nouvelle ? "k-focus rounded-k-sm border border-k-line-strong bg-k-surface px-3 py-1 text-[13px] text-k-ink-2 transition-colors hover:bg-k-hover hover:text-k-ink" : "rounded border px-3 py-1 text-sm hover:bg-amber-100"}
+							onClick={onOpenEditor}
+						>
+							{k("Open editor", "Ouvrir l'éditeur")}
+						</button>
+					</span>
 				)}
 			</div>
 		</div>

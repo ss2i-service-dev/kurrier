@@ -18,7 +18,7 @@ import {
 import { FetchLabelsResult, FetchMailboxThreadLabelsResult } from "@/lib/actions/labels";
 import { DynamicContextProvider, useDynamicContext } from "@/hooks/use-dynamic-context";
 import { useHiddenThreads } from "@/lib/pending-moves";
-import { anySendTracked, isSendingDraft, useSendRefresh } from "@/components/mailbox/default/draft-send-status";
+import { isSendingDraft, useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
 import KListHeader from "@/components/k/list-header";
 import KThreadRow from "@/components/k/thread-row";
 import { mailboxTitle } from "@/components/k/format";
@@ -174,7 +174,7 @@ function ListBody({
 	}, [allThreads, pinnedData.mailboxThreads]);
 
 	// Tant qu'un brouillon de la liste est en cours d'envoi, la liste est actualisee.
-	useSendRefresh(anySendTracked(shown.map((t) => t.draftSend)));
+	useSendListRefresh(shown.map((t) => t.draftSend));
 
 	return (
 		<>

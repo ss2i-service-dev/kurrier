@@ -89,6 +89,12 @@ export type OutboxActions = {
 	dismiss: boolean; // Remettre en brouillon (ecarte de la Boite d'envoi)
 };
 
+// « Remettre en brouillon » : seul un envoi parti d'un brouillon (delai d'annulation, programme)
+// en recree un ; un envoi direct (MCP, API, desabonnement, invitation) est seulement ecarte.
+export function dismissRestoresDraft(origin: string | null | undefined): boolean {
+	return origin === "undo" || origin === "scheduled";
+}
+
 export function outboxActionsOf(row: LedgerStateRow): OutboxActions {
 	const state = sendStateOf(row);
 	const pending = state === "pending";

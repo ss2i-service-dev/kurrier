@@ -46,7 +46,7 @@ import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
 import { searchFilters, SEARCH_EXCLUDED_KINDS } from "@/lib/search-scope";
-import { cancelSend, enqueueSend, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendLive, interruptedSendOf, deleteDraftRow, DRAFT_DELETE_JOB, draftDeleteJobOptions, type SettleAction, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
+import { cancelSend, enqueueSend, sendNowPlanOf, dismissRestoresDraft, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendLive, interruptedSendOf, deleteDraftRow, DRAFT_DELETE_JOB, draftDeleteJobOptions, type SettleAction, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import { saveDraft } from "@/lib/actions/drafts";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
@@ -573,6 +573,13 @@ export async function sendMail(
 						.delete(draftMessages)
 						.where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
 				),
+			cancelRow: (id) =>
+				rls((tx) =>
+					tx
+						.update(draftMessages)
+						.set({ status: "canceled", updatedAt: new Date() })
+						.where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
+				),
 			supersede: (draftId) => supersedeFailedSends(draftId),
 			interrupted: (draftId) => interruptedSendOf(draftId, identity.id),
 		},
@@ -893,23 +900,26 @@ async function settleDraftOfRow(
 
 // ss2i : « Send now » : le job en attente part tout de suite. La marque (sendAt = maintenant)
 // n'est posee qu'une fois le job promu ou rajoute : un echec ne laisse pas croire a un envoi
-// parti. Job Redis disparu pour un envoi programme : il est rajoute sans delai depuis la ligne.
+// parti. Job Redis disparu ou fini alors que la ligne attend encore : rajoute sans delai depuis la
+// ligne (sendNowPlanOf).
 export async function sendPendingNow(pendingSendId: string) {
 	const job = await ownedPendingSend(pendingSendId);
 	try {
 		let imapDraftId = "";
-		if (job) {
-			if ((await job.getState()) !== "delayed") return;
+		const row = await scheduledRowOf(String(pendingSendId));
+		const plan = sendNowPlanOf(job ? await job.getState() : null, row?.status ?? null);
+		if (plan === "promote" && job) {
 			await job.promote();
 			imapDraftId = imapDraftIdOfJob(job.name, job.data);
-		} else {
-			const row = await scheduledRowOf(String(pendingSendId));
-			if (!row || row.status !== "scheduled") return;
+		} else if (plan === "readd" && row) {
+			// Job fini (failed, completed) alors que la ligne attend encore : retire, sinon l'ajout
+			// de meme id serait ignore par BullMQ.
+			if (job) await job.remove();
 			const re = scheduledJobOf({ ...row, scheduledAt: new Date() });
 			const { sendMailQueue } = await getRedis();
 			await sendMailQueue.add(re.name, re.data, { ...re.opts, delay: 0 });
 			imapDraftId = re.data.imapDraftId ?? "";
-		}
+		} else return;
 		const id = await ownedDraftId(imapDraftId);
 		if (id)
 			await setDraftSendState(id, {
@@ -2310,7 +2320,8 @@ export async function retryOutboxSend(
 }
 
 // « Remettre en brouillon » : l'echec est ecarte de la Boite d'envoi (CAS sur dismissed_at), puis
-// le brouillon est retrouve tel quel, ou recree depuis la ligne s'il a disparu.
+// le brouillon est retrouve tel quel, ou recree depuis la ligne s'il a disparu. Un envoi direct
+// (sans brouillon d'origine) est seulement ecarte (dismissRestoresDraft).
 export async function dismissOutboxSend(rowId: string): Promise<{ ok: boolean; error?: string }> {
 	const seen = await scheduledRowOf(String(rowId));
 	if (!seen) return { ok: false, error: "Envoi introuvable." };
@@ -2332,6 +2343,11 @@ export async function dismissOutboxSend(rowId: string): Promise<{ ok: boolean; e
 			.returning({ id: draftMessages.id }),
 	);
 	if (!won) return { ok: false, error: "Cet envoi a changé d'état entre-temps." };
+	if (!dismissRestoresDraft(seen.origin)) {
+		await unlockDraftOfRow(seen).catch((e) => console.error("[outbox] unlock on dismiss failed", e));
+		revalidatePath("/dashboard/mail");
+		return { ok: true };
+	}
 	try {
 		await restoreDraftFromRow(seen, { onlyIfMissing: true });
 	} catch (e) {

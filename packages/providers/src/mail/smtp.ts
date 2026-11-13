@@ -25,6 +25,11 @@ export function smtpFailureAmbiguous(err: unknown): boolean {
 	return true;
 }
 
+// ss2i (Boite d'envoi) : delais du transport (defauts nodemailer : 2 min, 30 s, 10 min) bien sous
+// le seuil ou le balayage declare un envoi « interrompu » (STALE_SENDING_MS, 10 min) : un serveur
+// muet fait echouer l'envoi avant, un envoi actif n'est jamais pris pour un envoi interrompu.
+export const SMTP_TIMEOUTS = { connectionTimeout: 30_000, greetingTimeout: 30_000, socketTimeout: 120_000 } as const;
+
 export class SmtpMailer implements Mailer {
 	private transporter: Transporter;
 	private imapClient: ImapFlow | null;
@@ -36,6 +41,7 @@ export class SmtpMailer implements Mailer {
 			secure: cfg.secure ?? cfg.port === 465,
 			auth: cfg.auth,
 			pool: cfg.pool ?? false,
+			...SMTP_TIMEOUTS,
 		} as SMTPTransport.Options);
 		this.imapClient = cfg.imap
 			? new ImapFlow({

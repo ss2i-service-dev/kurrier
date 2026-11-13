@@ -83,8 +83,15 @@ export type SendDeps = {
 	// Menage d'une marque orpheline (settleActionOf) : brouillon supprime ou marque retiree, dans
 	// les deux cas seulement si la marque designe encore la ligne.
 	settleDraft?: (o: OrphanMark, action: SettleAction) => Promise<unknown>;
+	// Attente entre deux essais de l'UPDATE « accepte » (injectable pour les tests).
+	sleep?: (ms: number) => Promise<unknown>;
 	log?: (msg: string, err?: unknown) => void;
 };
+
+// Apres un 250, l'UPDATE « accepte » est reessaye (coupure passagere de la base) : sans lui la
+// ligne reste sending et le balayage la declarerait interrompue alors que le mail est parti.
+export const ACCEPT_ATTEMPTS = 3;
+export const ACCEPT_RETRY_MS = 500;
 
 export type SendOutcome =
 	| { outcome: "skipped"; row: LedgerRow | null }
@@ -141,16 +148,24 @@ export async function runSend(rowId: string, deps: SendDeps): Promise<SendOutcom
 	}
 
 	// Accepte par le serveur : a partir d'ici, plus jamais « failed ».
-	let accepted: LedgerRow | null;
-	try {
-		accepted = await deps.store.accept(row.id, {
-			messageId: providerMessageId(res, messageId),
-			smtpResponse: res.response ?? null,
-			rendered: prepared.rendered,
-		});
-	} catch (err) {
-		log(`[send] ${row.id}: accepte par le serveur mais non enregistre`, err);
-		return { outcome: "unrecorded", error: messageOf(err) };
+	let accepted: LedgerRow | null = null;
+	const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+	for (let attempt = 1; ; attempt++) {
+		try {
+			accepted = await deps.store.accept(row.id, {
+				messageId: providerMessageId(res, messageId),
+				smtpResponse: res.response ?? null,
+				rendered: prepared.rendered,
+			});
+			break;
+		} catch (err) {
+			if (attempt >= ACCEPT_ATTEMPTS) {
+				log(`[send] ${row.id}: accepte par le serveur mais non enregistre`, err);
+				return { outcome: "unrecorded", error: messageOf(err) };
+			}
+			log(`[send] ${row.id}: enregistrement de l'acceptation, essai ${attempt} en echec`, err);
+			await sleep(ACCEPT_RETRY_MS * attempt);
+		}
 	}
 	if (!accepted) {
 		log(`[send] ${row.id}: accepte par le serveur mais la ligne a change d'etat`);

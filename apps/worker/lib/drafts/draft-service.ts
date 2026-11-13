@@ -263,6 +263,11 @@ export async function sendDraft(opts: {
 			addJob: (name, data, jobOpts) => sendMailQueue.add(name, data, jobOpts),
 			deleteRow: (id) =>
 				db.delete(draftMessages).where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
+			cancelRow: (id) =>
+				db
+					.update(draftMessages)
+					.set({ status: "canceled", updatedAt: new Date() })
+					.where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
 			// Un nouvel envoi du brouillon ecarte ses envois precedents en echec (sinon « Reessayer »
 			// sur l'ancien enverrait une seconde fois), jamais un envoi interrompu (peut-etre parti).
 			supersede: (draftId) =>

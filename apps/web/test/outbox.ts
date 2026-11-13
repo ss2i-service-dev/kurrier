@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	dismissRestoresDraft,
 	isOutboxVisible,
 	outboxActionsOf,
 	outboxCountOf,
@@ -128,6 +129,16 @@ test("actions : jamais reessayer un envoi accepte par le serveur", () => {
 	const rejected = outboxActionsOf(row({ status: "sent", deliveryState: "rejected", acceptedAt: new Date() }));
 	assert.equal(rejected.retry, false);
 	assert.equal(rejected.dismiss, true);
+});
+
+// « Remettre en brouillon » ne recree un brouillon que pour un envoi parti d'un brouillon (delai
+// d'annulation, programme) ; un envoi direct (MCP send_email, API, desabonnement, invitation)
+// n'en avait pas : il est seulement ecarte.
+test("ecarter : brouillon recree pour undo et scheduled, jamais pour un envoi direct", () => {
+	assert.equal(dismissRestoresDraft("undo"), true);
+	assert.equal(dismissRestoresDraft("scheduled"), true);
+	assert.equal(dismissRestoresDraft("direct"), false);
+	assert.equal(dismissRestoresDraft(null), false);
 });
 
 const root = join(__dirname, "../../..");

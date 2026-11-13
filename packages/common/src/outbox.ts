@@ -43,6 +43,9 @@ export type EnqueueIo = {
 	insertRow: (v: EnqueueRowValues) => Promise<{ id: string; scheduledAt: Date | string | null }>;
 	addJob: (name: string, data: Record<string, any>, opts: Record<string, any>) => Promise<unknown>;
 	deleteRow: (id: string) => Promise<unknown>;
+	// Ligne sans job qui n'a pas pu etre retiree : passee en canceled (UPDATE ... WHERE status =
+	// 'scheduled'), sinon elle resterait programmee pour rien.
+	cancelRow?: (id: string) => Promise<unknown>;
 	// Marque d'envoi du brouillon (pendingSend, jobId = ligne), posee AVANT le job : le worker ne
 	// la retire qu'apres (un envoi immediat en echec ne la voit pas reposee). Faux = pas d'envoi.
 	mark?: (row: { id: string; scheduledAt: Date }) => Promise<boolean>;
@@ -80,7 +83,11 @@ export async function enqueueSend(input: EnqueueInput, io: EnqueueIo, now: Date 
 		scheduledAt: input.sendAt,
 	});
 	const scheduledAt = new Date(row.scheduledAt ?? input.sendAt);
-	const dropRow = () => io.deleteRow(row.id).catch((e) => console.error("[outbox] ligne sans job non retiree", row.id, e));
+	const dropRow = () =>
+		io.deleteRow(row.id).catch(async (e) => {
+			console.error("[outbox] ligne sans job non retiree", row.id, e);
+			if (io.cancelRow) await io.cancelRow(row.id).catch((e2) => console.error("[outbox] ligne sans job non annulee", row.id, e2));
+		});
 	if (io.mark && !(await io.mark({ id: row.id, scheduledAt }).catch(() => false))) {
 		await dropRow();
 		return { ok: false, error: "draft send mark could not be set" };
@@ -100,6 +107,18 @@ export async function enqueueSend(input: EnqueueInput, io: EnqueueIo, now: Date 
 		await io.supersede(String(draftId)).catch((e) => console.error("[outbox] supersede", draftId, e));
 	}
 	return { ok: true, rowId: row.id, messageId, scheduledAt };
+}
+
+// « Envoyer maintenant » : la ligne ledger decide (`rowStatus` null = pas de ligne visible, envoi
+// d'avant le ledger). Job en attente -> promu ; job absent ou fini (failed, completed : BullMQ
+// garde l'id, un ajout de meme id serait ignore, il est retire avant) alors que la ligne est encore
+// scheduled -> rajoute depuis la ligne ; ligne sortie de scheduled ou job deja en cours -> rien.
+export type SendNowPlan = "promote" | "readd" | "none";
+export function sendNowPlanOf(jobState: string | null, rowStatus: string | null): SendNowPlan {
+	if (rowStatus !== null && rowStatus !== "scheduled") return "none";
+	if (jobState === "delayed") return "promote";
+	const gone = jobState === null || jobState === "unknown" || jobState === "failed" || jobState === "completed";
+	return rowStatus === "scheduled" && gone ? "readd" : "none";
 }
 
 export type CancelIo = {

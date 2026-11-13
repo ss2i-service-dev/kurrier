@@ -5,7 +5,7 @@
 // Depuis la racine :
 //   node_modules/.bin/tsx --tsconfig apps/web/tsconfig.json apps/web/test/outbox-cancel.ts
 import assert from "node:assert/strict";
-import { cancelSend, enqueueSend, messageIdFor } from "../../../packages/common/src/outbox";
+import { cancelSend, enqueueSend, messageIdFor, sendNowPlanOf } from "../../../packages/common/src/outbox";
 import { DRAFT_MAYBE_SENT_ERROR } from "../../../packages/common/src/draft-send";
 import { SCHEDULED_JOB } from "../../../packages/common/src/schedule-send";
 
@@ -274,6 +274,48 @@ await test("annuler : un retrait de job ou une restauration en echec ne defait p
 	});
 	assert.equal(res.cancelled, true);
 	assert.equal(l.byId.get("r")!.status, "canceled");
+});
+
+// Job en echec et ligne non retiree (base indisponible a son tour) : la ligne scheduled sans job
+// resterait « programmee » pour rien (et rejouee par la reprise au boot) ; elle passe en canceled.
+await test("enqueueSend : job en echec puis ligne non retiree -> ligne annulee, jamais scheduled sans job", async () => {
+	const calls: string[] = [];
+	const res = await enqueueSend(
+		{ payload: { draftMessageId: "d-10" }, identityId: "i-1", mailboxId: "m-1", origin: "undo", sendAt: new Date(), fromAddress: "a@b.fr" },
+		{
+			insertRow: async (v: any) => (calls.push("insert"), { id: "row-6", scheduledAt: v.scheduledAt }),
+			addJob: async () => {
+				throw new Error("redis down");
+			},
+			deleteRow: async () => {
+				calls.push("delete");
+				throw new Error("db down");
+			},
+			cancelRow: async (id: string) => void calls.push(`cancel:${id}`),
+		},
+	);
+	assert.equal(res.ok, false);
+	assert.deepEqual(calls, ["insert", "delete", "cancel:row-6"]);
+});
+
+// « Envoyer maintenant » : la ligne decide. Job en attente -> promu ; job disparu, en echec ou
+// termine alors que la ligne est encore scheduled -> rajoute depuis la ligne ; ligne sortie de
+// scheduled (partie, annulee) ou job deja en cours -> rien.
+await test("sendNowPlanOf : promouvoir, rajouter depuis la ligne, ou rien", () => {
+	assert.equal(sendNowPlanOf("delayed", "scheduled"), "promote");
+	assert.equal(sendNowPlanOf("delayed", null), "promote", "envoi d'avant le ledger (undo-send-*), sans ligne");
+	for (const state of [null, "unknown", "failed", "completed"]) {
+		assert.equal(sendNowPlanOf(state, "scheduled"), "readd", String(state));
+	}
+	for (const state of ["waiting", "active", "prioritized"]) {
+		assert.equal(sendNowPlanOf(state, "scheduled"), "none", state);
+	}
+	for (const status of ["sending", "sent", "canceled", "failed"]) {
+		assert.equal(sendNowPlanOf("delayed", status), "none", status);
+		assert.equal(sendNowPlanOf(null, status), "none", status);
+	}
+	assert.equal(sendNowPlanOf(null, null), "none");
+	assert.equal(sendNowPlanOf("failed", null), "none");
 });
 
 if (failures) {

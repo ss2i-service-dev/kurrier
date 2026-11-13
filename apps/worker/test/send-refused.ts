@@ -9,8 +9,9 @@
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/send-refused.ts
 import assert from "node:assert/strict";
 import net from "node:net";
-import { SmtpMailer } from "../../../packages/providers/src/mail/smtp";
+import { SMTP_TIMEOUTS, SmtpMailer } from "../../../packages/providers/src/mail/smtp";
 import { mailerFailureOf } from "../lib/send-outcome";
+import { STALE_SENDING_MS } from "../lib/send/pipeline";
 
 let failures = 0;
 const test = async (label: string, fn: () => Promise<void> | void) => {
@@ -176,6 +177,14 @@ await test("fournisseur SMTP : coupure apres le contenu sans reponse = issue inc
 		assert.equal(srv.received.length, 1, "le contenu est bien arrive au serveur");
 	} finally {
 		srv.close();
+	}
+});
+
+await test("fournisseur SMTP : delais du transport bien sous le seuil « interrompu » du balayage", () => {
+	const opts = (mailerOn(25) as any).transporter.options;
+	for (const k of ["connectionTimeout", "greetingTimeout", "socketTimeout"] as const) {
+		assert.equal(opts[k], SMTP_TIMEOUTS[k], k);
+		assert.ok(opts[k] > 0 && opts[k] <= STALE_SENDING_MS / 4, `${k} = ${opts[k]} ms`);
 	}
 });
 

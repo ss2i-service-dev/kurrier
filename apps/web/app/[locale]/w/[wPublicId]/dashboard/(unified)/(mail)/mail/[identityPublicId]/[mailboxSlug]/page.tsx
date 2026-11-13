@@ -2,6 +2,8 @@ import {
 	fetchIdentityMailboxList,
 	fetchMailbox,
 	fetchMailboxThreads,
+	fetchOutboxIds,
+	type FetchMailboxResult,
 } from "@/lib/actions/mailbox";
 import {fetchLabelsByIdentityPublicId, fetchMailboxThreadLabels} from "@/lib/actions/labels";
 import { getPublicEnv } from "@schema";
@@ -14,6 +16,13 @@ import { listUnderThread } from "@/lib/actions/list-under-thread";
 import KThreadList from "@/components/k/thread-list";
 import { fetchKPinnedThreads } from "@/lib/actions/k-pins";
 import { kRealAttachmentsOf } from "@/lib/actions/k-threads";
+
+// ss2i : envois de la Boite d'envoi, que Drafts ne liste pas (OI 10519). Lu pour Drafts seulement ;
+// en cas d'erreur, rien n'est retire : les brouillons restent visibles avec leur badge d'envoi.
+const outboxIdsFor = (identityPublicId: string, mailbox: Promise<FetchMailboxResult>) =>
+	mailbox
+		.then(({ activeMailbox }) => (activeMailbox.kind === "drafts" ? fetchOutboxIds(identityPublicId) : []))
+		.catch(() => [] as string[]);
 
 async function ClassicPage({
 	params,
@@ -59,6 +68,7 @@ async function ClassicPage({
 					identityMailboxesPromise={identityMailboxesPromise}
 					globalLabelsPromise={globalLabelsPromise}
 					workspacePublicId={workspacePublicId}
+					outboxIdsPromise={outboxIdsFor(identityPublicId, fetchMailboxPromise)}
 				/>
 
 				<MailPagination
@@ -107,6 +117,7 @@ async function NouvellePage({
 				globalLabelsPromise={fetchLabelsByIdentityPublicId({ identityPublicId, scope: "thread" })}
 				workspacePublicId={workspacePublicId}
 				startPage={Number(page) > 0 ? Number(page) : 1}
+				outboxIdsPromise={outboxIdsFor(identityPublicId, fetchMailboxPromise)}
 			/>
 		</div>
 	);

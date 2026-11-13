@@ -2,7 +2,7 @@ import {
 	fetchIdentityMailboxList,
 	fetchIdentitySnoozedThreads,
 	fetchMailboxUnreadCounts,
-	fetchScheduledDraftCounts,
+	fetchOutboxCounts,
 } from "@/lib/actions/mailbox";
 import { getWorkspacePublicId } from "@/lib/actions/clients";
 import { fetchDraftCounts } from "@/lib/actions/drafts";
@@ -17,12 +17,14 @@ import KLabelsSidebar from "@/components/k/labels-sidebar";
 // (dont le compteur de brouillons a la place des non-lus pour Drafts, et la
 // section Clients), rendues par la barre laterale de la nouvelle interface.
 export default async function KSidebarNavWrapper() {
-	const [identityMailboxes, unreadThreadCounts, globalLabels, workspacePublicId, draftCounts] = await Promise.all([
+	const [identityMailboxes, unreadThreadCounts, globalLabels, workspacePublicId, draftCounts, outboxCounts] = await Promise.all([
 		fetchIdentityMailboxList(),
 		fetchMailboxUnreadCounts(),
 		fetchLabelsWithCounts(),
 		getWorkspacePublicId(),
 		fetchDraftCounts(),
+		// ss2i : Boite d'envoi (OI 10519), compteur par identite
+		fetchOutboxCounts(),
 	]);
 	const unreadCounts = new Map(unreadThreadCounts);
 	for (const [mailboxId, n] of draftCounts) {
@@ -33,7 +35,7 @@ export default async function KSidebarNavWrapper() {
 			<KSidebarNav
 				identityMailboxes={identityMailboxes}
 				unreadCounts={unreadCounts}
-				scheduledDraftsPromise={fetchScheduledDraftCounts()}
+				outboxCounts={outboxCounts}
 				snoozedThreadsPromise={fetchIdentitySnoozedThreads()}
 				clientsPromise={fetchIdentityClients()}
 				workspacePublicId={workspacePublicId}

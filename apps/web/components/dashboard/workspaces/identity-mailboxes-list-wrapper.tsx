@@ -2,7 +2,7 @@ import {
     fetchIdentityMailboxList,
     fetchIdentitySnoozedThreads,
     fetchMailboxUnreadCounts,
-    fetchScheduledDraftCounts
+    fetchOutboxCounts
 } from "@/lib/actions/mailbox";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
 import {fetchDraftCounts} from "@/lib/actions/drafts";
@@ -24,6 +24,7 @@ async function IdentityMailboxesListWrapper() {
         workspacePublicId,
         draftCounts,
         collapsed,
+        outboxCounts,
     ] = await Promise.all([
         fetchIdentityMailboxList(),
         fetchMailboxUnreadCounts(),
@@ -31,6 +32,8 @@ async function IdentityMailboxesListWrapper() {
         getWorkspacePublicId(),
         fetchDraftCounts(),
         collapsedIdentities(),
+        // ss2i : Boite d'envoi (OI 10519), compteur par identite
+        fetchOutboxCounts(),
     ]);
 
     // ss2i : le dossier Drafts affiche son nombre de brouillons a la place des non-lus.
@@ -39,7 +42,6 @@ async function IdentityMailboxesListWrapper() {
         unreadCounts.set(mailboxId, { unreadThreads: n, unreadTotal: n });
     }
 
-    const scheduledDraftsPromise = fetchScheduledDraftCounts();
     const snoozedThreadsPromise = fetchIdentitySnoozedThreads()
     // ss2i : clients (CRM) des identites pro ; vide (section absente) pour les autres.
     const clientsPromise = fetchIdentityClients()
@@ -49,7 +51,7 @@ async function IdentityMailboxesListWrapper() {
             <IdentityMailboxesList
                 identityMailboxes={identityMailboxes}
                 unreadCounts={unreadCounts}
-                scheduledDraftsPromise={scheduledDraftsPromise}
+                outboxCounts={outboxCounts}
                 snoozedThreadsPromise={snoozedThreadsPromise}
                 clientsPromise={clientsPromise}
                 workspacePublicId={workspacePublicId}

@@ -6,6 +6,7 @@
 //   node_modules/.bin/tsx --tsconfig apps/web/tsconfig.json apps/web/test/outbox-cancel.ts
 import assert from "node:assert/strict";
 import { cancelSend, enqueueSend, messageIdFor } from "../../../packages/common/src/outbox";
+import { DRAFT_MAYBE_SENT_ERROR } from "../../../packages/common/src/draft-send";
 import { SCHEDULED_JOB } from "../../../packages/common/src/schedule-send";
 
 let failures = 0;
@@ -147,6 +148,33 @@ await test("enqueueSend : marque du brouillon posee avant le job ; refusee -> li
 	});
 	assert.equal(noJob.ok, false);
 	assert.deepEqual(calls, ["insert", "delete", "unmark"]);
+});
+
+// Envoi precedent du meme brouillon interrompu (le serveur n'a pas repondu : peut-etre parti) :
+// le renvoyer depuis l'editeur doublerait peut-etre le mail, et l'ecarter en douce effacerait la
+// seule trace. Refus explicite, aucune ligne, aucun job, rien d'ecarte.
+await test("enqueueSend : brouillon dont un envoi est interrompu -> refus « peut-être déjà parti », rien n'est cree", async () => {
+	const calls: string[] = [];
+	const io = {
+		insertRow: async (v: any) => (calls.push("insert"), { id: "row-5", scheduledAt: v.scheduledAt }),
+		addJob: async () => void calls.push("job"),
+		deleteRow: async () => void calls.push("delete"),
+		mark: async () => (calls.push("mark"), true),
+		supersede: async () => void calls.push("supersede"),
+	};
+	const input = { payload: { draftMessageId: "d-9" }, identityId: "i-1", mailboxId: "m-1", origin: "undo" as const, sendAt: new Date(), fromAddress: "a@b.fr" };
+	const asked: string[] = [];
+	const res = await enqueueSend(input, { ...io, interrupted: async (id: string) => (asked.push(id), true) });
+	assert.deepEqual(res, { ok: false, error: DRAFT_MAYBE_SENT_ERROR, maybeSent: true });
+	assert.deepEqual(asked, ["d-9"]);
+	assert.deepEqual(calls, []);
+	assert.equal(DRAFT_MAYBE_SENT_ERROR, "Ce mail est peut-être déjà parti : vérifiez dans la Boîte d'envoi");
+	// Sans envoi interrompu, ou sans brouillon d'origine : envoi normal.
+	assert.equal((await enqueueSend(input, { ...io, interrupted: async () => false })).ok, true);
+	const asked2: string[] = [];
+	const direct = await enqueueSend({ ...input, payload: {} }, { ...io, interrupted: async (id: string) => (asked2.push(id), true) });
+	assert.equal(direct.ok, true);
+	assert.deepEqual(asked2, []);
 });
 
 const cancelIo = (l: ReturnType<typeof ledger>, id: string, calls: string[]) => ({

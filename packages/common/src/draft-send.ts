@@ -65,6 +65,17 @@ export function draftTimesOf(row: {
 // ou envoi programme) ne se modifie ni ne se supprime en douce : l'envoi emporte une copie du
 // contenu, une modification serait perdue sans que l'utilisateur le sache.
 export const DRAFT_PENDING_ERROR = "This draft is scheduled; cancel the scheduled send first";
+// Envoi precedent interrompu ou coupe apres l'envoi (le serveur n'a pas repondu) : le mail est
+// peut-etre parti, le brouillon ne repart pas tant que l'envoi n'est pas ecarte dans la Boite
+// d'envoi (« Reessayer » y demande confirmation).
+export const DRAFT_MAYBE_SENT_ERROR = "Ce mail est peut-être déjà parti : vérifiez dans la Boîte d'envoi";
+
+// Erreur posee sur le brouillon a la fin d'un envoi en echec.
+export function draftSendErrorOf(row: { acceptanceUnknown?: boolean | null }, error: string | null | undefined): string {
+	if (!row.acceptanceUnknown) return String(error ?? "");
+	return error ? `${DRAFT_MAYBE_SENT_ERROR}. ${error}` : DRAFT_MAYBE_SENT_ERROR;
+}
+
 // Decompte d'annulation sans resultat depuis 3 minutes : etat inconnu, la marque ne bloque plus.
 export const PENDING_STALE_MS = 3 * 60_000;
 

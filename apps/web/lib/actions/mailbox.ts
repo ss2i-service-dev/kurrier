@@ -46,7 +46,7 @@ import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
 import { searchFilters, SEARCH_EXCLUDED_KINDS } from "@/lib/search-scope";
-import { cancelSend, enqueueSend, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendLive, deleteDraftRow, DRAFT_DELETE_JOB, draftDeleteJobOptions, type SettleAction, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
+import { cancelSend, enqueueSend, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendLive, interruptedSendOf, deleteDraftRow, DRAFT_DELETE_JOB, draftDeleteJobOptions, type SettleAction, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import { saveDraft } from "@/lib/actions/drafts";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
@@ -574,9 +574,12 @@ export async function sendMail(
 						.where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
 				),
 			supersede: (draftId) => supersedeFailedSends(draftId),
+			interrupted: (draftId) => interruptedSendOf(draftId, identity.id),
 		},
-	).catch((e: any) => ({ ok: false as const, error: String(e?.message ?? e) }));
+	).catch((e: any) => ({ ok: false as const, error: String(e?.message ?? e), maybeSent: false }));
 	if (!queued.ok) {
+		// Envoi precedent interrompu (peut-etre parti) : le dire, rien n'a ete mis en file.
+		if (queued.maybeSent) return { success: false, error: queued.error };
 		console.error("[send] enqueue failed", queued.error);
 		return {
 			success: false,
@@ -599,7 +602,8 @@ export async function sendMail(
 }
 
 // ss2i : un nouvel envoi d'un brouillon ecarte de la Boite d'envoi ses envois precedents en
-// echec (sinon « Reessayer » sur l'ancien enverrait une seconde fois). RLS : lignes visibles.
+// echec (sinon « Reessayer » sur l'ancien enverrait une seconde fois). Jamais un envoi
+// interrompu (peut-etre parti) : c'est la seule trace, l'utilisateur l'ecarte lui-meme. RLS.
 async function supersedeFailedSends(imapDraftId: string) {
 	const rls = await rlsClient();
 	await rls((tx) =>
@@ -609,6 +613,7 @@ async function supersedeFailedSends(imapDraftId: string) {
 			.where(
 				and(
 					eq(draftMessages.status, "failed"),
+					eq(draftMessages.acceptanceUnknown, false),
 					isNull(draftMessages.dismissedAt),
 					sql`${draftMessages.payload}->>'draftMessageId' = ${imapDraftId}`,
 				),

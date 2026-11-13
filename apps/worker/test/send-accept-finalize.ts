@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import {
 	finalizeSent,
 	legacyLedgerRow,
+	ledgerOutcomeOf,
 	runSend,
 	sweepLedger,
 	type FinalizeIo,
@@ -449,6 +450,28 @@ await test("balayage : marques orphelines -> brouillon supprime (parti) ou dever
 	const w2 = world([row("echec", { status: "failed" })], { drafts: { "d-echec": draft("echec") } });
 	w2.failSettle = true;
 	assert.deepEqual((await sweepLedger(w2.deps, NOW)).settled, []);
+});
+
+// MCP send_email : l'attente du job a echoue (delai depasse, job en echec) ; la ligne ledger dit
+// ce qui s'est vraiment passe, jamais « refused » pour un mail peut-etre parti.
+await test("ledgerOutcomeOf : issue d'un envoi lue sur sa ligne", () => {
+	const at = new Date();
+	const fallback = "Sending failed: timeout";
+	assert.deepEqual(ledgerOutcomeOf({ status: "sent", acceptedAt: at }, fallback), { sent: true });
+	assert.deepEqual(ledgerOutcomeOf(null, fallback), { sent: false, maybeSent: false, error: fallback });
+	for (const row of [
+		{ status: "scheduled", acceptedAt: null },
+		{ status: "sending", acceptedAt: null },
+		{ status: "failed", acceptedAt: null, acceptanceUnknown: true, lastError: "Sending interrupted" },
+	]) {
+		const o = ledgerOutcomeOf(row, fallback);
+		assert.equal(o.sent, false, row.status);
+		assert.equal(!o.sent && o.maybeSent, true, row.status);
+		assert.match(!o.sent ? o.error : "", /may have been sent/, row.status);
+	}
+	const refused = ledgerOutcomeOf({ status: "failed", acceptedAt: null, acceptanceUnknown: false, lastError: "550 5.7.1 denied" }, fallback);
+	assert.deepEqual(refused, { sent: false, maybeSent: false, error: "The mail server refused the message: 550 5.7.1 denied" });
+	assert.deepEqual(ledgerOutcomeOf({ status: "canceled", acceptedAt: null }, fallback), { sent: false, maybeSent: false, error: "The send was cancelled" });
 });
 
 await test("job herite send-and-reconcile : une seule ligne ledger, meme rejoue", async () => {

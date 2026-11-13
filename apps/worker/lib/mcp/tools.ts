@@ -39,6 +39,7 @@ import { type QuoteScope, stripQuotedText, validateScheduledAt } from "@common";
 import { attachThreadsToCompany, crmSearchCompanies, detachThreadsFromCompany, searchKnownCrmCompanies, upsertCrmCompanies } from "@common/server-client-link";
 import { isProIdentityValue } from "../crm/link-thread";
 import { findByLegacyKey } from "../send/ledger-store";
+import { ledgerOutcomeOf } from "../send/pipeline";
 
 // Registre des outils de l'MCP courrier. Chaque outil recoit l'utilisateur authentifie
 // et des arguments deja validés par son schema JSON (cote client) ; il revalide ce
@@ -384,7 +385,22 @@ async function sendViaQueue(opts: {
 	try {
 		await job.waitUntilFinished(sendMailEvents, 120_000);
 	} catch (e: any) {
-		throw new McpToolError(`Sending failed: ${e?.message ?? e}`);
+		// ss2i : Boite d'envoi (OI 10519). Echec ou attente depassee : l'etat vient de la ligne
+		// ledger (un envoi en cours ou interrompu est peut-etre parti, il ne faut pas le renvoyer).
+		// Sans ligne, le job n'a pas demarre : retire de la file, rien n'est parti ; s'il ne peut
+		// plus etre retire, il a demarre entre-temps.
+		const row = await findByLegacyKey(`${job.id}:${job.timestamp}`).catch(() => null);
+		if (!row) {
+			const withdrawn = await job.remove().then(() => true, () => false);
+			if (!withdrawn) {
+				throw new McpToolError("Sending outcome unknown: the message may have been sent (see the courrier Outbox before resending)");
+			}
+		}
+		const outcome = ledgerOutcomeOf(row, `Sending failed, nothing was sent: ${e?.message ?? e}`);
+		if (outcome.sent) {
+			return { status: "sent", message_id: newMessageId, thread_id: null, subject: opts.subject ?? "", to: opts.to, cc: opts.cc, bcc: opts.bcc, attachments: attachments.length };
+		}
+		throw new McpToolError(outcome.error);
 	}
 	const [sentMessage] = await db
 		.select({ id: messages.id, threadId: messages.threadId, subject: messages.subject })
@@ -395,13 +411,11 @@ async function sendViaQueue(opts: {
 		// ss2i : Boite d'envoi (OI 10519). Accepte par le serveur mais copie Envoyes reportee (le
 		// balayage du worker la reprend), ou issue non enregistree : ce n'est pas un refus.
 		const row = await findByLegacyKey(`${job.id}:${job.timestamp}`);
-		if (row?.acceptedAt) {
+		const outcome = ledgerOutcomeOf(row, "The mail server refused the message (see worker logs)");
+		if (outcome.sent) {
 			return { status: "sent", message_id: newMessageId, thread_id: null, subject: opts.subject ?? "", to: opts.to, cc: opts.cc, bcc: opts.bcc, attachments: attachments.length };
 		}
-		if (row?.status === "sending") {
-			throw new McpToolError("Sending outcome unknown: the message may have been sent (see the courrier Outbox before resending)");
-		}
-		throw new McpToolError("The mail server refused the message (see worker logs)");
+		throw new McpToolError(outcome.error);
 	}
 	return {
 		status: "sent",

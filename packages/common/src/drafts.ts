@@ -8,7 +8,7 @@ import {
 	threads,
 } from "@db";
 import type { AddressObjectJSON } from "@schema";
-import { and, desc, eq, notExists, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, notExists, sql } from "drizzle-orm";
 import { generateSnippet, upsertMailboxThreadItem } from "./mail";
 import type { QuoteMode, QuoteScope } from "./compose";
 import { addressObjToList } from "./mail-client";
@@ -163,6 +163,26 @@ export async function pendingSendLive(pending: DraftPendingSend | null | undefin
 		.where(eq(draftMessages.id, pending.jobId))
 		.limit(1);
 	return pendingSendAlive(pending, Date.now(), row ?? null);
+}
+
+// ss2i : envoi precedent du brouillon interrompu (le serveur n'a pas repondu, jamais accepte) et
+// pas encore ecarte : le mail est peut-etre parti, le brouillon ne repart pas (enqueueSend).
+export async function interruptedSendOf(draftMessageId: string, identityId: string): Promise<boolean> {
+	const [row] = await db
+		.select({ id: draftMessages.id })
+		.from(draftMessages)
+		.where(
+			and(
+				eq(draftMessages.identityId, identityId),
+				eq(draftMessages.status, "failed"),
+				eq(draftMessages.acceptanceUnknown, true),
+				isNull(draftMessages.acceptedAt),
+				isNull(draftMessages.dismissedAt),
+				sql`${draftMessages.payload}->>'draftMessageId' = ${draftMessageId}`,
+			),
+		)
+		.limit(1);
+	return !!row;
 }
 
 export type DraftInput = {

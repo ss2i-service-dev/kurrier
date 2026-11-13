@@ -5,6 +5,8 @@ import {
 	MailgunConfig,
 	RawMailgunConfigSchema,
 	VerifyResult,
+	httpFailureAmbiguous,
+	SendEmailResult,
 } from "../core";
 import sgClient from "@sendgrid/client";
 import { sanitizeFilename } from "@common/mail-client";
@@ -312,7 +314,7 @@ export class MailgunMailer implements Mailer {
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
-	): Promise<{ success: boolean; MessageId?: string; error?: string }> {
+	): Promise<SendEmailResult> {
 		try {
 			const domain = String(opts.from.split("@")[1] || "").trim();
 
@@ -356,8 +358,12 @@ export class MailgunMailer implements Mailer {
 			return { success: true, MessageId: id };
 		} catch (err) {
 			console.error("mailgun sendEmail error", err);
-			// ss2i : la cause remonte au worker (refus SMTP, erreur reseau).
-			return { success: false, error: String((err as any)?.response || (err as any)?.message || String(err)) };
+			// ss2i : la cause remonte au worker (refus SMTP, erreur reseau), et si l'issue est inconnue.
+			return {
+				success: false,
+				error: String((err as any)?.response || (err as any)?.message || String(err)),
+				ambiguous: httpFailureAmbiguous(err),
+			};
 		}
 	}
 }

@@ -1612,6 +1612,23 @@ export const draftMessages = pgTable(
 		),
 		payload: jsonb("payload").$type<Record<string, any>>().notNull(),
 
+		// ss2i : Boite d'envoi (ss2i_009), une ligne par envoi (ledger). Etats et visibilite :
+		// packages/common/src/outbox-state.ts.
+		origin: text("origin").notNull().default("scheduled"), // undo, scheduled, direct, external
+		messageId: text("message_id"),
+		acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+		acceptanceUnknown: boolean("acceptance_unknown").notNull().default(false),
+		smtpResponse: text("smtp_response"),
+		deliveryState: text("delivery_state").notNull().default("none"),
+		queueRef: text("queue_ref"),
+		lastError: text("last_error"),
+		nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+		deliveryCheckedAt: timestamp("delivery_checked_at", { withTimezone: true }),
+		deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+		dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+		rendered: jsonb("rendered").$type<Record<string, any>>(),
+		sentRowId: uuid("sent_row_id"),
+
 		workspaceId: uuid("workspace_id")
 			.references(() => workspaces.id)
 			.notNull()
@@ -1625,6 +1642,10 @@ export const draftMessages = pgTable(
 			.notNull(),
 	},
 	(t) => [
+		uniqueIndex("uniq_draft_messages_identity_message_id")
+			.on(t.identityId, t.messageId)
+			.where(sql`${t.messageId} IS NOT NULL`),
+		index("ix_draft_messages_identity_state").on(t.identityId, t.status, t.deliveryState),
 		index("ix_draft_messages_owner").on(t.ownerId),
 		index("ix_draft_messages_mailbox").on(t.mailboxId),
 		index("ix_draft_messages_identity").on(t.identityId),

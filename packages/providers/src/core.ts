@@ -124,6 +124,26 @@ export type EmailIdentity = {
 	slug: string;
 };
 
+// ss2i (Boite d'envoi) : issue d'un envoi. `response` : reponse du serveur a l'acceptation
+// (texte du 250). `ambiguous` : echec dont on ne sait pas si le message est parti (coupure apres
+// DATA sans reponse chiffree, timeout d'une API) ; jamais de renvoi sans confirmation.
+export type SendEmailResult = {
+	success: boolean;
+	MessageId?: string;
+	error?: string;
+	response?: string;
+	ambiguous?: boolean;
+};
+
+// Echec d'une API HTTP d'envoi : ambigu sans statut HTTP (timeout, coupure reseau), le message est
+// peut-etre parti. Statut selon le SDK : AWS ($metadata), SendGrid (code), Mailgun, Postmark.
+export function httpFailureAmbiguous(err: unknown): boolean {
+	const e = (err ?? {}) as Record<string, any>;
+	const status =
+		e.$metadata?.httpStatusCode ?? e.status ?? e.statusCode ?? (typeof e.code === "number" ? e.code : undefined);
+	return !(Number(status) >= 400);
+}
+
 export interface Mailer {
 	verify(id: string, metaData?: Record<any, any>): Promise<VerifyResult>;
 	sendTestEmail(
@@ -145,8 +165,11 @@ export interface Mailer {
 			// ss2i : en-tetes supplementaires (ex. X-Kurrier-Auto) ajoutes tels quels au message.
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
+			// ss2i (Boite d'envoi) : Message-ID fixe par courrier avant l'envoi, cle de correlation
+			// du ledger draft_messages. Un fournisseur qui le reecrit rend le sien dans MessageId.
+			messageId?: string;
 		},
-	): Promise<{ success: boolean; MessageId?: string; error?: string }>;
+	): Promise<SendEmailResult>;
 	addDomain(domain: string, opts: Record<any, any>): Promise<DomainIdentity>;
 	addEmail(
 		email: string,

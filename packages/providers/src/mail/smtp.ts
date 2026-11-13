@@ -3,11 +3,27 @@ import {
 	DomainIdentity,
 	Mailer,
 	RawSmtpConfigSchema,
+	SendEmailResult,
 	SmtpVerifyInput,
 	VerifyResult,
 } from "../core";
 import { ImapFlow } from "imapflow";
 import SMTPTransport from "nodemailer/lib/smtp-transport";
+
+// ss2i (Boite d'envoi) : un echec SMTP est-il ambigu (message peut-etre parti) ? Non si le serveur
+// a repondu par un code (refus certain, a n'importe quelle etape, DATA compris), si la connexion
+// ou la resolution n'a jamais abouti, ou si l'authentification ou le TLS a echoue (avant DATA).
+// Sinon oui : nodemailer etiquette « CONN » aussi bien une coupure avant MAIL FROM qu'une coupure
+// apres le contenu, sans dire l'etape ; dans le doute, ambigu (confirmation avant de renvoyer).
+export function smtpFailureAmbiguous(err: unknown): boolean {
+	const e = (err ?? {}) as Record<string, any>;
+	if (e.responseCode) return false;
+	if (["EAUTH", "ENOAUTH", "EOAUTH2", "EDNS", "ETLS", "EENVELOPE"].includes(e.code)) return false;
+	if (e.syscall === "connect" || e.syscall === "getaddrinfo") return false;
+	if (e.code === "ETIMEDOUT" && /Connection timeout|Greeting never received/.test(String(e.message))) return false;
+	if (e.code === "EMESSAGE" && (e.command === "API" || e.command === "MAIL FROM")) return false;
+	return true;
+}
 
 export class SmtpMailer implements Mailer {
 	private transporter: Transporter;
@@ -150,8 +166,9 @@ export class SmtpMailer implements Mailer {
 			// ss2i : en-tetes supplementaires (ex. X-Kurrier-Auto) ajoutes tels quels au message.
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
+			messageId?: string;
 		},
-	): Promise<{ success: boolean; MessageId?: string; error?: string }> {
+	): Promise<SendEmailResult> {
 		try {
 			// convert Blob attachments -> Nodemailer format (Buffer)
 			const attachments = await Promise.all(
@@ -182,13 +199,22 @@ export class SmtpMailer implements Mailer {
 				// jointes intégrées (cid), comme dans Outlook : une image distante serait bloquée par
 				// défaut chez la plupart des destinataires.
 				attachDataUrls: true,
+				// ss2i (Boite d'envoi) : Message-ID fixe par courrier (ledger), sinon nodemailer le genere.
+				...(opts.messageId ? { messageId: opts.messageId } : {}),
 			});
 
-			return { success: true, MessageId: String(info.messageId || "") };
+			return {
+				success: true,
+				MessageId: String(info.messageId || ""),
+				response: info.response ? String(info.response) : undefined,
+			};
 		} catch (err) {
-			// You can add logging here if desired
-			// ss2i : la cause remonte au worker (refus SMTP, erreur reseau).
-			return { success: false, error: String((err as any)?.response || (err as any)?.message || String(err)) };
+			// ss2i : la cause remonte au worker (refus SMTP, erreur reseau), et si l'issue est inconnue.
+			return {
+				success: false,
+				error: String((err as any)?.response || (err as any)?.message || String(err)),
+				ambiguous: smtpFailureAmbiguous(err),
+			};
 		}
 	}
 

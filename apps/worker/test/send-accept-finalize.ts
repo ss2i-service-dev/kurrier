@@ -99,7 +99,10 @@ const world = (
 			);
 		},
 		staleSending: async (before) =>
-			[...ledger.values()].filter((r) => r.status === "sending" && !r.acceptedAt && r.updatedAt < before).map((r) => ({ ...r })),
+			[...ledger.values()]
+				.filter((r) => r.status === "sending" && !r.acceptedAt && !!r.messageId && r.updatedAt < before)
+				.map((r) => ({ ...r })),
+		setMessageId: async (id, messageId) => cas(id, (r) => r.status === "sending" && !r.messageId, { messageId }),
 		unfinalized: async (before) =>
 			[...ledger.values()]
 				.filter((r) => r.status === "sent" && r.acceptedAt && r.acceptedAt < before && r.deliveryState === "none" && !r.sentRowId)
@@ -389,6 +392,20 @@ await test("ligne d'avant le ledger (message_id NULL) : Message-ID genere avant 
 	await runSend("row-1", w.deps);
 	assert.deepEqual(w.smtpCalls, ["<gen-1@ss2i.example>"]);
 	assert.equal(w.ledger.get("row-1")!.messageId, "<gen-1@ss2i.example>");
+});
+
+// Ligne d'avant le ledger (message_id NULL) reclamee par le nouveau worker : le balayage ne
+// reprend que les lignes a message_id, le Message-ID est donc enregistre AVANT le SMTP, sinon
+// un worker mort pendant l'envoi la laisserait « en cours » pour toujours.
+await test("ligne d'avant le ledger, worker mort pendant le SMTP : Message-ID enregistre avant, balayee en interrompu", async () => {
+	const w = world([ledgerRow({ messageId: null })], { smtp: (() => new Promise(() => {})) as any });
+	void runSend("row-1", w.deps);
+	await new Promise((r) => setTimeout(r, 30));
+	assert.equal(w.ledger.get("row-1")!.status, "sending");
+	assert.equal(w.ledger.get("row-1")!.messageId, "<gen-1@ss2i.example>", "Message-ID enregistre avant le SMTP");
+	const res = await sweepLedger(w.deps, new Date(NOW.getTime() + 11 * 60_000));
+	assert.deepEqual(res.interrupted, ["row-1"]);
+	assert.equal(w.ledger.get("row-1")!.acceptanceUnknown, true);
 });
 
 await test("balayage : sending de plus de 10 min -> interrompu sans renvoi, marque retiree", async () => {

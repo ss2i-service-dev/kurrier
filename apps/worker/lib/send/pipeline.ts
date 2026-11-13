@@ -42,8 +42,10 @@ export type LedgerStore = {
 		id: string,
 		a: { messageId: string; smtpResponse: string | null; rendered: Record<string, any> },
 	): Promise<LedgerRow | null>;
-	// sending sans accepted_at, pas touchee depuis `before`
+	// sending sans accepted_at, a message_id, pas touchee depuis `before`
 	staleSending(before: Date): Promise<LedgerRow[]>;
+	// Ligne d'avant le ledger reclamee : message_id pose avant le SMTP (sending, message_id NULL)
+	setMessageId(id: string, messageId: string): Promise<LedgerRow | null>;
 	// sent, accepted_at avant `before`, delivery_state none, sent_row_id NULL
 	unfinalized(before: Date): Promise<LedgerRow[]>;
 	// Brouillons dont la marque d'envoi designe une ligne ni scheduled ni sending, touchee entre
@@ -136,6 +138,17 @@ export async function runSend(rowId: string, deps: SendDeps): Promise<SendOutcom
 	}
 
 	const messageId = row.messageId || deps.newMessageId(prepared.from);
+	if (!row.messageId) {
+		// Ligne d'avant le ledger : Message-ID enregistre avant le SMTP, sinon le balayage (qui ne
+		// reprend que les lignes a message_id) ne verrait jamais un envoi coupe ici.
+		try {
+			if (!(await deps.store.setMessageId(row.id, messageId))) {
+				return { outcome: "skipped", row: await deps.store.get(rowId) };
+			}
+		} catch (err) {
+			return failRow(deps, row, messageOf(err), false);
+		}
+	}
 	let res: SendEmailResult;
 	try {
 		res = await prepared.send(messageId);

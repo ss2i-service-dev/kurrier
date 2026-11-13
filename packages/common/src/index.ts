@@ -15,3 +15,5 @@ export * from "./move-uids";
 export * from "./real-attachments";
 export * from "./address-field";
 export * from "./schedule-send";
+export * from "./outbox-state";
+export * from "./outbox";

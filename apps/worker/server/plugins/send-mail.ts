@@ -652,10 +652,34 @@ export default defineNitroPlugin(async (nitroApp) => {
 		markFailed: async (row, error) => {
 			const draftMessageId = row.payload?.draftMessageId;
 			if (!draftMessageId) return;
-			await setDraftSendState(String(draftMessageId), {
-				pendingSend: null,
-				sendError: { message: error, at: new Date().toISOString() },
-			});
+			await setDraftSendState(
+				String(draftMessageId),
+				{ pendingSend: null, sendError: { message: error, at: new Date().toISOString() } },
+				{ ifJobId: row.id },
+			);
+		},
+		// Marque orpheline (balayage) : brouillon d'un envoi parti supprime comme apres l'envoi ;
+		// sinon marque retiree, et l'erreur d'un echec encore dans la Boite d'envoi revient sur le
+		// brouillon comme avec markFailed.
+		settleDraft: async (o, action) => {
+			if (action === "delete") {
+				await deleteDraft({
+					ownerId: o.ownerId,
+					identityId: String(o.identityId ?? ""),
+					draftMessageId: o.draftId,
+					afterSend: true,
+					ifJobId: o.rowId,
+				});
+				return;
+			}
+			const failed = o.status === "failed" && !o.dismissedAt && o.lastError;
+			await setDraftSendState(
+				o.draftId,
+				failed
+					? { pendingSend: null, sendError: { message: String(o.lastError), at: new Date().toISOString() } }
+					: { pendingSend: null },
+				{ ifJobId: o.rowId },
+			);
 		},
 		log: (msg, err) => console.error(`[send-mail] ${msg}`, (err as any)?.message ?? err ?? ""),
 	};
@@ -889,9 +913,9 @@ export default defineNitroPlugin(async (nitroApp) => {
 	// copies Envoyes en retard), au demarrage et toutes les 5 minutes.
 	const sweep = () =>
 		sweepLedger(sendDeps)
-			.then(({ interrupted, finalized }) => {
-				if (interrupted.length || finalized.length) {
-					console.warn(`[send-mail] ledger sweep: interrupted ${interrupted.join(", ") || "-"}, finalized ${finalized.join(", ") || "-"}`);
+			.then(({ interrupted, finalized, settled }) => {
+				if (interrupted.length || finalized.length || settled.length) {
+					console.warn(`[send-mail] ledger sweep: interrupted ${interrupted.join(", ") || "-"}, finalized ${finalized.join(", ") || "-"}, drafts settled ${settled.join(", ") || "-"}`);
 				}
 			})
 			.catch((e: any) => console.error("[send-mail] ledger sweep failed:", e?.message ?? e));

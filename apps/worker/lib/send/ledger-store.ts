@@ -1,8 +1,8 @@
 // ss2i : Boite d'envoi (OI 10519). Ledger draft_messages en Drizzle pour le pipeline d'envoi
 // (lib/send/pipeline.ts) : chaque transition est un seul UPDATE ... WHERE <etat attendu>
 // RETURNING, une transition perdue rend null.
-import { db, draftMessages } from "@db";
-import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { db, draftMessages, messages } from "@db";
+import { and, eq, gt, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import type { LedgerRow, LedgerStore } from "./pipeline";
 
 export const ledgerCols = {
@@ -103,6 +103,38 @@ export const ledgerStore: LedgerStore = {
 					eq(draftMessages.deliveryState, "none"),
 					isNull(draftMessages.sentRowId),
 					sql`${draftMessages.rendered} IS NOT NULL`,
+				),
+			),
+
+	// Marque d'envoi d'un brouillon -> sa ligne ledger : le brouillon est retrouve par sa cle
+	// primaire (payload.draftMessageId), seules les lignes recentes sont parcourues.
+	orphanMarks: async (before, since) =>
+		db
+			.select({
+				rowId: draftMessages.id,
+				status: draftMessages.status,
+				acceptedAt: draftMessages.acceptedAt,
+				sentRowId: draftMessages.sentRowId,
+				dismissedAt: draftMessages.dismissedAt,
+				acceptanceUnknown: draftMessages.acceptanceUnknown,
+				lastError: draftMessages.lastError,
+				identityId: draftMessages.identityId,
+				draftId: messages.id,
+				ownerId: messages.ownerId,
+			})
+			.from(draftMessages)
+			.innerJoin(
+				messages,
+				and(
+					sql`${messages.id} = case when ${draftMessages.payload}->>'draftMessageId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then (${draftMessages.payload}->>'draftMessageId')::uuid end`,
+					sql`${messages.metaData}->'draft'->'pendingSend'->>'jobId' = ${draftMessages.id}::text`,
+				),
+			)
+			.where(
+				and(
+					notInArray(draftMessages.status, ["scheduled", "sending"]),
+					lt(draftMessages.updatedAt, before),
+					gt(draftMessages.updatedAt, since),
 				),
 			),
 };

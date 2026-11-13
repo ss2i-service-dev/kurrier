@@ -51,7 +51,7 @@ import {
 	draftMetaOf,
 	draftSendPayload,
 	enqueueSend,
-	pendingSendAlive,
+	pendingSendLive,
 	scheduledPendingSend,
 	validateScheduledAt,
 	draftSyncJobOptions,
@@ -182,6 +182,8 @@ export async function deleteDraft(
 		draftMessageId: string;
 		// Nettoyage apres un envoi reussi : la garde « envoi en attente » ne s'applique pas.
 		afterSend?: boolean;
+		// Menage d'une marque orpheline : seulement si la marque designe encore cette ligne ledger.
+		ifJobId?: string;
 	},
 	imapInstances?: Map<string, ImapFlow>,
 ) {
@@ -207,7 +209,7 @@ export async function sendDraft(opts: {
 	// Un envoi deja en attente (delai d'annulation ou programme) n'est pas redouble ; une marque
 	// perimee de plus de 3 minutes (etat inconnu de l'interface) ne bloque plus.
 	const row = await getDraftRow(opts);
-	if (pendingSendAlive(row ? draftMetaOf(row)?.pendingSend : null)) {
+	if (await pendingSendLive(row ? draftMetaOf(row)?.pendingSend : null)) {
 		throw new Error("This draft already has a send in progress; cancel it from courrier first.");
 	}
 	let sendAt: Date;

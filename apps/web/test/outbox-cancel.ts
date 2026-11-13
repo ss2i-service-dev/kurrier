@@ -19,7 +19,16 @@ const test = async (label: string, fn: () => Promise<void> | void) => {
 	}
 };
 
-type Row = { id: string; status: string; payload: Record<string, any>; acceptanceUnknown?: boolean; deliveryState?: string };
+type Row = {
+	id: string;
+	status: string;
+	payload: Record<string, any>;
+	acceptanceUnknown?: boolean;
+	deliveryState?: string;
+	acceptedAt?: Date | null;
+	sentRowId?: string | null;
+	dismissedAt?: Date | null;
+};
 
 // Faux ledger : chaque transition est un UPDATE ... WHERE status = attendu.
 const ledger = (rows: Row[]) => {
@@ -146,6 +155,7 @@ const cancelIo = (l: ReturnType<typeof ledger>, id: string, calls: string[]) => 
 	removeJob: async () => void calls.push("removeJob"),
 	restore: async () => void calls.push("restore"),
 	unlock: async () => void calls.push("unlock"),
+	settle: async (action: string) => void calls.push(`settle:${action}`),
 });
 
 await test("annuler contre claim du worker : un seul gagnant", async () => {
@@ -175,8 +185,39 @@ await test("annuler un envoi en cours ou parti : refus, etat reel, brouillon non
 		const res = await cancelSend(cancelIo(l, "r", calls));
 		assert.equal(res.cancelled, false, status);
 		assert.equal(res.state, state);
-		assert.deepEqual(calls, [], status);
+		assert.ok(!calls.includes("restore") && !calls.includes("removeJob"), status);
 	}
+});
+
+// Marque restee sur le brouillon alors que la ligne est terminee (nettoyage apres envoi,
+// retrait de marque ou restauration en echec) : Annuler ne restaure rien mais remet le brouillon
+// d'aplomb, sinon il reste verrouille pour toujours.
+await test("annuler perdu sur une ligne terminee : le brouillon est nettoye (parti) ou deverrouille", async () => {
+	const at = new Date("2026-11-13T09:00:00Z");
+	const cases: [Row, string[]][] = [
+		[{ id: "r", status: "sending", payload: {} }, []],
+		[{ id: "r", status: "sent", payload: {}, acceptedAt: at, sentRowId: null }, []],
+		[{ id: "r", status: "sent", payload: {}, acceptedAt: at, sentRowId: "m-1" }, ["settle:delete"]],
+		[{ id: "r", status: "failed", payload: {} }, ["settle:unlock"]],
+		[{ id: "r", status: "failed", payload: {}, acceptanceUnknown: true, dismissedAt: at }, ["settle:unlock"]],
+		[{ id: "r", status: "sent", payload: {}, acceptedAt: at, sentRowId: "m-1", dismissedAt: at, deliveryState: "rejected" }, ["settle:unlock"]],
+	];
+	for (const [row, expected] of cases) {
+		const l = ledger([row]);
+		const calls: string[] = [];
+		const res = await cancelSend(cancelIo(l, "r", calls));
+		assert.equal(res.cancelled, false, JSON.stringify(row));
+		assert.deepEqual(calls, expected, JSON.stringify(row));
+	}
+	// Un menage en echec ne change pas la reponse.
+	const l = ledger([{ id: "r", status: "failed", payload: {} }]);
+	const res = await cancelSend({
+		...cancelIo(l, "r", []),
+		settle: async () => {
+			throw new Error("db down");
+		},
+	});
+	assert.deepEqual(res, { cancelled: false, state: "failed" });
 });
 
 await test("annuler gagne : job retire puis brouillon restaure ; deja annule : deverrouillage seul, jamais de restauration sans CAS gagnee", async () => {

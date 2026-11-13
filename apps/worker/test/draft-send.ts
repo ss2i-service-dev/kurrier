@@ -8,6 +8,7 @@ import {
 	draftSendStateOf,
 	mergeDraftMeta,
 	pendingSendAlive,
+	settleActionOf,
 	type DraftSendFields,
 } from "../../../packages/common/src/draft-send";
 
@@ -72,6 +73,43 @@ test("pendingSendAlive : decompte en cours, programme, perime", () => {
 	assert.equal(pendingSendAlive(scheduled(24 * 3600_000), now), true);
 	assert.equal(pendingSendAlive(scheduled(-3600_000), now), true);
 	assert.equal(pendingSendAlive({ jobId: "x", sendAt: "pas une date" }, now), false);
+});
+
+// Marque vers une ligne ledger terminee (nettoyage apres envoi, restauration ou retrait de marque
+// en echec) : le brouillon n'est plus verrouille, Annuler et le balayage le remettent d'aplomb.
+test("pendingSendAlive : une marque vers une ligne terminee ou absente ne verrouille plus", () => {
+	const now = Date.parse("2026-11-13T10:00:00.000Z");
+	const mark = { jobId: "5c1e0f6e-1111-4222-8333-444455556666", sendAt: new Date(now - 3600_000).toISOString() };
+	const at = new Date(now - 60_000);
+	// Ligne non lue (appelant synchrone) : comportement d'avant, vivante.
+	assert.equal(pendingSendAlive(mark, now), true);
+	assert.equal(pendingSendAlive(mark, now, { status: "scheduled" }), true);
+	assert.equal(pendingSendAlive(mark, now, { status: "sending" }), true);
+	// Acceptee, copie Envoyes pas encore faite : le nettoyage du brouillon suit la finalisation.
+	assert.equal(pendingSendAlive(mark, now, { status: "sent", acceptedAt: at, sentRowId: null }), true);
+	assert.equal(pendingSendAlive(mark, now, { status: "sent", acceptedAt: at, sentRowId: "m-1" }), false);
+	assert.equal(pendingSendAlive(mark, now, { status: "failed" }), false);
+	assert.equal(pendingSendAlive(mark, now, { status: "canceled" }), false);
+	assert.equal(pendingSendAlive(mark, now, { status: "sent", acceptedAt: at, sentRowId: "m-1", dismissedAt: at }), false);
+	assert.equal(pendingSendAlive(mark, now, null), false);
+	// Un decompte « undo-send-* » ne depend pas de la ligne.
+	const countdown = { jobId: "undo-send-abc", sendAt: new Date(now - 30_000).toISOString() };
+	assert.equal(pendingSendAlive(countdown, now, null), true);
+});
+
+test("settleActionOf : brouillon supprime si l'envoi a sa copie Envoyes, marque retiree sinon", () => {
+	const at = new Date("2026-11-13T09:00:00.000Z");
+	assert.equal(settleActionOf({ status: "scheduled" }), null);
+	assert.equal(settleActionOf({ status: "sending" }), null);
+	assert.equal(settleActionOf({ status: "sent", acceptedAt: at, sentRowId: null }), null);
+	assert.equal(settleActionOf({ status: "sent", acceptedAt: at, sentRowId: "m-1" }), "delete");
+	assert.equal(settleActionOf({ status: "failed" }), "unlock");
+	assert.equal(settleActionOf({ status: "canceled" }), "unlock");
+	// Ecartee (rejet signale puis « Ecarter ») : le contenu reste au brouillon.
+	assert.equal(settleActionOf({ status: "sent", acceptedAt: at, sentRowId: "m-1", dismissedAt: at }), "unlock");
+	assert.equal(settleActionOf({ status: "failed", dismissedAt: at }), "unlock");
+	// Ancienne ligne « sent » d'avant le ledger (jamais acceptee ni finalisee) : la marque seule part.
+	assert.equal(settleActionOf({ status: "sent" }), "unlock");
 });
 
 test("message de refus de la garde", () => {

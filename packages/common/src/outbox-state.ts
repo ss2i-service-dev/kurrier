@@ -23,6 +23,7 @@ export type LedgerStateRow = {
 	acceptanceUnknown?: boolean | null;
 	acceptedAt?: Date | string | null;
 	dismissedAt?: Date | string | null;
+	sentRowId?: string | null;
 };
 
 export function sendStateOf(row: LedgerStateRow): SendState | null {

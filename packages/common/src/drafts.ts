@@ -1,5 +1,6 @@
 import {
 	db,
+	draftMessages,
 	identities,
 	mailboxes,
 	mailboxThreads,
@@ -17,6 +18,7 @@ export * from "./draft-send";
 import {
 	DRAFT_PENDING_ERROR,
 	draftTimesOf,
+	isScheduledMark,
 	mergeDraftMeta,
 	pendingSendAlive,
 	type DraftPendingSend,
@@ -107,12 +109,16 @@ export type DraftMeta = {
 // Ecrit (objet) ou efface (null) pendingSend / sendError dans meta.draft, par jsonb_set
 // sur ces seules cles : un autosave ou la synchro IMAP (meta.imap) en parallele n'est pas
 // ecrase. Une cle absente du patch n'est pas touchee.
+// `ifJobId` : n'ecrit que si la marque d'envoi du brouillon designe encore cette ligne ledger
+// (ou si le brouillon n'en porte aucune, ou un ancien decompte) : un echec ou un menage tardif
+// n'efface jamais la marque d'un envoi plus recent.
 export async function setDraftSendState(
 	draftMessageId: string,
 	patch: {
 		pendingSend?: DraftPendingSend | null;
 		sendError?: DraftSendError | null;
 	},
+	opts: { ifJobId?: string } = {},
 ) {
 	let expr = sql`coalesce(${messages.metaData}, '{}'::jsonb)`;
 	for (const key of ["pendingSend", "sendError"] as const) {
@@ -127,7 +133,36 @@ export async function setDraftSendState(
 	await db
 		.update(messages)
 		.set({ metaData: expr })
-		.where(and(eq(messages.id, draftMessageId), eq(messages.draft, true)));
+		.where(
+			and(
+				eq(messages.id, draftMessageId),
+				eq(messages.draft, true),
+				opts.ifJobId
+					? sql`(coalesce(${messages.metaData}->'draft'->'pendingSend'->>'jobId', '') in ('', ${opts.ifJobId})
+						or ${messages.metaData}->'draft'->'pendingSend'->>'jobId' like 'undo-send-%')`
+					: undefined,
+			),
+		);
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// ss2i : la marque d'envoi verrouille-t-elle encore le brouillon ? Pour un envoi passe par le
+// ledger (jobId = ligne draft_messages), c'est la ligne qui tranche : terminee ou absente, le
+// brouillon redevient modifiable, supprimable et envoyable (pendingSendAlive).
+export async function pendingSendLive(pending: DraftPendingSend | null | undefined): Promise<boolean> {
+	if (!pending || !isScheduledMark(pending) || !UUID_RE.test(pending.jobId)) return pendingSendAlive(pending);
+	const [row] = await db
+		.select({
+			status: draftMessages.status,
+			acceptedAt: draftMessages.acceptedAt,
+			sentRowId: draftMessages.sentRowId,
+			dismissedAt: draftMessages.dismissedAt,
+		})
+		.from(draftMessages)
+		.where(eq(draftMessages.id, pending.jobId))
+		.limit(1);
+	return pendingSendAlive(pending, Date.now(), row ?? null);
 }
 
 export type DraftInput = {
@@ -266,7 +301,7 @@ export async function upsertDraftRow(input: DraftInput) {
 	if (input.draftMessageId && !existing) throw new Error("Draft not found");
 	// ss2i : un envoi en attente emporte une copie du contenu ; modifier le brouillon derriere
 	// son dos serait perdu. Annuler l'envoi d'abord (la marque est alors effacee).
-	if (existing && pendingSendAlive(draftMetaOf(existing)?.pendingSend)) {
+	if (existing && (await pendingSendLive(draftMetaOf(existing)?.pendingSend))) {
 		throw new Error(DRAFT_PENDING_ERROR);
 	}
 
@@ -533,10 +568,14 @@ export async function deleteDraftRow(opts: {
 	// Nettoyage apres un envoi reussi (le brouillon part avec le message) : la garde « envoi en
 	// attente » ne s'applique pas.
 	afterSend?: boolean;
+	// Menage d'une marque orpheline : le brouillon n'est supprime que si sa marque d'envoi
+	// designe encore cette ligne ledger.
+	ifJobId?: string;
 }): Promise<DraftImapRef | null> {
 	const row = await getDraftRow(opts);
 	if (!row) return null;
-	if (!opts.afterSend && pendingSendAlive(draftMetaOf(row)?.pendingSend)) {
+	if (opts.ifJobId && draftMetaOf(row)?.pendingSend?.jobId !== opts.ifJobId) return null;
+	if (!opts.afterSend && (await pendingSendLive(draftMetaOf(row)?.pendingSend))) {
 		throw new Error(DRAFT_PENDING_ERROR);
 	}
 	const [box] = await db

@@ -72,15 +72,43 @@ export const PENDING_STALE_MS = 3 * 60_000;
 export const isScheduledMark = (pending: DraftPendingSend | null | undefined) =>
 	!!pending?.jobId && !pending.jobId.startsWith("undo-send-");
 
+// Ligne ledger draft_messages designee par une marque (jobId = id de la ligne).
+export type MarkLedgerRow = {
+	status: string;
+	acceptedAt?: Date | string | null;
+	sentRowId?: string | null;
+	dismissedAt?: Date | string | null;
+};
+
+// La ligne garde le brouillon verrouille : envoi en attente, en cours, ou accepte sans copie
+// Envoyes encore (la finalisation supprime alors le brouillon).
+const rowHoldsDraft = (row: MarkLedgerRow) =>
+	!row.dismissedAt &&
+	(row.status === "scheduled" ||
+		row.status === "sending" ||
+		(row.status === "sent" && !!row.acceptedAt && !row.sentRowId));
+
+// Marque orpheline (ligne terminee, brouillon pas nettoye : crash apres le commit, nettoyage,
+// restauration ou retrait de marque en echec) : envoye avec sa copie Envoyes -> le brouillon
+// part ; echec, annulation, ligne ecartee ou ancienne ligne « sent » -> la marque seule est
+// retiree, le contenu reste. Null : la ligne garde encore le brouillon.
+export type SettleAction = "delete" | "unlock";
+export function settleActionOf(row: MarkLedgerRow): SettleAction | null {
+	if (rowHoldsDraft(row)) return null;
+	return row.status === "sent" && row.sentRowId && !row.dismissedAt ? "delete" : "unlock";
+}
+
+// `row` : ligne designee par une marque d'envoi programme (undefined = non lue, null = absente).
 export function pendingSendAlive(
 	pending: DraftPendingSend | null | undefined,
 	now: number = Date.now(),
+	row?: MarkLedgerRow | null,
 ): boolean {
 	if (!pending) return false;
 	const at = Date.parse(pending.sendAt);
 	if (Number.isNaN(at)) return false;
-	// Un envoi programme reste vivant tant que sa marque existe (l'heure peut etre depassee si
-	// le worker est arrete) : seuls l'envoi, l'echec definitif et l'annulation l'effacent.
-	if (isScheduledMark(pending)) return true;
+	// Un envoi programme reste vivant tant que sa ligne l'est (l'heure peut etre depassee si le
+	// worker est arrete) ; une ligne terminee ou absente ne verrouille plus le brouillon.
+	if (isScheduledMark(pending)) return row === undefined || (!!row && rowHoldsDraft(row));
 	return at > now - PENDING_STALE_MS;
 }

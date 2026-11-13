@@ -6,7 +6,7 @@
 // Depuis la racine :
 //   node_modules/.bin/tsx --tsconfig apps/web/tsconfig.json apps/web/test/outbox.ts
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	dismissRestoresDraft,
@@ -141,11 +141,15 @@ test("ecarter : brouillon recree pour undo et scheduled, jamais pour un envoi di
 	assert.equal(dismissRestoresDraft(null), false);
 });
 
-const root = join(__dirname, "../../..");
-const sqlText = readFileSync(join(root, "db/init/migrations/ss2i_009_migration.sql"), "utf8");
+// db/ n'est pas dans le contexte de construction de l'image : controles de la migration faits
+// seulement dans le depot.
+const migrationPath = join(__dirname, "../../../db/init/migrations/ss2i_009_migration.sql");
+const hasMigration = existsSync(migrationPath);
+const migrationTest: typeof test = hasMigration ? test : (label) => console.log(`skip  ${label} (db/ absent)`);
+const sqlText = hasMigration ? readFileSync(migrationPath, "utf8") : "";
 const code = sqlText.replace(/--[^\n]*/g, "");
 
-test("migration ss2i_009 : colonnes du ledger, rejouable", () => {
+migrationTest("migration ss2i_009 : colonnes du ledger, rejouable", () => {
 	for (const col of [
 		"origin",
 		"message_id",
@@ -171,7 +175,7 @@ test("migration ss2i_009 : colonnes du ledger, rejouable", () => {
 	assert.doesNotMatch(code, /CREATE\s+(UNIQUE\s+)?INDEX\s+(?!IF NOT EXISTS)/i, "index rejouables");
 });
 
-test("migration ss2i_009 : index unique partiel sur (identity_id, message_id)", () => {
+migrationTest("migration ss2i_009 : index unique partiel sur (identity_id, message_id)", () => {
 	assert.match(
 		code,
 		/CREATE UNIQUE INDEX IF NOT EXISTS\s+\w+\s+ON\s+(public\.)?draft_messages\s*\(\s*identity_id\s*,\s*message_id\s*\)\s*WHERE\s+message_id IS NOT NULL/i,
@@ -184,7 +188,7 @@ test("migration ss2i_009 : index unique partiel sur (identity_id, message_id)", 
 
 const updates = code.match(/UPDATE\s+(public\.)?draft_messages[\s\S]*?;/gi) ?? [];
 
-test("migration ss2i_009 : seuls les echecs d'avant le ledger sont ecartes, meme rejouee", () => {
+migrationTest("migration ss2i_009 : seuls les echecs d'avant le ledger sont ecartes, meme rejouee", () => {
 	const update = updates.find((u) => /SET\s+dismissed_at\s*=\s*now\(\)\s+WHERE/i.test(u)) ?? "";
 	assert.match(update, /SET\s+dismissed_at\s*=\s*now\(\)/i);
 	assert.match(update, /status\s*=\s*'failed'/i);
@@ -195,7 +199,7 @@ test("migration ss2i_009 : seuls les echecs d'avant le ledger sont ecartes, meme
 // Ligne « sending » laissee par l'ancien worker (sans message_id) : le balayage ne la reprend pas
 // (staleSending exige message_id), la migration la passe en echec interrompu (peut-etre parti),
 // ecarte de la Boite d'envoi.
-test("migration ss2i_009 : une ligne sending d'avant le ledger passe en echec interrompu ecarte, meme rejouee", () => {
+migrationTest("migration ss2i_009 : une ligne sending d'avant le ledger passe en echec interrompu ecarte, meme rejouee", () => {
 	const update = updates.find((u) => /WHERE\s+status\s*=\s*'sending'/i.test(u)) ?? "";
 	assert.match(update, /status\s*=\s*'failed'/i);
 	assert.match(update, /acceptance_unknown\s*=\s*true/i);

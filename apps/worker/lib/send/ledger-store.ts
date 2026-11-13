@@ -2,7 +2,7 @@
 // (lib/send/pipeline.ts) : chaque transition est un seul UPDATE ... WHERE <etat attendu>
 // RETURNING, une transition perdue rend null.
 import { db, draftMessages, messages } from "@db";
-import { and, eq, gt, isNull, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import type { LedgerRow, LedgerStore } from "./pipeline";
 
 export const ledgerCols = {
@@ -80,6 +80,8 @@ export const ledgerStore: LedgerStore = {
 				.returning(ledgerCols),
 		),
 
+	// message_id fixe : seulement les envois du ledger (une ligne sending d'avant le ledger est
+	// ecartee par ss2i_009, jamais reveillee en « interrompu » au boot).
 	staleSending: async (before) =>
 		db
 			.select(ledgerCols)
@@ -88,6 +90,7 @@ export const ledgerStore: LedgerStore = {
 				and(
 					eq(draftMessages.status, "sending"),
 					isNull(draftMessages.acceptedAt),
+					isNotNull(draftMessages.messageId),
 					lt(draftMessages.updatedAt, before),
 				),
 			),

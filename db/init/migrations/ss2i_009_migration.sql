@@ -11,8 +11,10 @@
 --  - sent_row_id : ligne messages creee par la finalisation (sans FK : la copie peut etre
 --    supprimee de Envoyes sans toucher au ledger) ;
 --  - dismissed_at : echec ecarte de la Boite d'envoi par l'utilisateur.
--- Idempotent : colonnes et index IF NOT EXISTS ; l'UPDATE final n'ecarte que les echecs d'avant
--- le ledger (message_id NULL), rejoue il ne touche pas un echec recent.
+-- Idempotent : colonnes et index IF NOT EXISTS ; les UPDATE finaux ne touchent que les lignes
+-- d'avant le ledger (message_id NULL), rejoues ils ne touchent pas un envoi recent. Un envoi
+-- reste « sending » par l'ancien worker passe en echec interrompu (peut-etre parti) et ecarte :
+-- le balayage ne le reveille pas (il ne reprend que les lignes a message_id).
 ALTER TABLE public.draft_messages ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'scheduled';
 ALTER TABLE public.draft_messages ADD COLUMN IF NOT EXISTS message_id text;
 ALTER TABLE public.draft_messages ADD COLUMN IF NOT EXISTS accepted_at timestamptz;
@@ -33,6 +35,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_draft_messages_identity_message_id
 	WHERE message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_draft_messages_identity_state
 	ON public.draft_messages (identity_id, status, delivery_state);
+
+UPDATE public.draft_messages
+SET status = 'failed', acceptance_unknown = true, dismissed_at = now(), updated_at = now()
+WHERE status = 'sending'
+	AND message_id IS NULL;
 
 UPDATE public.draft_messages
 SET dismissed_at = now()

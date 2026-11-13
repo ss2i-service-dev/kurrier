@@ -405,11 +405,9 @@ async function sendViaQueue(opts: {
 	if (!sentMessage) {
 		// ss2i : Boite d'envoi (OI 10519). Accepte par le serveur mais copie Envoyes reportee (le
 		// balayage du worker la reprend), ou issue non enregistree : ce n'est pas un refus.
-		const row = await findByLegacyKey(`${job.id}:${job.timestamp}`).catch(() => undefined);
-		const outcome =
-			row === undefined
-				? OUTCOME_UNKNOWN
-				: ledgerOutcomeOf(row, "The mail server refused the message (see worker logs)");
+		// Un job termine a toujours sa ligne : ligne absente ou illisible = issue inconnue.
+		const row = await findByLegacyKey(`${job.id}:${job.timestamp}`).catch(() => null);
+		const outcome = row ? ledgerOutcomeOf(row, "The mail server refused the message (see worker logs)") : OUTCOME_UNKNOWN;
 		if (outcome.sent) {
 			return { status: "sent", message_id: newMessageId, thread_id: null, subject: opts.subject ?? "", to: opts.to, cc: opts.cc, bcc: opts.bcc, attachments: attachments.length };
 		}

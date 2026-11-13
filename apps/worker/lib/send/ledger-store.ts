@@ -95,6 +95,15 @@ export const ledgerStore: LedgerStore = {
 				),
 			),
 
+	setMessageId: async (id, messageId) =>
+		one(
+			await db
+				.update(draftMessages)
+				.set({ messageId, updatedAt: new Date() })
+				.where(and(eq(draftMessages.id, id), eq(draftMessages.status, "sending"), isNull(draftMessages.messageId)))
+				.returning(ledgerCols),
+		),
+
 	unfinalized: async (before) =>
 		db
 			.select(ledgerCols)

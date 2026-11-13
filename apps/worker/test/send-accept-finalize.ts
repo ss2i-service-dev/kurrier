@@ -9,6 +9,7 @@
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/send-accept-finalize.ts
 import assert from "node:assert/strict";
 import {
+	ACCEPT_ATTEMPTS,
 	finalizeSent,
 	legacyLedgerRow,
 	ledgerOutcomeOf,
@@ -68,7 +69,9 @@ const world = (
 	const smtpCalls: string[] = [];
 	const afterCommits: { messageRowId: string; inserted: boolean }[] = [];
 	let inTx = false;
-	let failAccept = false;
+	// true : l'UPDATE « accepte » echoue toujours ; un nombre : il echoue ce nombre de fois.
+	let failAccept: boolean | number = false;
+	const sleeps: number[] = [];
 	let failAfterCommit = false;
 	let failInsert = false;
 	const clone = (r: LedgerRow | undefined) => (r ? { ...r } : null);
@@ -84,7 +87,11 @@ const world = (
 		fail: async (id, f) =>
 			cas(id, (r) => r.status === "sending", { status: "failed", acceptanceUnknown: f.ambiguous }),
 		accept: async (id, a) => {
-			if (failAccept) throw new Error("db down");
+			if (failAccept === true) throw new Error("db down");
+			if (typeof failAccept === "number" && failAccept > 0) {
+				failAccept--;
+				throw new Error("db down");
+			}
 			return cas(
 				id,
 				(r) => r.status === "sending" || (r.status === "failed" && r.acceptanceUnknown && !r.acceptedAt),
@@ -174,9 +181,11 @@ const world = (
 			if (action === "delete") drafts.delete(o.draftId);
 			else drafts.get(o.draftId)!.jobId = null;
 		},
+		sleep: async (ms) => void sleeps.push(ms),
 		log: () => {},
 	};
 	return {
+		sleeps,
 		ledger,
 		drafts,
 		settles,
@@ -191,7 +200,7 @@ const world = (
 		store,
 		finalizeIo,
 		deps,
-		set failAccept(v: boolean) {
+		set failAccept(v: boolean | number) {
 			failAccept = v;
 		},
 		set failAfterCommit(v: boolean) {
@@ -338,9 +347,21 @@ await test("250 mais UPDATE « accepte » en echec : la ligne reste sending, jam
 	w.failAccept = true;
 	const res = await runSend("row-1", w.deps);
 	assert.equal(res.outcome, "unrecorded");
+	assert.equal(w.sleeps.length, ACCEPT_ATTEMPTS - 1);
 	assert.equal(w.ledger.get("row-1")!.status, "sending");
 	assert.deepEqual(w.marks, []);
 	assert.equal(w.msgs.length, 0);
+});
+
+await test("250 puis UPDATE « accepte » en echec passager : reessaye, ligne sent, SMTP une fois", async () => {
+	const w = world([ledgerRow()]);
+	w.failAccept = 2;
+	const res = await runSend("row-1", w.deps);
+	assert.equal(res.outcome, "sent");
+	assert.equal(w.ledger.get("row-1")!.status, "sent");
+	assert.equal(w.smtpCalls.length, 1);
+	assert.equal(w.sleeps.length, 2);
+	assert.equal(w.msgs.length, 1);
 });
 
 await test("acceptation tardive apres un balayage « interrompu » : la ligne passe a sent", async () => {

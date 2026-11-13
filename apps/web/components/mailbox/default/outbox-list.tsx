@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AlertTriangle, Clock, Inbox } from "lucide-react";
 import { formatScheduledWhen } from "@common/schedule-send";
+import { dismissRestoresDraft } from "@common/outbox-state";
 import {
 	cancelPendingSend,
 	dismissOutboxSend,
@@ -167,7 +168,7 @@ function OutboxRow({ item }: { item: OutboxItem }) {
 						{k("Retry", "Réessayer")}
 					</button>
 				)}
-				{a.dismiss && (
+				{a.dismiss && (dismissRestoresDraft(item.origin) ? (
 					<button
 						type="button"
 						disabled={busy}
@@ -177,7 +178,17 @@ function OutboxRow({ item }: { item: OutboxItem }) {
 					>
 						{k("Back to drafts", "Remettre en brouillon")}
 					</button>
-				)}
+				) : (
+					<button
+						type="button"
+						disabled={busy}
+						className={btn}
+						onClick={dismiss}
+						title={k("Remove from the Outbox (this message had no draft)", "Retirer de la boîte d'envoi (ce message n'avait pas de brouillon)")}
+					>
+						{k("Dismiss", "Écarter")}
+					</button>
+				))}
 			</div>
 		</li>
 	);

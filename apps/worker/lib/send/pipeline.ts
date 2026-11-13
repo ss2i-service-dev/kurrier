@@ -14,6 +14,7 @@
 // Jamais de renvoi automatique : un renvoi apres un 250 perdu double l'envoi.
 import type { SendEmailResult } from "../../../../packages/providers/src/core";
 import { mailerFailureOf } from "../send-outcome";
+import { settleActionOf, type SettleAction } from "../../../../packages/common/src/draft-send";
 
 export type LedgerRow = {
 	id: string;
@@ -45,6 +46,22 @@ export type LedgerStore = {
 	staleSending(before: Date): Promise<LedgerRow[]>;
 	// sent, accepted_at avant `before`, delivery_state none, sent_row_id NULL
 	unfinalized(before: Date): Promise<LedgerRow[]>;
+	// Brouillons dont la marque d'envoi designe une ligne ni scheduled ni sending, touchee entre
+	// `since` et `before` (jointure messages -> draft_messages par la marque).
+	orphanMarks(before: Date, since: Date): Promise<OrphanMark[]>;
+};
+
+export type OrphanMark = {
+	rowId: string;
+	status: string;
+	acceptedAt: Date | null;
+	sentRowId: string | null;
+	dismissedAt: Date | null;
+	acceptanceUnknown: boolean;
+	lastError: string | null;
+	identityId: string | null;
+	draftId: string;
+	ownerId: string;
 };
 
 // Message rendu, pret a partir : `rendered` est fige sur la ligne a l'acceptation (la
@@ -63,6 +80,9 @@ export type SendDeps = {
 	finalize: (rowId: string) => Promise<unknown>;
 	// Fin d'envoi en echec sur le brouillon : marque pendingSend retiree, sendError posee.
 	markFailed: (row: LedgerRow, error: string) => Promise<unknown>;
+	// Menage d'une marque orpheline (settleActionOf) : brouillon supprime ou marque retiree, dans
+	// les deux cas seulement si la marque designe encore la ligne.
+	settleDraft?: (o: OrphanMark, action: SettleAction) => Promise<unknown>;
 	log?: (msg: string, err?: unknown) => void;
 };
 
@@ -194,16 +214,22 @@ export const FINALIZE_GRACE_MS = 2 * 60_000;
 export const INTERRUPTED_ERROR =
 	"Sending interrupted before the server answered: this message may already have been sent";
 
+// Marques orphelines cherchees sur les lignes terminees depuis 7 jours (au-dela, pendingSendLive
+// ne les compte deja plus comme verrou).
+export const ORPHAN_WINDOW_MS = 7 * 24 * 3600_000;
+
 // Balayage (demarrage du worker, puis toutes les 5 minutes) : un envoi reste « sending » plus de
 // 10 minutes sans acceptation -> interrompu (jamais renvoye) ; un envoi accepte depuis plus de
-// 2 minutes sans copie Envoyes -> finalise.
+// 2 minutes sans copie Envoyes -> finalise ; un brouillon dont la marque designe une ligne
+// terminee depuis plus de 2 minutes -> supprime (parti) ou deverrouille.
 export async function sweepLedger(
-	deps: Pick<SendDeps, "store" | "finalize" | "markFailed" | "log">,
+	deps: Pick<SendDeps, "store" | "finalize" | "markFailed" | "settleDraft" | "log">,
 	now: Date = new Date(),
-): Promise<{ interrupted: string[]; finalized: string[] }> {
+): Promise<{ interrupted: string[]; finalized: string[]; settled: string[] }> {
 	const log = deps.log ?? console.error;
 	const interrupted: string[] = [];
 	const finalized: string[] = [];
+	const settled: string[] = [];
 	for (const row of await deps.store.staleSending(new Date(now.getTime() - STALE_SENDING_MS))) {
 		try {
 			const failed = await deps.store.fail(row.id, { error: INTERRUPTED_ERROR, ambiguous: true });
@@ -222,7 +248,21 @@ export async function sweepLedger(
 			log(`[send] finalisation ${row.id}`, err);
 		}
 	}
-	return { interrupted, finalized };
+	if (deps.settleDraft) {
+		const before = new Date(now.getTime() - FINALIZE_GRACE_MS);
+		const since = new Date(now.getTime() - ORPHAN_WINDOW_MS);
+		for (const o of await deps.store.orphanMarks(before, since)) {
+			const action = settleActionOf(o);
+			if (!action) continue;
+			try {
+				await deps.settleDraft(o, action);
+				settled.push(o.rowId);
+			} catch (err) {
+				log(`[send] menage du brouillon ${o.draftId} (ligne ${o.rowId})`, err);
+			}
+		}
+	}
+	return { interrupted, finalized, settled };
 }
 
 // Job herite « send-and-reconcile » (en vol au deploiement, ancien web, desinscription,

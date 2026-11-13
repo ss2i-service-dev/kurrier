@@ -50,8 +50,17 @@ const ledgerRow = (over: Partial<LedgerRow> = {}): LedgerRow => ({
 type Smtp = { success: boolean; MessageId?: string; error?: string; response?: string; ambiguous?: boolean };
 
 // Faux monde : ledger, table messages (unique (mailbox_id, message_id)), SMTP, S3.
-const world = (rows: LedgerRow[], opts: { smtp?: (messageId: string) => Promise<Smtp> | Smtp } = {}) => {
-	const ledger = new Map(rows.map((r) => [r.id, { ...r }]));
+type Draft = { jobId: string | null; ownerId: string };
+type WorldRow = LedgerRow & { dismissedAt?: Date | null; lastError?: string | null };
+const world = (
+	rows: WorldRow[],
+	opts: { smtp?: (messageId: string) => Promise<Smtp> | Smtp; drafts?: Record<string, Draft> } = {},
+) => {
+	const ledger = new Map<string, WorldRow>(rows.map((r) => [r.id, { ...r }]));
+	// Brouillons (messages) : marque d'envoi pendingSend.jobId, par id de brouillon.
+	const drafts = new Map(Object.entries(opts.drafts ?? {}).map(([id, d]) => [id, { ...d }]));
+	const settles: string[] = [];
+	let failSettle = false;
 	const msgs: { id: string; mailboxId: string; messageId: string }[] = [];
 	const attachments: string[] = [];
 	const marks: { imapDraftId: string; error: string }[] = [];
@@ -87,6 +96,23 @@ const world = (rows: LedgerRow[], opts: { smtp?: (messageId: string) => Promise<
 			[...ledger.values()]
 				.filter((r) => r.status === "sent" && r.acceptedAt && r.acceptedAt < before && r.deliveryState === "none" && !r.sentRowId)
 				.map((r) => ({ ...r })),
+		// Jointure messages (marque -> ligne) ; lignes ni scheduled ni sending, touchees entre since et before.
+		orphanMarks: async (before, since) =>
+			[...ledger.values()]
+				.filter((r) => !["scheduled", "sending"].includes(r.status) && r.updatedAt < before && r.updatedAt > since)
+				.filter((r) => drafts.get(String(r.payload.draftMessageId))?.jobId === r.id)
+				.map((r) => ({
+					rowId: r.id,
+					status: r.status,
+					acceptedAt: r.acceptedAt,
+					sentRowId: r.sentRowId,
+					dismissedAt: r.dismissedAt ?? null,
+					acceptanceUnknown: r.acceptanceUnknown,
+					lastError: r.lastError ?? null,
+					identityId: r.identityId,
+					draftId: String(r.payload.draftMessageId),
+					ownerId: drafts.get(String(r.payload.draftMessageId))!.ownerId,
+				})),
 	};
 	const finalizeIo: FinalizeIo = {
 		transaction: async (fn) => {
@@ -141,10 +167,21 @@ const world = (rows: LedgerRow[], opts: { smtp?: (messageId: string) => Promise<
 		newMessageId: () => "<gen-1@ss2i.example>",
 		finalize: (rowId) => finalizeSent(rowId, finalizeIo),
 		markFailed: async (row, error) => void marks.push({ imapDraftId: String(row.payload.draftMessageId), error }),
+		settleDraft: async (o, action) => {
+			if (failSettle) throw new Error("db down");
+			settles.push(`${o.rowId}:${action}`);
+			if (action === "delete") drafts.delete(o.draftId);
+			else drafts.get(o.draftId)!.jobId = null;
+		},
 		log: () => {},
 	};
 	return {
 		ledger,
+		drafts,
+		settles,
+		set failSettle(v: boolean) {
+			failSettle = v;
+		},
 		msgs,
 		attachments,
 		marks,
@@ -361,6 +398,57 @@ await test("balayage : accepte depuis plus de 2 min sans copie Envoyes -> finali
 	assert.equal(w.msgs.length, 1);
 	await sweepLedger(w.deps, NOW);
 	assert.equal(w.msgs.length, 1);
+});
+
+// Marque restee sur un brouillon alors que sa ligne est terminee (crash entre le commit de la
+// finalisation et le nettoyage du brouillon, retrait de marque ou restauration en echec) : sans
+// menage, le brouillon resterait verrouille pour toujours.
+await test("balayage : marques orphelines -> brouillon supprime (parti) ou deverrouille, jamais une marque vivante", async () => {
+	const old = new Date(NOW.getTime() - 10 * 60_000);
+	const owner = "owner-1";
+	const draft = (jobId: string) => ({ jobId, ownerId: owner });
+	const row = (id: string, over: Partial<WorldRow>) =>
+		ledgerRow({ id, updatedAt: old, payload: { draftMessageId: `d-${id}` }, ...over });
+	const w = world(
+		[
+			row("parti", { status: "sent", acceptedAt: old, sentRowId: "msg-9" }),
+			row("echec", { status: "failed", lastError: "550 refused" }),
+			row("annule", { status: "canceled" }),
+			row("ecarte", { status: "sent", acceptedAt: old, sentRowId: "msg-8", dismissedAt: old, deliveryState: "rejected" }),
+			// Acceptee, copie Envoyes a venir : la finalisation supprimera le brouillon.
+			row("accepte", { status: "sent", acceptedAt: old, sentRowId: null, deliveryState: "queued" }),
+			// Trop recente : le nettoyage normal (finalisation, markFailed) peut encore passer.
+			row("recent", { status: "failed", updatedAt: NOW }),
+			row("encours", { status: "sending", updatedAt: NOW }),
+			// Le brouillon porte la marque d'un envoi plus recent.
+			row("remplace", { status: "failed" }),
+		],
+		{
+			drafts: {
+				"d-parti": draft("parti"),
+				"d-echec": draft("echec"),
+				"d-annule": draft("annule"),
+				"d-ecarte": draft("ecarte"),
+				"d-accepte": draft("accepte"),
+				"d-recent": draft("recent"),
+				"d-encours": draft("encours"),
+				"d-remplace": draft("autre-ligne"),
+			},
+		},
+	);
+	const res = await sweepLedger(w.deps, NOW);
+	assert.deepEqual(w.settles, ["parti:delete", "echec:unlock", "annule:unlock", "ecarte:unlock"]);
+	assert.deepEqual(res.settled, ["parti", "echec", "annule", "ecarte"]);
+	assert.equal(w.drafts.has("d-parti"), false);
+	assert.equal(w.drafts.get("d-echec")!.jobId, null);
+	assert.equal(w.drafts.get("d-accepte")!.jobId, "accepte");
+	assert.equal(w.drafts.get("d-recent")!.jobId, "recent");
+	assert.equal(w.drafts.get("d-remplace")!.jobId, "autre-ligne");
+	// Un second balayage ne trouve plus rien ; un menage en echec n'arrete pas le balayage.
+	assert.deepEqual((await sweepLedger(w.deps, NOW)).settled, []);
+	const w2 = world([row("echec", { status: "failed" })], { drafts: { "d-echec": draft("echec") } });
+	w2.failSettle = true;
+	assert.deepEqual((await sweepLedger(w2.deps, NOW)).settled, []);
 });
 
 await test("job herite send-and-reconcile : une seule ligne ledger, meme rejoue", async () => {

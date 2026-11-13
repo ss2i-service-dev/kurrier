@@ -3,6 +3,7 @@
 // parametre (cf. apps/web/test/outbox-cancel.ts), utilise par l'interface web, le MCP et le worker.
 import { scheduledJobOf } from "./schedule-send";
 import { sendStateOf, type LedgerStateRow, type SendState } from "./outbox-state";
+import { settleActionOf, type SettleAction } from "./draft-send";
 
 // Origine d'un envoi : delai d'annulation, envoi programme, envoi immediat (MCP, API, lien de
 // desabonnement, invitation).
@@ -103,6 +104,10 @@ export type CancelIo = {
 	// Ligne deja annulee : retire seulement la marque d'envoi du brouillon si elle designe encore
 	// cette ligne (une restauration precedente en echec l'a laissee), sans toucher au contenu.
 	unlock?: () => Promise<unknown>;
+	// Ligne terminee alors que le brouillon porte encore sa marque (settleActionOf) : brouillon
+	// supprime si l'envoi est parti avec sa copie Envoyes, marque seule retiree sinon ; dans les
+	// deux cas seulement si la marque designe encore cette ligne.
+	settle?: (action: SettleAction) => Promise<unknown>;
 };
 
 export type CancelResult = { cancelled: boolean; state: SendState | null };
@@ -111,12 +116,16 @@ export type CancelResult = { cancelled: boolean; state: SendState | null };
 // brouillon restaure ; leurs echecs ne defont pas l'annulation (le worker ne reclame qu'une ligne
 // scheduled). Deja annulee (second clic, onglet perime) : job retire et marque retiree, jamais de
 // restauration (le contenu de la ligne ecraserait un brouillon modifie depuis). Perdue, rien
-// n'est touche et l'etat reel est rendu.
+// n'est restaure et l'etat reel est rendu ; une ligne terminee remet le brouillon d'aplomb.
 export async function cancelSend(io: CancelIo): Promise<CancelResult> {
 	const won = await io.casCancel();
 	if (!won) {
 		const row = await io.readRow();
-		if (!row || row.status !== "canceled") return { cancelled: false, state: row ? sendStateOf(row) : null };
+		if (!row || row.status !== "canceled") {
+			const action = row ? settleActionOf(row) : null;
+			if (action && io.settle) await io.settle(action).catch((e) => console.error("[outbox] menage du brouillon", e));
+			return { cancelled: false, state: row ? sendStateOf(row) : null };
+		}
 	}
 	await io.removeJob().catch((e) => console.error("[outbox] retrait du job", e));
 	if (won) await io.restore().catch((e) => console.error("[outbox] restauration du brouillon", e));

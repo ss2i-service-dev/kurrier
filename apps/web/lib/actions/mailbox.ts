@@ -46,7 +46,7 @@ import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
 import { searchFilters, SEARCH_EXCLUDED_KINDS } from "@/lib/search-scope";
-import { cancelSend, enqueueSend, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendAlive, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
+import { cancelSend, enqueueSend, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendLive, deleteDraftRow, DRAFT_DELETE_JOB, draftDeleteJobOptions, type SettleAction, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import { saveDraft } from "@/lib/actions/drafts";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
@@ -476,7 +476,7 @@ export async function sendMail(
 			decodedForm.draftMessageId = draftId;
 			// ss2i : un brouillon dont l'envoi est deja en attente (delai d'annulation ou programme)
 			// ne repart pas une seconde fois et ne se reprogramme pas : on annule d'abord l'envoi.
-			if (pendingSendAlive((await draftSendStateOfMessage(draftId)).pendingSend)) {
+			if (await pendingSendLive((await draftSendStateOfMessage(draftId)).pendingSend)) {
 				return {
 					success: false,
 					error: "Ce brouillon a déjà un envoi en attente. Annulez-le d'abord.",
@@ -815,6 +815,7 @@ export async function cancelPendingSend(pendingSendId: string) {
 				// revient dans le brouillon.
 				restore: () => restoreDraftFromRow(seen, { onlyIfMissing: seen.origin === "undo" }),
 				unlock: () => unlockDraftOfRow(seen),
+				settle: (action) => settleDraftOfRow(seen, action),
 			});
 			return { cancelled: res.cancelled, state: res.state };
 		}
@@ -846,6 +847,7 @@ async function ledgerStateRowOf(rowId: string) {
 				acceptanceUnknown: draftMessages.acceptanceUnknown,
 				acceptedAt: draftMessages.acceptedAt,
 				dismissedAt: draftMessages.dismissedAt,
+				sentRowId: draftMessages.sentRowId,
 			})
 			.from(draftMessages)
 			.where(eq(draftMessages.id, rowId))
@@ -860,7 +862,28 @@ async function unlockDraftOfRow(row: { id: string; payload: Record<string, any> 
 	const draftId = await ownedDraftId(String(row.payload?.draftMessageId ?? ""));
 	if (!draftId) return;
 	if ((await draftSendStateOfMessage(draftId)).pendingSend?.jobId !== row.id) return;
-	await setDraftSendState(draftId, { pendingSend: null });
+	await setDraftSendState(draftId, { pendingSend: null }, { ifJobId: row.id });
+}
+
+// Annuler sur une ligne terminee dont le brouillon porte encore la marque (cancelSend) : parti
+// avec sa copie Envoyes, le brouillon est supprime comme apres un envoi ; sinon la marque seule
+// est retiree.
+async function settleDraftOfRow(
+	row: { id: string; payload: Record<string, any>; identity: Record<string, any> },
+	action: SettleAction,
+) {
+	if (action === "unlock") return unlockDraftOfRow(row);
+	const draftId = await ownedDraftId(String(row.payload?.draftMessageId ?? ""));
+	if (!draftId) return;
+	const ref = await deleteDraftRow({
+		ownerId: String(row.identity.ownerId),
+		draftMessageId: draftId,
+		afterSend: true,
+		ifJobId: row.id,
+	});
+	if (!ref) return;
+	const { smtpQueue } = await getRedis();
+	await smtpQueue.add(DRAFT_DELETE_JOB, ref, draftDeleteJobOptions());
 }
 
 // ss2i : « Send now » : le job en attente part tout de suite. La marque (sendAt = maintenant)

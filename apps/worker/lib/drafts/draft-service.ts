@@ -19,11 +19,11 @@
  *     convention des clients (Gmail, Thunderbird, Roundcube) pour un brouillon.
  *   sendDraft({ ownerId, identityId, draftMessageId, delayMs?, sendAt?, senderUserId? })
  *     -> { pendingSendId, undoMs, scheduledAt? }
- *     Meme chemin que le composeur (job `send-and-reconcile`, differe et annulable) ; le
- *     brouillon est supprime par send-mail.ts une fois l'envoi reussi. Avec `sendAt` (envoi
- *     programme) : ligne draft_messages « scheduled » + job `send-scheduled-draft` differe,
- *     comme le menu « Programmer l'envoi » du composeur ; le brouillon porte la marque
- *     pendingSend jusqu'a l'heure (annulable depuis courrier).
+ *     Meme chemin que le composeur : ligne ledger draft_messages « scheduled » (Boite
+ *     d'envoi) + job `send-scheduled-draft` de meme id, differe du delai d'annulation ou, avec
+ *     `sendAt` (envoi programme), jusqu'a l'heure choisie ; le brouillon porte la marque
+ *     pendingSend jusque-la (annulable depuis courrier) et est supprime par send-mail.ts une
+ *     fois l'envoi accepte.
  *
  * Jobs (file smtp-worker, un a la fois, donc jamais deux APPEND concurrents) :
  *   draft:sync   { draftMessageId }   -> syncDraftToImap
@@ -50,8 +50,8 @@ import {
 	draftDomain,
 	draftMetaOf,
 	draftSendPayload,
+	enqueueSend,
 	pendingSendAlive,
-	scheduledJobOf,
 	scheduledPendingSend,
 	validateScheduledAt,
 	draftSyncJobOptions,
@@ -62,7 +62,7 @@ import {
 } from "@common";
 import { db, draftMessages, identities, mailboxes, messages } from "@db";
 import { getServerEnv } from "@schema";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { ImapFlow } from "imapflow";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { s3 } from "../create-s3-client";
@@ -210,7 +210,7 @@ export async function sendDraft(opts: {
 	if (pendingSendAlive(row ? draftMetaOf(row)?.pendingSend : null)) {
 		throw new Error("This draft already has a send in progress; cancel it from courrier first.");
 	}
-	const { sendMailQueue } = await getRedis();
+	let sendAt: Date;
 	if (opts.sendAt) {
 		const check = validateScheduledAt(opts.sendAt);
 		if (!check.ok) {
@@ -218,70 +218,76 @@ export async function sendDraft(opts: {
 				check.reason === "past" ? "send_at is in the past." : "send_at is not a valid date.",
 			);
 		}
-		const [identity] = await db
-			.select({ workspaceId: identities.workspaceId })
-			.from(identities)
-			.where(eq(identities.id, payload.identityId));
-		if (!identity) throw new Error("Identity not found");
-		const [created] = await db
-			.insert(draftMessages)
-			.values({
-				ownerId: opts.ownerId,
-				workspaceId: identity.workspaceId,
-				identityId: payload.identityId,
-				mailboxId: payload.mailboxId,
-				status: "scheduled",
-				scheduledAt: check.at,
-				payload,
-			})
-			.returning({ id: draftMessages.id, scheduledAt: draftMessages.scheduledAt });
-		const job = scheduledJobOf({
-			id: created.id,
-			identityId: payload.identityId,
-			scheduledAt: created.scheduledAt,
-			payload,
-		});
-		try {
-			await sendMailQueue.add(job.name, job.data, job.opts);
-		} catch (e) {
-			// Sans job, la ligne ne partirait qu'au prochain demarrage du worker : on la retire.
-			await db.delete(draftMessages).where(eq(draftMessages.id, created.id));
-			throw e;
-		}
-		try {
-			await setDraftSendState(opts.draftMessageId, {
-				pendingSend: scheduledPendingSend(created),
-				sendError: null,
-			});
-		} catch (e) {
-			// Sans marque, le brouillon resterait modifiable et l'envoi invisible : on retire le job
-			// et la ligne plutot que de laisser un envoi programme sans marque.
-			await (await sendMailQueue.getJob(created.id))?.remove().catch(() => {});
-			await db.delete(draftMessages).where(eq(draftMessages.id, created.id));
-			throw new Error(
-				`Scheduling failed, nothing was scheduled: ${(e as Error)?.message ?? e}`,
-			);
-		}
-		return {
-			pendingSendId: created.id,
-			undoMs: job.opts.delay,
-			scheduledAt: check.at.toISOString(),
-		};
+		sendAt = check.at;
+	} else {
+		sendAt = new Date(Date.now() + (opts.delayMs ?? UNDO_SEND_MS));
 	}
-	const delay = opts.delayMs ?? UNDO_SEND_MS;
-	const job = await sendMailQueue.add("send-and-reconcile", payload, {
-		jobId: `undo-send-${crypto.randomUUID()}`,
-		delay,
-	});
-	// Marque « envoi en cours » : la liste Drafts et l'ouverture du brouillon l'affichent.
-	await setDraftSendState(opts.draftMessageId, {
-		pendingSend: {
-			jobId: String(job.id),
-			sendAt: new Date(Date.now() + delay).toISOString(),
+	const [identity] = await db
+		.select({ workspaceId: identities.workspaceId, value: identities.value })
+		.from(identities)
+		.where(eq(identities.id, payload.identityId));
+	if (!identity) throw new Error("Identity not found");
+	// ss2i : Boite d'envoi (OI 10519) : ligne ledger draft_messages, marque du brouillon (posee
+	// avant le job : le worker ne la retire qu'apres), puis job de meme id (packages/common/src/
+	// outbox.ts). Sans marque, un envoi programme n'est pas cree (brouillon modifiable, envoi
+	// invisible) ; un envoi differe sans marque echoue aussi, rien n'est parti.
+	const { sendMailQueue } = await getRedis();
+	const queued = await enqueueSend(
+		{
+			payload,
+			identityId: payload.identityId,
+			mailboxId: payload.mailboxId,
+			origin: opts.sendAt ? "scheduled" : "undo",
+			sendAt,
+			fromAddress: identity.value,
 		},
-		sendError: null,
-	});
-	return { pendingSendId: String(job.id), undoMs: delay, scheduledAt: undefined };
+		{
+			insertRow: async (v) => {
+				const [created] = await db
+					.insert(draftMessages)
+					.values({ ...v, ownerId: opts.ownerId, workspaceId: identity.workspaceId })
+					.returning({ id: draftMessages.id, scheduledAt: draftMessages.scheduledAt });
+				return created;
+			},
+			mark: async (row) => {
+				await setDraftSendState(opts.draftMessageId, {
+					pendingSend: scheduledPendingSend(row),
+					sendError: null,
+				});
+				return true;
+			},
+			unmark: () => setDraftSendState(opts.draftMessageId, { pendingSend: null }),
+			addJob: (name, data, jobOpts) => sendMailQueue.add(name, data, jobOpts),
+			deleteRow: (id) =>
+				db.delete(draftMessages).where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
+			// Un nouvel envoi du brouillon ecarte ses envois precedents en echec (sinon « Reessayer »
+			// sur l'ancien enverrait une seconde fois).
+			supersede: (draftId) =>
+				db
+					.update(draftMessages)
+					.set({ dismissedAt: new Date(), updatedAt: new Date() })
+					.where(
+						and(
+							eq(draftMessages.status, "failed"),
+							isNull(draftMessages.dismissedAt),
+							eq(draftMessages.identityId, payload.identityId),
+							sql`${draftMessages.payload}->>'draftMessageId' = ${draftId}`,
+						),
+					),
+		},
+	);
+	if (!queued.ok) {
+		throw new Error(
+			opts.sendAt
+				? `Scheduling failed, nothing was scheduled: ${queued.error}`
+				: `Sending failed, nothing was sent: ${queued.error}`,
+		);
+	}
+	return {
+		pendingSendId: queued.rowId,
+		undoMs: Math.max(0, queued.scheduledAt.getTime() - Date.now()),
+		scheduledAt: opts.sendAt ? queued.scheduledAt.toISOString() : undefined,
+	};
 }
 
 // ---------------------------------------------------------------------------

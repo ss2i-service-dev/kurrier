@@ -108,11 +108,44 @@ await test("enqueueSend : un nouvel envoi du meme brouillon ecarte ses echecs pr
 	assert.deepEqual(superseded, ["d-7"]);
 });
 
+await test("enqueueSend : marque du brouillon posee avant le job ; refusee -> ligne retiree sans job ; job en echec -> marque retiree", async () => {
+	// Un envoi immediat qui echoue vite (marque retiree par le worker) ne doit pas voir sa marque
+	// reposee apres coup : elle passe avant l'ajout du job.
+	const calls: string[] = [];
+	const base = {
+		insertRow: async (v: any) => (calls.push("insert"), { id: "row-4", scheduledAt: v.scheduledAt }),
+		addJob: async () => void calls.push("job"),
+		deleteRow: async () => void calls.push("delete"),
+		unmark: async () => void calls.push("unmark"),
+	};
+	const input = { payload: { draftMessageId: "d-8" }, identityId: "i-1", mailboxId: "m-1", origin: "undo" as const, sendAt: new Date(), fromAddress: "a@b.fr" };
+	const ok = await enqueueSend(input, { ...base, mark: async (row) => (calls.push(`mark:${row.id}`), true) });
+	assert.equal(ok.ok, true);
+	assert.deepEqual(calls, ["insert", "mark:row-4", "job"]);
+
+	calls.length = 0;
+	const refused = await enqueueSend(input, { ...base, mark: async () => false });
+	assert.equal(refused.ok, false);
+	assert.deepEqual(calls, ["insert", "delete"], "pas de job sans marque");
+
+	calls.length = 0;
+	const noJob = await enqueueSend(input, {
+		...base,
+		mark: async () => true,
+		addJob: async () => {
+			throw new Error("redis down");
+		},
+	});
+	assert.equal(noJob.ok, false);
+	assert.deepEqual(calls, ["insert", "delete", "unmark"]);
+});
+
 const cancelIo = (l: ReturnType<typeof ledger>, id: string, calls: string[]) => ({
 	casCancel: async () => l.cas(id, "scheduled", "canceled"),
 	readRow: async () => (l.byId.get(id) ? { ...l.byId.get(id)! } : null),
 	removeJob: async () => void calls.push("removeJob"),
 	restore: async () => void calls.push("restore"),
+	unlock: async () => void calls.push("unlock"),
 });
 
 await test("annuler contre claim du worker : un seul gagnant", async () => {
@@ -146,15 +179,16 @@ await test("annuler un envoi en cours ou parti : refus, etat reel, brouillon non
 	}
 });
 
-await test("annuler gagne : job retire puis brouillon restaure ; deja annule : deverrouillage idempotent", async () => {
+await test("annuler gagne : job retire puis brouillon restaure ; deja annule : deverrouillage seul, jamais de restauration sans CAS gagnee", async () => {
 	const l = ledger([{ id: "r", status: "scheduled", payload: {} }]);
 	const calls: string[] = [];
 	const first = await cancelSend(cancelIo(l, "r", calls));
 	assert.equal(first.cancelled, true);
 	assert.deepEqual(calls, ["removeJob", "restore"]);
+	// Second clic (onglet perime) : le contenu de la ligne ne reecrit pas un brouillon modifie depuis.
 	const again = await cancelSend(cancelIo(l, "r", calls));
 	assert.equal(again.cancelled, true);
-	assert.deepEqual(calls, ["removeJob", "restore", "removeJob", "restore"]);
+	assert.deepEqual(calls, ["removeJob", "restore", "removeJob", "unlock"]);
 	assert.equal(l.byId.get("r")!.status, "canceled");
 });
 

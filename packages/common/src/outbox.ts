@@ -3,7 +3,7 @@
 // parametre (cf. apps/web/test/outbox-cancel.ts), utilise par l'interface web, le MCP et le worker.
 import { scheduledJobOf } from "./schedule-send";
 import { sendStateOf, type LedgerStateRow, type SendState } from "./outbox-state";
-import { settleActionOf, type SettleAction } from "./draft-send";
+import { DRAFT_MAYBE_SENT_ERROR, settleActionOf, type SettleAction } from "./draft-send";
 
 // Origine d'un envoi : delai d'annulation, envoi programme, envoi immediat (MCP, API, lien de
 // desabonnement, invitation).
@@ -48,17 +48,26 @@ export type EnqueueIo = {
 	mark?: (row: { id: string; scheduledAt: Date }) => Promise<boolean>;
 	// Marque retiree quand le job n'a pas pu etre ajoute.
 	unmark?: () => Promise<unknown>;
-	// Ecarte les echecs precedents du meme brouillon (un nouvel envoi les remplace).
+	// Ecarte les echecs precedents du meme brouillon (un nouvel envoi les remplace), jamais un
+	// envoi interrompu.
 	supersede?: (imapDraftId: string) => Promise<unknown>;
+	// Le brouillon a-t-il un envoi interrompu non ecarte (failed, acceptance_unknown, jamais accepte) ?
+	interrupted?: (imapDraftId: string) => Promise<boolean>;
 };
 
 export type EnqueueResult =
 	| { ok: true; rowId: string; messageId: string; scheduledAt: Date }
-	| { ok: false; error: string };
+	| { ok: false; error: string; maybeSent?: boolean };
 
 // Ligne scheduled d'abord, puis la marque du brouillon, puis le job de meme id. Le job n'est jamais rejoue par BullMQ (un
 // renvoi apres un 250 perdu double l'envoi) : pas d'attempts. Sans job, la ligne est retiree.
+// Un brouillon dont un envoi precedent est interrompu (peut-etre parti) ne repart pas : refus
+// explicite avant toute ligne, a regler dans la Boite d'envoi.
 export async function enqueueSend(input: EnqueueInput, io: EnqueueIo, now: Date = new Date()): Promise<EnqueueResult> {
+	const draftId = input.payload?.draftMessageId;
+	if (draftId && io.interrupted && (await io.interrupted(String(draftId)))) {
+		return { ok: false, error: DRAFT_MAYBE_SENT_ERROR, maybeSent: true };
+	}
 	const uuid = io.uuid ?? (() => globalThis.crypto.randomUUID());
 	const messageId = messageIdFor(input.fromAddress, uuid());
 	const row = await io.insertRow({
@@ -87,7 +96,6 @@ export async function enqueueSend(input: EnqueueInput, io: EnqueueIo, now: Date 
 		if (io.unmark) await io.unmark().catch((e) => console.error("[outbox] marque non retiree", row.id, e));
 		return { ok: false, error: String(err?.message ?? err) };
 	}
-	const draftId = input.payload?.draftMessageId;
 	if (draftId && io.supersede) {
 		await io.supersede(String(draftId)).catch((e) => console.error("[outbox] supersede", draftId, e));
 	}

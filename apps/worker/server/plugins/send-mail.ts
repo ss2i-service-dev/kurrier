@@ -19,6 +19,7 @@ import {
 	scheduledJobOf,
 	scheduledPendingSend,
 	setDraftSendState,
+	draftSendErrorOf,
 	upsertMailboxThreadItem,
 	type QuoteOverride,
 	type QuoteScope,
@@ -654,7 +655,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 			if (!draftMessageId) return;
 			await setDraftSendState(
 				String(draftMessageId),
-				{ pendingSend: null, sendError: { message: error, at: new Date().toISOString() } },
+				{ pendingSend: null, sendError: { message: draftSendErrorOf(row, error), at: new Date().toISOString() } },
 				{ ifJobId: row.id },
 			);
 		},
@@ -676,7 +677,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 			await setDraftSendState(
 				o.draftId,
 				failed
-					? { pendingSend: null, sendError: { message: String(o.lastError), at: new Date().toISOString() } }
+					? { pendingSend: null, sendError: { message: draftSendErrorOf(o, o.lastError), at: new Date().toISOString() } }
 					: { pendingSend: null },
 				{ ifJobId: o.rowId },
 			);

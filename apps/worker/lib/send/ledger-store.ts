@@ -149,7 +149,13 @@ export async function lockLedgerRow(tx: Pick<typeof db, "select">, id: string): 
 // Ligne d'un job herite « send-and-reconcile », retrouvee par sa cle job.id:timestamp.
 export async function findByLegacyKey(key: string) {
 	const [row] = await db
-		.select({ id: draftMessages.id, status: draftMessages.status, acceptedAt: draftMessages.acceptedAt })
+		.select({
+			id: draftMessages.id,
+			status: draftMessages.status,
+			acceptedAt: draftMessages.acceptedAt,
+			acceptanceUnknown: draftMessages.acceptanceUnknown,
+			lastError: draftMessages.lastError,
+		})
 		.from(draftMessages)
 		.where(sql`${draftMessages.payload}->>'__legacyJobKey' = ${key}`)
 		.limit(1);

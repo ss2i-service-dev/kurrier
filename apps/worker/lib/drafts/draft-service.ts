@@ -52,6 +52,7 @@ import {
 	draftSendPayload,
 	enqueueSend,
 	pendingSendLive,
+	interruptedSendOf,
 	scheduledPendingSend,
 	validateScheduledAt,
 	draftSyncJobOptions,
@@ -263,7 +264,7 @@ export async function sendDraft(opts: {
 			deleteRow: (id) =>
 				db.delete(draftMessages).where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
 			// Un nouvel envoi du brouillon ecarte ses envois precedents en echec (sinon « Reessayer »
-			// sur l'ancien enverrait une seconde fois).
+			// sur l'ancien enverrait une seconde fois), jamais un envoi interrompu (peut-etre parti).
 			supersede: (draftId) =>
 				db
 					.update(draftMessages)
@@ -271,14 +272,17 @@ export async function sendDraft(opts: {
 					.where(
 						and(
 							eq(draftMessages.status, "failed"),
+							eq(draftMessages.acceptanceUnknown, false),
 							isNull(draftMessages.dismissedAt),
 							eq(draftMessages.identityId, payload.identityId),
 							sql`${draftMessages.payload}->>'draftMessageId' = ${draftId}`,
 						),
 					),
+			interrupted: (draftId) => interruptedSendOf(draftId, payload.identityId),
 		},
 	);
 	if (!queued.ok) {
+		if (queued.maybeSent) throw new Error(queued.error);
 		throw new Error(
 			opts.sendAt
 				? `Scheduling failed, nothing was scheduled: ${queued.error}`

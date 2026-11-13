@@ -4,7 +4,9 @@
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/draft-send.ts
 import assert from "node:assert/strict";
 import {
+	DRAFT_MAYBE_SENT_ERROR,
 	DRAFT_PENDING_ERROR,
+	draftSendErrorOf,
 	draftSendStateOf,
 	mergeDraftMeta,
 	pendingSendAlive,
@@ -110,6 +112,17 @@ test("settleActionOf : brouillon supprime si l'envoi a sa copie Envoyes, marque 
 	assert.equal(settleActionOf({ status: "failed", dismissedAt: at }), "unlock");
 	// Ancienne ligne « sent » d'avant le ledger (jamais acceptee ni finalisee) : la marque seule part.
 	assert.equal(settleActionOf({ status: "sent" }), "unlock");
+});
+
+// Echec dont l'issue est inconnue (interrompu, connexion coupee apres l'envoi) : l'erreur du
+// brouillon le dit, sinon un clic sur Envoyer doublerait peut-etre le mail.
+test("draftSendErrorOf : un echec d'issue inconnue dit « peut-être déjà parti »", () => {
+	assert.equal(draftSendErrorOf({ acceptanceUnknown: false }, "550 refused"), "550 refused");
+	assert.equal(
+		draftSendErrorOf({ acceptanceUnknown: true }, "Sending interrupted"),
+		`${DRAFT_MAYBE_SENT_ERROR}. Sending interrupted`,
+	);
+	assert.equal(draftSendErrorOf({ acceptanceUnknown: true }, null), DRAFT_MAYBE_SENT_ERROR);
 });
 
 test("message de refus de la garde", () => {

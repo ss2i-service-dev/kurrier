@@ -108,7 +108,7 @@ async function failRow(deps: SendDeps, row: LedgerRow, error: string, ambiguous:
 	try {
 		failed = await deps.store.fail(row.id, { error, ambiguous });
 		if (!failed) log(`[send] ${row.id}: echec non enregistre (ligne deja sortie de sending)`);
-		await deps.markFailed(failed ?? row, error);
+		await deps.markFailed(failed ?? { ...row, acceptanceUnknown: ambiguous }, error);
 	} catch (err) {
 		log(`[send] ${row.id}: enregistrement de l'echec impossible`, err);
 	}
@@ -213,6 +213,32 @@ export const STALE_SENDING_MS = 10 * 60_000;
 export const FINALIZE_GRACE_MS = 2 * 60_000;
 export const INTERRUPTED_ERROR =
 	"Sending interrupted before the server answered: this message may already have been sent";
+
+// Issue d'un envoi lue sur sa ligne ledger, pour qui attendait le job (MCP send_email) : acceptee
+// = parti ; en attente, en cours ou interrompue = peut-etre parti (ne pas renvoyer) ; echec
+// certain = refus du serveur. Sans ligne : `fallback`.
+export type LedgerOutcome = { sent: true } | { sent: false; maybeSent: boolean; error: string };
+export function ledgerOutcomeOf(
+	row: { status: string; acceptedAt: Date | null; acceptanceUnknown?: boolean | null; lastError?: string | null } | null,
+	fallback: string,
+): LedgerOutcome {
+	if (!row) return { sent: false, maybeSent: false, error: fallback };
+	if (row.acceptedAt) return { sent: true };
+	const unknown = row.status === "scheduled" || row.status === "sending" || (row.status === "failed" && !!row.acceptanceUnknown);
+	if (unknown) {
+		return {
+			sent: false,
+			maybeSent: true,
+			error: `Sending outcome unknown: the message may have been sent (see the courrier Outbox before resending)${row.lastError ? `. ${row.lastError}` : ""}`,
+		};
+	}
+	if (row.status === "canceled") return { sent: false, maybeSent: false, error: "The send was cancelled" };
+	return {
+		sent: false,
+		maybeSent: false,
+		error: row.lastError ? `The mail server refused the message: ${row.lastError}` : fallback,
+	};
+}
 
 // Marques orphelines cherchees sur les lignes terminees depuis 7 jours (au-dela, pendingSendLive
 // ne les compte deja plus comme verrou).

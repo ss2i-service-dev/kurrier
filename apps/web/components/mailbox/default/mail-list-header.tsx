@@ -259,7 +259,9 @@ function MailListHeader({
 
 	return (
 		<>
-			<div className="sticky top-0 z-10 flex items-center bg-background/95 px-3 py-2 backdrop-blur rounded-t-2xl">
+			{/* ss2i : collee sous la barre du haut (recherche, identite), elle-meme collante : en top-0
+			    elle passait dessous des le premier defilement et ses actions disparaissaient. */}
+			<div className="sticky top-[var(--ss2i-mail-header-h,0px)] z-10 flex items-center bg-background/95 px-3 py-2 backdrop-blur rounded-t-2xl">
 				{!isOnSnoozedPage && (
 					<input
 						type="checkbox"
@@ -292,7 +294,7 @@ function MailListHeader({
 					<button
 						type="button"
 						onClick={clearSelection}
-						className="ml-2 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted"
+						className="ml-2 inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-md px-2 text-xs text-muted-foreground hover:bg-muted"
 						title="Deselect all"
 						data-ss2i-shortcut="selection-clear"
 					>

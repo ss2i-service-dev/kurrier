@@ -185,10 +185,15 @@ export default function MailboxSearch({
 			<button
 				type="button"
 				{...triggerProps}
-				className="flex w-full items-center gap-2 rounded-lg border bg-background px-4 py-2.5 text-muted-foreground hover:bg-muted/30"
+				// ss2i : sur mobile, le bouton prend la place restante sur une seule ligne (il passait
+				// sur trois lignes et doublait la hauteur de la barre du haut).
+				className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border bg-background px-3 py-2 text-muted-foreground hover:bg-muted/30 md:px-4 md:py-2.5"
 			>
-				<Search className="h-4 w-4 opacity-60" />
-				<span className="text-sm">Search this mailbox (⌘K)</span>
+				<Search className="h-4 w-4 shrink-0 opacity-60" />
+				<span className="truncate text-sm">
+					Search<span className="hidden sm:inline"> this mailbox</span>
+					<span className="hidden md:inline"> (⌘K)</span>
+				</span>
 			</button>
 			)}
 

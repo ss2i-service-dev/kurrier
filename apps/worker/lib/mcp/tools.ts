@@ -39,7 +39,7 @@ import { type QuoteScope, stripQuotedText, validateScheduledAt } from "@common";
 import { attachThreadsToCompany, crmSearchCompanies, detachThreadsFromCompany, searchKnownCrmCompanies, upsertCrmCompanies } from "@common/server-client-link";
 import { isProIdentityValue } from "../crm/link-thread";
 import { findByLegacyKey } from "../send/ledger-store";
-import { ledgerOutcomeOf } from "../send/pipeline";
+import { OUTCOME_UNKNOWN, ledgerOutcomeOf, waitFailureOutcome } from "../send/pipeline";
 
 // Registre des outils de l'MCP courrier. Chaque outil recoit l'utilisateur authentifie
 // et des arguments deja validés par son schema JSON (cote client) ; il revalide ce
@@ -387,16 +387,11 @@ async function sendViaQueue(opts: {
 	} catch (e: any) {
 		// ss2i : Boite d'envoi (OI 10519). Echec ou attente depassee : l'etat vient de la ligne
 		// ledger (un envoi en cours ou interrompu est peut-etre parti, il ne faut pas le renvoyer).
-		// Sans ligne, le job n'a pas demarre : retire de la file, rien n'est parti ; s'il ne peut
-		// plus etre retire, il a demarre entre-temps.
-		const row = await findByLegacyKey(`${job.id}:${job.timestamp}`).catch(() => null);
-		if (!row) {
-			const withdrawn = await job.remove().then(() => true, () => false);
-			if (!withdrawn) {
-				throw new McpToolError("Sending outcome unknown: the message may have been sent (see the courrier Outbox before resending)");
-			}
-		}
-		const outcome = ledgerOutcomeOf(row, `Sending failed, nothing was sent: ${e?.message ?? e}`);
+		// Un job pas encore demarre est retire de la file : rien n'est parti (waitFailureOutcome).
+		const outcome = await waitFailureOutcome(
+			{ remove: () => job.remove(), findRow: () => findByLegacyKey(`${job.id}:${job.timestamp}`) },
+			`Sending failed, nothing was sent: ${e?.message ?? e}`,
+		);
 		if (outcome.sent) {
 			return { status: "sent", message_id: newMessageId, thread_id: null, subject: opts.subject ?? "", to: opts.to, cc: opts.cc, bcc: opts.bcc, attachments: attachments.length };
 		}
@@ -410,8 +405,11 @@ async function sendViaQueue(opts: {
 	if (!sentMessage) {
 		// ss2i : Boite d'envoi (OI 10519). Accepte par le serveur mais copie Envoyes reportee (le
 		// balayage du worker la reprend), ou issue non enregistree : ce n'est pas un refus.
-		const row = await findByLegacyKey(`${job.id}:${job.timestamp}`);
-		const outcome = ledgerOutcomeOf(row, "The mail server refused the message (see worker logs)");
+		const row = await findByLegacyKey(`${job.id}:${job.timestamp}`).catch(() => undefined);
+		const outcome =
+			row === undefined
+				? OUTCOME_UNKNOWN
+				: ledgerOutcomeOf(row, "The mail server refused the message (see worker logs)");
 		if (outcome.sent) {
 			return { status: "sent", message_id: newMessageId, thread_id: null, subject: opts.subject ?? "", to: opts.to, cc: opts.cc, bcc: opts.bcc, attachments: attachments.length };
 		}

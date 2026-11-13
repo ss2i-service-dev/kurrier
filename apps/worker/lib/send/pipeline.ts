@@ -268,6 +268,34 @@ export function ledgerOutcomeOf(
 	};
 }
 
+export const OUTCOME_UNKNOWN: LedgerOutcome = {
+	sent: false,
+	maybeSent: true,
+	error: "Sending outcome unknown: the message may have been sent (see the courrier Outbox before resending)",
+};
+
+// Attente d'un job d'envoi en echec ou depassee (MCP send_email) : le job est retire de la file
+// (sans effet sur un job en cours), puis la ligne relue. Elle est creee avant tout SMTP : sans
+// ligne apres un retrait reussi, rien n'est parti et rien ne partira. Ligne illisible ou job
+// impossible a retirer : issue inconnue, jamais « rien n'est parti ».
+export async function waitFailureOutcome(
+	io: { remove(): Promise<unknown>; findRow(): Promise<Parameters<typeof ledgerOutcomeOf>[0]> },
+	fallback: string,
+): Promise<LedgerOutcome> {
+	const withdrawn = await io.remove().then(
+		() => true,
+		() => false,
+	);
+	let row: Parameters<typeof ledgerOutcomeOf>[0];
+	try {
+		row = await io.findRow();
+	} catch {
+		return OUTCOME_UNKNOWN;
+	}
+	if (row) return ledgerOutcomeOf(row, fallback);
+	return withdrawn ? { sent: false, maybeSent: false, error: fallback } : OUTCOME_UNKNOWN;
+}
+
 // Marques orphelines cherchees sur les lignes terminees depuis 7 jours (au-dela, pendingSendLive
 // ne les compte deja plus comme verrou).
 export const ORPHAN_WINDOW_MS = 7 * 24 * 3600_000;

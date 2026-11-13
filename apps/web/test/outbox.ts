@@ -171,12 +171,25 @@ test("migration ss2i_009 : index unique partiel sur (identity_id, message_id)", 
 	);
 });
 
+const updates = code.match(/UPDATE\s+(public\.)?draft_messages[\s\S]*?;/gi) ?? [];
+
 test("migration ss2i_009 : seuls les echecs d'avant le ledger sont ecartes, meme rejouee", () => {
-	const update = code.match(/UPDATE\s+(public\.)?draft_messages[\s\S]*?;/i)?.[0] ?? "";
+	const update = updates.find((u) => /SET\s+dismissed_at\s*=\s*now\(\)\s+WHERE/i.test(u)) ?? "";
 	assert.match(update, /SET\s+dismissed_at\s*=\s*now\(\)/i);
 	assert.match(update, /status\s*=\s*'failed'/i);
 	assert.match(update, /message_id IS NULL/i, "un echec du ledger (message_id pose) reste visible");
 	assert.match(update, /dismissed_at IS NULL/i);
+});
+
+// Ligne « sending » laissee par l'ancien worker (sans message_id) : le balayage ne la reprend pas
+// (staleSending exige message_id), la migration la passe en echec interrompu (peut-etre parti),
+// ecarte de la Boite d'envoi.
+test("migration ss2i_009 : une ligne sending d'avant le ledger passe en echec interrompu ecarte, meme rejouee", () => {
+	const update = updates.find((u) => /WHERE\s+status\s*=\s*'sending'/i.test(u)) ?? "";
+	assert.match(update, /status\s*=\s*'failed'/i);
+	assert.match(update, /acceptance_unknown\s*=\s*true/i);
+	assert.match(update, /dismissed_at\s*=\s*now\(\)/i);
+	assert.match(update, /message_id IS NULL/i, "un envoi du ledger en cours n'est pas touche");
 });
 
 if (failures) {

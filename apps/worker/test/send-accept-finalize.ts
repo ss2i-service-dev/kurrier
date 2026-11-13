@@ -14,6 +14,7 @@ import {
 	legacyLedgerRow,
 	ledgerOutcomeOf,
 	runSend,
+	waitFailureOutcome,
 	sweepLedger,
 	type FinalizeIo,
 	type LedgerRow,
@@ -510,6 +511,37 @@ await test("ledgerOutcomeOf : issue d'un envoi lue sur sa ligne", () => {
 	const refused = ledgerOutcomeOf({ status: "failed", acceptedAt: null, acceptanceUnknown: false, lastError: "550 5.7.1 denied" }, fallback);
 	assert.deepEqual(refused, { sent: false, maybeSent: false, error: "The mail server refused the message: 550 5.7.1 denied" });
 	assert.deepEqual(ledgerOutcomeOf({ status: "canceled", acceptedAt: null }, fallback), { sent: false, maybeSent: false, error: "The send was cancelled" });
+});
+
+// MCP send_email, attente en echec : « rien n'est parti » seulement si le job est retire de la file
+// ET qu'aucune ligne n'existe apres le retrait (la ligne est creee avant tout SMTP) ; une lecture
+// de la ligne en erreur ou un job impossible a retirer (en cours) = issue inconnue.
+await test("waitFailureOutcome : rien n'est parti seulement quand c'est prouve", async () => {
+	const fallback = "Sending failed, nothing was sent: timeout";
+	const order: string[] = [];
+	const io = (removeOk: boolean, row: any, lookupFails = false) => ({
+		remove: async () => {
+			order.push("remove");
+			if (!removeOk) throw new Error("locked");
+		},
+		findRow: async () => {
+			order.push("find");
+			if (lookupFails) throw new Error("db down");
+			return row;
+		},
+	});
+	assert.deepEqual(await waitFailureOutcome(io(true, null), fallback), { sent: false, maybeSent: false, error: fallback });
+	assert.deepEqual(order, ["remove", "find"], "ligne relue APRES le retrait");
+	for (const [label, o] of [
+		["job en cours, pas encore de ligne", await waitFailureOutcome(io(false, null), fallback)],
+		["lecture de la ligne en erreur", await waitFailureOutcome(io(true, null, true), fallback)],
+		["job fini entre-temps, ligne sending", await waitFailureOutcome(io(true, { status: "sending", acceptedAt: null }), fallback)],
+	] as const) {
+		assert.equal(o.sent, false, label);
+		assert.equal(!o.sent && o.maybeSent, true, label);
+		assert.match(!o.sent ? o.error : "", /may have been sent/, label);
+	}
+	assert.deepEqual(await waitFailureOutcome(io(true, { status: "sent", acceptedAt: new Date() }), fallback), { sent: true });
 });
 
 await test("job herite send-and-reconcile : une seule ligne ledger, meme rejoue", async () => {

@@ -58,8 +58,9 @@ export default function WebmailList({
 	const shownThreads = serverThreads.filter(
 		(t) => !isHidden(String(t.mailboxId), String(t.threadId)),
 	);
-	// ss2i : dans Drafts, les brouillons dont l'envoi est dans la Boite d'envoi (en attente, en
-	// cours, en echec) n'y figurent plus : ils sont dans la Boite d'envoi (OI 10519).
+	// ss2i : dans Drafts, les brouillons dont l'envoi est en attente ou en cours n'y figurent plus :
+	// ils sont dans la Boite d'envoi (OI 10519). Un envoi en echec retire sa marque (pipeline
+	// markFailed) : le brouillon revient dans Drafts avec l'erreur, et reste aussi dans la Boite d'envoi.
 	const outboxIds = new Set(outboxIdsPromise ? use(outboxIdsPromise) : []);
 	const mailboxThreads =
 		activeMailbox.kind === "drafts" ? shownThreads.filter((t) => !inOutbox(t.draftSend, outboxIds)) : shownThreads;

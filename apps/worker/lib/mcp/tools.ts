@@ -38,6 +38,7 @@ import { pickSenderIdentity } from "./sender-identity";
 import { type QuoteScope, stripQuotedText, validateScheduledAt } from "@common";
 import { attachThreadsToCompany, crmSearchCompanies, detachThreadsFromCompany, searchKnownCrmCompanies, upsertCrmCompanies } from "@common/server-client-link";
 import { isProIdentityValue } from "../crm/link-thread";
+import { findByLegacyKey } from "../send/ledger-store";
 
 // Registre des outils de l'MCP courrier. Chaque outil recoit l'utilisateur authentifie
 // et des arguments deja validés par son schema JSON (cote client) ; il revalide ce
@@ -249,7 +250,8 @@ const replyRecipients = (m: Message, own: string[]) => {
 };
 
 // ---------------------------------------------------------------------------
-// Envoi : memes jobs que l'interface (send-and-reconcile)
+// Envoi : job send-and-reconcile, qui recoit sa ligne ledger draft_messages au depart
+// (origine direct, Boite d'envoi) puis suit le meme pipeline que l'interface
 // ---------------------------------------------------------------------------
 
 type UploadedAttachment = {
@@ -390,6 +392,15 @@ async function sendViaQueue(opts: {
 		.where(eq(messages.id, newMessageId))
 		.limit(1);
 	if (!sentMessage) {
+		// ss2i : Boite d'envoi (OI 10519). Accepte par le serveur mais copie Envoyes reportee (le
+		// balayage du worker la reprend), ou issue non enregistree : ce n'est pas un refus.
+		const row = await findByLegacyKey(`${job.id}:${job.timestamp}`);
+		if (row?.acceptedAt) {
+			return { status: "sent", message_id: newMessageId, thread_id: null, subject: opts.subject ?? "", to: opts.to, cc: opts.cc, bcc: opts.bcc, attachments: attachments.length };
+		}
+		if (row?.status === "sending") {
+			throw new McpToolError("Sending outcome unknown: the message may have been sent (see the courrier Outbox before resending)");
+		}
 		throw new McpToolError("The mail server refused the message (see worker logs)");
 	}
 	return {

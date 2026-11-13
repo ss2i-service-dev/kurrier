@@ -46,7 +46,7 @@ import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
 import { searchFilters, SEARCH_EXCLUDED_KINDS } from "@/lib/search-scope";
-import { extractListUnsubscribe, imapDraftIdOfJob, pendingSendAlive, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
+import { cancelSend, enqueueSend, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendAlive, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import { saveDraft } from "@/lib/actions/drafts";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
@@ -504,6 +504,8 @@ export async function sendMail(
 	const scheduledAtRaw = decodedForm.scheduledAt
 		? String(decodedForm.scheduledAt)
 		: "";
+	let origin: "scheduled" | "undo" = "undo";
+	let sendAt = new Date();
 	if (scheduledAtRaw) {
 		// ss2i : une heure deja passee de plus d'une minute est refusee (elle partirait tout de
 		// suite, sans que l'utilisateur l'ait voulu).
@@ -518,93 +520,99 @@ export async function sendMail(
 			};
 		}
 
-		const parsed = DraftMessageInsertSchema.safeParse({
-			identityId: identity.id,
-			mailboxId: decodedForm.mailboxId,
+		origin = "scheduled";
+		sendAt = check.at;
+	}
+
+	// ss2i : Boite d'envoi (OI 10519). Tout envoi de l'interface est une ligne ledger
+	// draft_messages, puis la marque du brouillon, puis un job de meme id (packages/common/src/
+	// outbox.ts) : programme a l'heure choisie, ou differe du delai d'annulation choisi par
+	// l'utilisateur (Parametres > Redaction, 0 = envoi immediat). « Undo » et « Send now » passent
+	// par la ligne ; cote serveur, donc fermer l'onglet n'empeche pas l'envoi.
+	const undoMs = origin === "undo" ? (await undoSendSeconds()) * 1000 : 0;
+	if (origin === "undo") sendAt = new Date(Date.now() + undoMs);
+	const imapDraftId = decodedForm.draftMessageId ? String(decodedForm.draftMessageId) : null;
+	const { sendMailQueue } = await getRedis();
+	const queued = await enqueueSend(
+		{
 			payload: decodedForm,
-			status: "scheduled",
-			scheduledAt: check.at,
-		});
-
-		if (!parsed.success) {
-			return {
-				success: false,
-				error: "There was an error trying to schedule your mail.",
-			};
-		}
-
-		const row = await rls(async (tx) => {
-			const [created] = await tx
-				.insert(draftMessages)
-				.values(parsed.data)
-				.returning({
-					id: draftMessages.id,
-					scheduledAt: draftMessages.scheduledAt,
-				});
-			return created ?? null;
-		});
-
-		if (!row?.id || !row.scheduledAt) {
-			return { success: false, error: "Failed to schedule your mail." };
-		}
-
-		const { sendMailQueue } = await getRedis();
-		const job = scheduledJobOf(
-			{ id: row.id, identityId: identity.id, scheduledAt: row.scheduledAt, payload: decodedForm },
-		);
-		try {
-			await sendMailQueue.add(job.name, job.data, job.opts);
-		} catch (e) {
-			// Sans job, la ligne ne partirait qu'au prochain demarrage du worker : on la retire.
-			await rls((tx) => tx.delete(draftMessages).where(eq(draftMessages.id, row.id)));
-			console.error("[send] scheduling enqueue failed", e);
-			return { success: false, error: "Failed to schedule your mail." };
-		}
-		// Le brouillon d'origine porte la marque d'envoi (section Outbox de Drafts, ouverture
-		// remplacee par la banniere, plus de modification silencieusement perdue).
-		if (!(await markDraftScheduled(job.data.imapDraftId, scheduledPendingSend(row)))) {
-			// Pas d'envoi programme sans marque : le brouillon resterait modifiable et l'envoi
-			// invisible. On retire le job et la ligne.
-			try {
-				await (await sendMailQueue.getJob(row.id))?.remove();
-			} catch {
-				// job deja pris : la ligne retiree ci-dessous l'empeche de partir
-			}
-			await rls((tx) => tx.delete(draftMessages).where(eq(draftMessages.id, row.id)));
-			return { success: false, error: "Failed to schedule your mail." };
-		}
-		revalidatePath("/dashboard/mail");
+			identityId: identity.id,
+			mailboxId: String(decodedForm.mailboxId),
+			origin,
+			sendAt,
+			fromAddress: identity.value,
+		},
+		{
+			insertRow: async (v) => {
+				const values = DraftMessageInsertSchema.parse(v);
+				const [created] = await rls((tx) =>
+					tx
+						.insert(draftMessages)
+						.values(values)
+						.returning({ id: draftMessages.id, scheduledAt: draftMessages.scheduledAt }),
+				);
+				if (!created?.id) throw new Error("send row not created");
+				return created;
+			},
+			// Le brouillon d'origine porte la marque d'envoi (section Boite d'envoi, ouverture
+			// remplacee par la banniere, plus de modification silencieusement perdue). Un envoi
+			// programme sans marque n'est pas cree ; un envoi differe part meme sans marque.
+			mark: async (row) =>
+				origin === "scheduled"
+					? markDraftScheduled(imapDraftId, scheduledPendingSend(row))
+					: (await markDraftPending(imapDraftId ?? "", row.id, undoMs), true),
+			unmark: async () => {
+				const id = imapDraftId ? await ownedDraftId(imapDraftId) : null;
+				if (id) await setDraftSendState(id, { pendingSend: null });
+			},
+			addJob: (name, data, opts) => sendMailQueue.add(name, data, opts),
+			deleteRow: (id) =>
+				rls((tx) =>
+					tx
+						.delete(draftMessages)
+						.where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
+				),
+			supersede: (draftId) => supersedeFailedSends(draftId),
+		},
+	).catch((e: any) => ({ ok: false as const, error: String(e?.message ?? e) }));
+	if (!queued.ok) {
+		console.error("[send] enqueue failed", queued.error);
+		return {
+			success: false,
+			error: origin === "scheduled" ? "Failed to schedule your mail." : "Failed to send your mail. Nothing was sent.",
+		};
+	}
+	revalidatePath("/dashboard/mail");
+	if (origin === "scheduled") {
 		return {
 			success: true,
 			message: "Message scheduled",
-			data: {
-				draftMessageId: row.id,
-				scheduledAt: new Date(row.scheduledAt).toISOString(),
-			},
+			data: { draftMessageId: queued.rowId, scheduledAt: queued.scheduledAt.toISOString() },
 		};
 	}
-
-	// ss2i : annulation d'envoi. Le job part avec un delai : l'interface propose « Undo »
-	// (retrait du job) et « Send now » (promotion du job) pendant ce delai. Cote serveur,
-	// donc fermer l'onglet n'empeche pas l'envoi.
-	// Delai choisi par l'utilisateur (Parametres > Redaction), 0 = envoi immediat.
-	const undoMs = (await undoSendSeconds()) * 1000;
-	const { sendMailQueue } = await getRedis();
-	const job = await sendMailQueue.add("send-and-reconcile", decodedForm, {
-		jobId: `undo-send-${crypto.randomUUID()}`,
-		delay: undoMs,
-	});
-	// Le brouillon d'origine porte la marque « envoi en cours » (liste Drafts, ouverture).
-	await markDraftPending(
-		String(decodedForm.draftMessageId ?? ""),
-		String(job.id),
-		undoMs,
-	);
 	return {
 		success: true,
 		message: "Message sent",
-		data: { pendingSendId: String(job.id), undoMs },
+		data: { pendingSendId: queued.rowId, undoMs },
 	};
+}
+
+// ss2i : un nouvel envoi d'un brouillon ecarte de la Boite d'envoi ses envois precedents en
+// echec (sinon « Reessayer » sur l'ancien enverrait une seconde fois). RLS : lignes visibles.
+async function supersedeFailedSends(imapDraftId: string) {
+	const rls = await rlsClient();
+	await rls((tx) =>
+		tx
+			.update(draftMessages)
+			.set({ dismissedAt: new Date(), updatedAt: new Date() })
+			.where(
+				and(
+					eq(draftMessages.status, "failed"),
+					isNull(draftMessages.dismissedAt),
+					sql`${draftMessages.payload}->>'draftMessageId' = ${imapDraftId}`,
+				),
+			),
+	);
 }
 
 // ss2i : le brouillon n'est touche que s'il est visible de l'utilisateur : RLS et identite
@@ -700,6 +708,7 @@ async function scheduledRowOf(rowId: string) {
 				id: draftMessages.id,
 				identityId: draftMessages.identityId,
 				status: draftMessages.status,
+				origin: draftMessages.origin,
 				scheduledAt: draftMessages.scheduledAt,
 				payload: draftMessages.payload,
 			})
@@ -773,36 +782,84 @@ async function restoreDraftFromRow(
 	return saved.draftMessageId;
 }
 
-// ss2i : « Undo » d'un envoi encore en attente. Rend le formulaire si le job a bien ete
-// retire ; s'il est deja parti (ou en cours d'envoi), on ne peut plus rien faire. Un envoi
-// programme dont le job Redis a disparu (purge, reprise manquee) s'annule par sa ligne
-// draft_messages (jobId = id de la ligne) ; le contenu envoye revient dans le brouillon.
+// ss2i : « Undo » d'un envoi encore en attente. Un envoi suivi par sa ligne draft_messages
+// (jobId = id de la ligne : delai d'annulation, envoi programme) s'annule par la ligne : CAS
+// scheduled -> canceled avant tout retrait de job et toute restauration du brouillon
+// (cancelSend) ; perdue, l'etat reel est rendu (deja parti, en cours d'envoi). Un ancien job
+// differe « undo-send-* » (en vol au deploiement) se retire tant qu'il attend.
 export async function cancelPendingSend(pendingSendId: string) {
-	const job = await ownedPendingSend(pendingSendId);
+	const id = String(pendingSendId);
 	try {
-		if (!job || job.name === SCHEDULED_JOB) {
-			const row = await cancelScheduledRow(String(pendingSendId));
-			if (!row) return { cancelled: false as const };
-			try {
-				await restoreDraftFromRow(row);
-			} catch (e) {
-				// La ligne annulee garde le contenu ; le brouillon reste lisible, sans marque.
-				console.error("[send] restore of scheduled content failed", e);
-			}
-			return { cancelled: true as const };
+		const seen = await scheduledRowOf(id);
+		if (seen) {
+			const rls = await rlsClient();
+			const res = await cancelSend({
+				casCancel: async () => {
+					const [row] = await rls((tx) =>
+						tx
+							.update(draftMessages)
+							.set({ status: "canceled", updatedAt: new Date() })
+							.where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled")))
+							.returning({ id: draftMessages.id }),
+					);
+					return row ?? null;
+				},
+				readRow: () => ledgerStateRowOf(id),
+				removeJob: async () => {
+					const { sendMailQueue } = await getRedis();
+					await (await sendMailQueue.getJob(id))?.remove();
+				},
+				// Delai d'annulation : le brouillon est reste en place, seule sa marque est retiree
+				// (recree depuis la ligne s'il a disparu). Envoi programme : le contenu envoye
+				// revient dans le brouillon.
+				restore: () => restoreDraftFromRow(seen, { onlyIfMissing: seen.origin === "undo" }),
+				unlock: () => unlockDraftOfRow(seen),
+			});
+			return { cancelled: res.cancelled, state: res.state };
 		}
-		if ((await job.getState()) !== "delayed") return { cancelled: false as const };
+		const job = await ownedPendingSend(id);
+		if (!job || job.name === SCHEDULED_JOB) return { cancelled: false as const, state: null };
+		if ((await job.getState()) !== "delayed") return { cancelled: false as const, state: null };
 		await job.remove();
 		try {
-			const id = await ownedDraftId(imapDraftIdOfJob(job.name, job.data));
-			if (id) await setDraftSendState(id, { pendingSend: null });
+			const draftId = await ownedDraftId(imapDraftIdOfJob(job.name, job.data));
+			if (draftId) await setDraftSendState(draftId, { pendingSend: null });
 		} catch (e) {
 			console.error("[send] pendingSend clear failed", e);
 		}
-		return { cancelled: true as const };
-	} catch {
-		return { cancelled: false as const };
+		return { cancelled: true as const, state: "canceled" as const };
+	} catch (e) {
+		console.error("[send] cancel failed", e);
+		return { cancelled: false as const, state: null };
 	}
+}
+
+// Etat d'une ligne ledger deja controlee par scheduledRowOf.
+async function ledgerStateRowOf(rowId: string) {
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({
+				status: draftMessages.status,
+				deliveryState: draftMessages.deliveryState,
+				acceptanceUnknown: draftMessages.acceptanceUnknown,
+				acceptedAt: draftMessages.acceptedAt,
+				dismissedAt: draftMessages.dismissedAt,
+			})
+			.from(draftMessages)
+			.where(eq(draftMessages.id, rowId))
+			.limit(1),
+	);
+	return row ?? null;
+}
+
+// Ligne deja annulee (second clic) : la marque du brouillon n'est retiree que si elle designe
+// encore cette ligne ; le contenu n'est pas touche.
+async function unlockDraftOfRow(row: { id: string; payload: Record<string, any> }) {
+	const draftId = await ownedDraftId(String(row.payload?.draftMessageId ?? ""));
+	if (!draftId) return;
+	if ((await draftSendStateOfMessage(draftId)).pendingSend?.jobId !== row.id) return;
+	await setDraftSendState(draftId, { pendingSend: null });
 }
 
 // ss2i : « Send now » : le job en attente part tout de suite. La marque (sendAt = maintenant)
@@ -839,13 +896,18 @@ export async function sendPendingNow(pendingSendId: string) {
 // d'un onglet passent une par une, attendre ici bloquerait toutes les autres.
 export async function waitPendingSend(pendingSendId: string): Promise<FormState> {
 	const job = await ownedPendingSend(pendingSendId);
-	if (!job) return {};
-	const { sendMailEvents } = await getRedis();
-	try {
-		return (await job.waitUntilFinished(sendMailEvents, 120_000)) ?? {};
-	} catch (e: any) {
-		return { error: e?.message ?? "Sending failed" };
+	if (job) {
+		const { sendMailEvents } = await getRedis();
+		try {
+			return (await job.waitUntilFinished(sendMailEvents, 120_000)) ?? {};
+		} catch (e: any) {
+			return { error: e?.message ?? "Sending failed" };
+		}
 	}
+	// Job deja retire de Redis : l'issue est sur la ligne ledger (Boite d'envoi).
+	const row = await scheduledRowOf(String(pendingSendId));
+	if (row?.status === "failed") return { error: String(row.payload?.__error ?? "Sending failed") };
+	return {};
 }
 
 export const deltaFetch = async ({ identityId: requestedId }: { identityId: string }) => {
@@ -2019,6 +2081,222 @@ export async function deleteScheduledDraft(
 		revalidatePath("/dashboard/mail");
 		return { success: true };
 	});
+}
+
+// ss2i : Boite d'envoi (OI 10519). Envois en attente, en cours, et echecs non ecartes, lus sur
+// le ledger draft_messages (etats : packages/common/src/outbox-state.ts). Candidats en SQL,
+// visibilite exacte par isOutboxVisible.
+const outboxCandidate = or(
+	inArray(draftMessages.status, ["scheduled", "sending"]),
+	and(eq(draftMessages.status, "failed"), isNull(draftMessages.dismissedAt)),
+	and(eq(draftMessages.status, "sent"), notInArray(draftMessages.deliveryState, ["none", "delivered"])),
+);
+
+const outboxStateCols = {
+	id: draftMessages.id,
+	identityId: draftMessages.identityId,
+	status: draftMessages.status,
+	deliveryState: draftMessages.deliveryState,
+	acceptanceUnknown: draftMessages.acceptanceUnknown,
+	acceptedAt: draftMessages.acceptedAt,
+	dismissedAt: draftMessages.dismissedAt,
+};
+
+// Compteur de la barre laterale, par identite visible de l'utilisateur : total des envois
+// visibles et nombre d'alertes (echec, interrompu). Ni contenu ni destinataires.
+export type OutboxCount = { identityId: string; total: number; alert: number };
+
+export const fetchOutboxCounts = async (): Promise<OutboxCount[]> => {
+	const rls = await rlsClient();
+	const rows = await rls((tx) =>
+		tx
+			.select(outboxStateCols)
+			.from(draftMessages)
+			.innerJoin(identities, eq(draftMessages.identityId, identities.id))
+			.where(outboxCandidate),
+	);
+	const byIdentity = new Map<string, typeof rows>();
+	for (const r of rows) {
+		if (!r.identityId) continue;
+		byIdentity.set(r.identityId, [...(byIdentity.get(r.identityId) ?? []), r]);
+	}
+	return [...byIdentity].map(([identityId, list]) => ({ identityId, ...outboxCountOf(list) }));
+};
+
+export type OutboxItem = {
+	id: string;
+	state: SendState;
+	actions: OutboxActions;
+	origin: string;
+	subject: string;
+	to: string[];
+	scheduledAt: string | null;
+	updatedAt: string;
+	error: string | null;
+	draftMessageId: string | null;
+};
+
+const iso = (d: Date | string | null | undefined) => (d == null ? null : new Date(d).toISOString());
+
+// Liste de la Boite d'envoi d'une identite : echecs d'abord (a traiter), puis en cours, puis en
+// attente par heure d'envoi. Le contenu du message reste sur le serveur.
+export const fetchOutbox = async (identityPublicId: string): Promise<OutboxItem[]> => {
+	const rls = await rlsClient();
+	const [identity] = await rls((tx) =>
+		tx.select({ id: identities.id }).from(identities).where(eq(identities.publicId, identityPublicId)),
+	);
+	if (!identity) return [];
+	const rows = await rls((tx) =>
+		tx
+			.select({
+				...outboxStateCols,
+				origin: draftMessages.origin,
+				scheduledAt: draftMessages.scheduledAt,
+				updatedAt: draftMessages.updatedAt,
+				lastError: draftMessages.lastError,
+				subject: sql<string | null>`${draftMessages.payload}->>'subject'`,
+				to: sql<unknown>`${draftMessages.payload}->'to'`,
+				draftMessageId: sql<string | null>`${draftMessages.payload}->>'draftMessageId'`,
+				legacyError: sql<string | null>`${draftMessages.payload}->>'__error'`,
+			})
+			.from(draftMessages)
+			.where(and(eq(draftMessages.identityId, identity.id), outboxCandidate)),
+	);
+	const rank: Partial<Record<SendState, number>> = { failed: 0, interrupted: 0, rejected: 0, unknown: 1, canceling: 1, sending: 2, queued: 2, pending: 3 };
+	return rows
+		.filter((r) => isOutboxVisible(r))
+		.map((r) => ({
+			id: r.id,
+			state: sendStateOf(r)!,
+			actions: outboxActionsOf(r),
+			origin: r.origin,
+			subject: String(r.subject ?? ""),
+			to: toArray(r.to as any),
+			scheduledAt: iso(r.scheduledAt),
+			updatedAt: iso(r.updatedAt)!,
+			error: r.lastError ?? r.legacyError ?? null,
+			draftMessageId: r.draftMessageId ?? null,
+		}))
+		.sort(
+			(a, b) =>
+				(rank[a.state] ?? 9) - (rank[b.state] ?? 9) ||
+				String(a.scheduledAt ?? a.updatedAt).localeCompare(String(b.scheduledAt ?? b.updatedAt)),
+		);
+};
+
+// « Reessayer » un envoi en echec : CAS failed -> scheduled, jamais apres une acceptation par le
+// serveur ; un envoi interrompu (peut-etre parti) demande confirmation. Refuse si le brouillon a
+// ete modifie depuis l'echec (on enverrait l'ancien contenu). L'ancien job de meme id est retire
+// (BullMQ ignorerait l'ajout), puis le job repart sans delai ; en cas d'echec, la ligne revient
+// en echec.
+export async function retryOutboxSend(
+	rowId: string,
+	opts: { confirmed?: boolean } = {},
+): Promise<{ ok: boolean; needsConfirm?: boolean; error?: string }> {
+	const seen = await scheduledRowOf(String(rowId));
+	if (!seen) return { ok: false, error: "Envoi introuvable." };
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({ ...outboxStateCols, updatedAt: draftMessages.updatedAt, lastError: draftMessages.lastError })
+			.from(draftMessages)
+			.where(eq(draftMessages.id, seen.id))
+			.limit(1),
+	);
+	if (!row || !outboxActionsOf(row).retry) return { ok: false, error: "Cet envoi ne peut pas être réessayé." };
+	if (outboxActionsOf(row).confirmRetry && !opts.confirmed) return { ok: false, needsConfirm: true };
+	const draftId = await ownedDraftId(String(seen.payload?.draftMessageId ?? ""));
+	if (draftId) {
+		const [draft] = await rls((tx) =>
+			tx
+				.select({ metaData: messages.metaData, createdAt: messages.createdAt, updatedAt: messages.updatedAt })
+				.from(messages)
+				.where(eq(messages.id, draftId))
+				.limit(1),
+		);
+		const savedAt = draft ? draftTimesOf(draft as any).savedAt : null;
+		if (savedAt && new Date(savedAt).getTime() > new Date(row.updatedAt).getTime()) {
+			return { ok: false, error: "Le brouillon a été modifié depuis l'échec : ouvrez-le et envoyez-le à nouveau." };
+		}
+	}
+	const now = new Date();
+	const [won] = await rls((tx) =>
+		tx
+			.update(draftMessages)
+			.set({ status: "scheduled", scheduledAt: now, acceptanceUnknown: false, lastError: null, updatedAt: now })
+			.where(
+				and(
+					eq(draftMessages.id, seen.id),
+					eq(draftMessages.status, "failed"),
+					isNull(draftMessages.acceptedAt),
+					isNull(draftMessages.dismissedAt),
+					opts.confirmed ? sql`true` : eq(draftMessages.acceptanceUnknown, false),
+				),
+			)
+			.returning({ id: draftMessages.id }),
+	);
+	if (!won) return { ok: false, error: "Cet envoi a changé d'état entre-temps." };
+	const revert = async () => {
+		await rls((tx) =>
+			tx
+				.update(draftMessages)
+				.set({ status: "failed", acceptanceUnknown: row.acceptanceUnknown, lastError: row.lastError, updatedAt: new Date() })
+				.where(and(eq(draftMessages.id, seen.id), eq(draftMessages.status, "scheduled"))),
+		);
+		if (draftId) await setDraftSendState(draftId, { pendingSend: null });
+	};
+	try {
+		if (draftId) {
+			await setDraftSendState(draftId, {
+				pendingSend: { jobId: seen.id, sendAt: now.toISOString() },
+				sendError: null,
+			});
+		}
+		const { sendMailQueue } = await getRedis();
+		// Un job encore actif (worker bloque) refuse le retrait : on ne relance pas.
+		await (await sendMailQueue.getJob(seen.id))?.remove();
+		const job = scheduledJobOf({ id: seen.id, identityId: seen.identityId, scheduledAt: now, payload: seen.payload });
+		await sendMailQueue.add(job.name, job.data, { ...job.opts, delay: 0 });
+	} catch (e) {
+		console.error("[outbox] retry failed", e);
+		await revert().catch((err) => console.error("[outbox] retry revert failed", err));
+		return { ok: false, error: "Nouvel essai impossible pour le moment." };
+	}
+	revalidatePath("/dashboard/mail");
+	return { ok: true };
+}
+
+// « Remettre en brouillon » : l'echec est ecarte de la Boite d'envoi (CAS sur dismissed_at), puis
+// le brouillon est retrouve tel quel, ou recree depuis la ligne s'il a disparu.
+export async function dismissOutboxSend(rowId: string): Promise<{ ok: boolean; error?: string }> {
+	const seen = await scheduledRowOf(String(rowId));
+	if (!seen) return { ok: false, error: "Envoi introuvable." };
+	const rls = await rlsClient();
+	const [won] = await rls((tx) =>
+		tx
+			.update(draftMessages)
+			.set({ dismissedAt: new Date(), updatedAt: new Date() })
+			.where(
+				and(
+					eq(draftMessages.id, seen.id),
+					isNull(draftMessages.dismissedAt),
+					or(
+						eq(draftMessages.status, "failed"),
+						and(eq(draftMessages.status, "sent"), eq(draftMessages.deliveryState, "rejected")),
+					),
+				),
+			)
+			.returning({ id: draftMessages.id }),
+	);
+	if (!won) return { ok: false, error: "Cet envoi a changé d'état entre-temps." };
+	try {
+		await restoreDraftFromRow(seen, { onlyIfMissing: true });
+	} catch (e) {
+		console.error("[outbox] draft restore on dismiss failed", e);
+		return { ok: false, error: "Envoi écarté, mais le brouillon n'a pas pu être recréé." };
+	}
+	revalidatePath("/dashboard/mail");
+	return { ok: true };
 }
 
 export async function snoozeThread(input: {

@@ -22,10 +22,12 @@ import { syncServerCounts, useMailStore } from "@/components/k/mail-store";
 import {
 	FetchIdentityMailboxListResult,
 	FetchMailboxUnreadCountsResult,
-	ScheduledDraftCount,
+	type OutboxCount,
 } from "@/lib/actions/mailbox";
 import { MailboxKind } from "@schema";
-import { showsSidebarCount } from "@/lib/folder-unread-counts";
+import { outboxSidebarCount, showsSidebarCount } from "@/lib/folder-unread-counts";
+import { outboxSlot } from "@/lib/outbox-view";
+import { useOutboxRefresh } from "@/components/mailbox/default/outbox-list";
 import {
 	IdentityEntity,
 	MailboxEntity,
@@ -126,23 +128,16 @@ function buildTree(
 
 function IdentityExtraCounts({
 								 identity,
-								 scheduledDraftsPromise,
 								 snoozedThreadsPromise,
 								 workspacePublicId,
 								 currentSlug,
 							 }: {
 	identity: IdentityEntity;
-	scheduledDraftsPromise: Promise<ScheduledDraftCount[]>;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
 	workspacePublicId: string | undefined;
 	currentSlug: string;
 }) {
-	const scheduledDrafts = use(scheduledDraftsPromise);
 	const { threads: snoozedThreads } = use(snoozedThreadsPromise);
-
-	const scheduledCount = scheduledDrafts.filter(
-		(d) => d.identityId === identity.id,
-	).length;
 
 	const snoozedCount = snoozedThreads.filter(
 		(s) => s.identityId === identity.id,
@@ -155,16 +150,6 @@ function IdentityExtraCounts({
 		);
 	return (
 		<>
-			{scheduledCount > 0 && (
-				<Link
-					href={`/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/scheduled`}
-					className={linkCls(currentSlug === "scheduled")}
-				>
-					<IconMailFast size={16} className="shrink-0 text-k-ink-3" />
-					<span className="flex-1 truncate">Envois programmés</span>
-					<span className="text-[12px] tabular-nums text-k-ink-3">{scheduledCount}</span>
-				</Link>
-			)}
 			{snoozedCount > 0 && (
 				<Link
 					href={`/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/snoozed`}
@@ -181,10 +166,54 @@ function IdentityExtraCounts({
 
 // SS2i (nouvelle interface) : dossiers de l'adresse active dans la barre laterale.
 // La section Clients est celle de l'interface classique (reutilisee telle quelle).
+// ss2i : Boite d'envoi (OI 10519) : entree virtuelle entre Brouillons et Envoyes, toujours
+// presente ; compteur des envois visibles (jamais de non lus), rouge quand un envoi demande une
+// action.
+function KOutboxEntry({
+	identity,
+	count,
+	workspacePublicId,
+	active,
+	onComplete,
+}: {
+	identity: IdentityEntity;
+	count: OutboxCount | undefined;
+	workspacePublicId: string | undefined;
+	active: boolean;
+	onComplete?: () => void;
+}) {
+	const badge = outboxSidebarCount(count);
+	return (
+		<Link
+			href={`/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/outbox`}
+			onClick={onComplete ? () => onComplete() : undefined}
+			aria-current={active ? "page" : undefined}
+			className={cn(
+				"flex min-w-0 items-center gap-2.5 rounded-k-sm py-[7px] pl-2.5 pr-2.5 text-[13.5px] transition-colors",
+				active ? "bg-k-surface font-medium text-k-ink shadow-k-pane" : "text-k-ink-2 hover:bg-k-hover hover:text-k-ink",
+			)}
+		>
+			<IconMailFast size={16} className={cn("shrink-0", active ? "text-k-accent" : "text-k-ink-3")} />
+			<span className="flex-1 truncate">Boîte d&apos;envoi</span>
+			{badge && (
+				<span
+					className={cn(
+						"min-w-5 rounded-full px-1.5 text-center text-[11.5px] font-semibold tabular-nums leading-5",
+						badge.alert ? "bg-red-600 text-white" : "text-k-ink-3",
+					)}
+					title={badge.alert ? "Un message n'est pas parti" : undefined}
+				>
+					{badge.n}
+				</span>
+			)}
+		</Link>
+	);
+}
+
 export default function KSidebarNav({
 	identityMailboxes,
 	unreadCounts,
-	scheduledDraftsPromise,
+	outboxCounts,
 	snoozedThreadsPromise,
 	workspacePublicId,
 	onComplete,
@@ -192,7 +221,8 @@ export default function KSidebarNav({
 }: {
 	identityMailboxes: FetchIdentityMailboxListResult;
 	unreadCounts: FetchMailboxUnreadCountsResult;
-	scheduledDraftsPromise: Promise<ScheduledDraftCount[]>;
+	// ss2i : Boite d'envoi, compteurs par identite (fetchOutboxCounts).
+	outboxCounts: OutboxCount[];
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
 	workspacePublicId: string | undefined;
 	onComplete?: () => void;
@@ -218,6 +248,9 @@ export default function KSidebarNav({
 	const active =
 		identityMailboxes.find((im) => im.identity.publicId === params.identityPublicId) ??
 		identityMailboxes[0];
+
+	// ss2i : actualisation tant qu'un envoi part (compteur et liste de la Boite d'envoi).
+	useOutboxRefresh(outboxCounts);
 
 	// Compteurs : transmis au store (pour caler les ajustements), et ajustements lus.
 	const countAdj = useMailStore((st) => st.countAdj);
@@ -331,18 +364,28 @@ export default function KSidebarNav({
 	const { identity, mailboxes } = active;
 	const tree = buildTree(mailboxes as MailboxEntity[], unreadCounts);
 	const system = tree.filter((m) => m.kind !== "custom");
+	const slot = outboxSlot(system.map((m) => m.kind));
 	const custom = tree.filter((m) => m.kind === "custom");
 
 	return (
 		<nav aria-label="Dossiers" className="space-y-5">
 			<div className="space-y-px">
-				{system.map((m) => (
+				{system.slice(0, slot).map((m) => (
+					<Item key={m.id} m={m} identityPublicId={identity.publicId} identity={identity} />
+				))}
+				<KOutboxEntry
+					identity={identity}
+					count={outboxCounts.find((c) => c.identityId === identity.id)}
+					workspacePublicId={workspacePublicId}
+					active={currentSlug === "outbox"}
+					onComplete={onComplete}
+				/>
+				{system.slice(slot).map((m) => (
 					<Item key={m.id} m={m} identityPublicId={identity.publicId} identity={identity} />
 				))}
 				<Suspense fallback={null}>
 					<IdentityExtraCounts
 						identity={identity}
-						scheduledDraftsPromise={scheduledDraftsPromise}
 						snoozedThreadsPromise={snoozedThreadsPromise}
 						workspacePublicId={workspacePublicId}
 						currentSlug={currentSlug}

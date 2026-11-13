@@ -19,8 +19,8 @@ import { usePathname } from "next/navigation";
 import {use} from "react";
 import { useHiddenThreads } from "@/lib/pending-moves";
 import { useListReturn } from "@/lib/list-return";
-import { isSendingDraft, useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
-import { IconSend } from "@tabler/icons-react";
+import { useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
+import { inOutbox } from "@/lib/outbox-view";
 
 type WebListProps = {
 	mailboxThreadPromise: Promise<{ mailboxThreads: FetchMailboxThreadsResult, labelsByThreadId: FetchMailboxThreadLabelsResult }>;
@@ -30,6 +30,8 @@ type WebListProps = {
 	fetchMailboxPromise: Promise<FetchMailboxResult>;
 	globalLabelsPromise: Promise<FetchLabelsResult>;
 	workspacePublicId?: string;
+	// ss2i : ids des envois visibles dans la Boite d'envoi (fetchOutboxIds), page du dossier seulement.
+	outboxIdsPromise?: Promise<string[]>;
 };
 
 export default function WebmailList({
@@ -39,7 +41,8 @@ export default function WebmailList({
 	identityMailboxesPromise,
 	globalLabelsPromise,
 	workspacePublicId,
-	fetchMailboxPromise
+	fetchMailboxPromise,
+	outboxIdsPromise,
 }: WebListProps) {
 	const {labelsByThreadId, mailboxThreads: serverThreads} = use(mailboxThreadPromise)
 	const globalLabels = use(globalLabelsPromise)
@@ -52,20 +55,19 @@ export default function WebmailList({
 	const onThread = /\/threads\/[^/]+/.test(pathname ?? "");
 	// ss2i : les fils en cours de depart (corbeille, archive...) disparaissent des le clic.
 	const isHidden = useHiddenThreads();
-	const mailboxThreads = serverThreads.filter(
+	const shownThreads = serverThreads.filter(
 		(t) => !isHidden(String(t.mailboxId), String(t.threadId)),
 	);
-
-	// ss2i : dans Drafts, les envois en attente (Undo encore possible) forment une Outbox
-	// en tete, a part des brouillons : on ne doit pas les prendre pour des brouillons.
-	const isDraftsBox = activeMailbox.kind === "drafts";
-	const sending = isDraftsBox ? mailboxThreads.filter((t) => isSendingDraft(t.draftSend)) : [];
+	// ss2i : dans Drafts, les brouillons dont l'envoi est dans la Boite d'envoi (en attente, en
+	// cours, en echec) n'y figurent plus : ils sont dans la Boite d'envoi (OI 10519).
+	const outboxIds = new Set(outboxIdsPromise ? use(outboxIdsPromise) : []);
+	const mailboxThreads =
+		activeMailbox.kind === "drafts" ? shownThreads.filter((t) => !inOutbox(t.draftSend, outboxIds)) : shownThreads;
 	// ss2i : position de la liste et repere du dernier fil consulte au retour d'un fil.
 	const { ref: listRef, lastViewedId } = useListReturn(
 		pathname,
 		mailboxThreads.map((t) => String(t.threadId)),
 	);
-	const drafts = isDraftsBox ? mailboxThreads.filter((t) => !isSendingDraft(t.draftSend)) : mailboxThreads;
 
 	const renderItem = (mailboxThreadItem: (typeof mailboxThreads)[number]) =>
 								isMobile ? (
@@ -97,8 +99,9 @@ export default function WebmailList({
 									/>
 								);
 
-	// ss2i : tant qu'un brouillon de la liste est en cours d'envoi, la liste est actualisee.
-	useSendListRefresh(mailboxThreads.map((t) => t.draftSend));
+	// ss2i : tant qu'un brouillon de la liste est en cours d'envoi, la liste est actualisee (y
+	// compris ceux que la Boite d'envoi retire de la liste, pour les voir revenir en cas d'echec).
+	useSendListRefresh(shownThreads.map((t) => t.draftSend));
 
 	return (
 		<div ref={listRef} className={onThread ? "hidden" : ""} data-ss2i-mail-list="">
@@ -129,21 +132,7 @@ export default function WebmailList({
 						/>
 
 						<ul role="list" className={`divide-y rounded-4xl`}>
-							{sending.length > 0 ? (
-								<>
-									<li className="flex items-center gap-2 bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-900 dark:bg-sky-900/50 dark:text-sky-100">
-										<IconSend size={14} aria-hidden />
-										Outbox ({sending.length}) — being sent, Undo still possible. These are not drafts anymore.
-									</li>
-									{sending.map(renderItem)}
-									<li className="px-3 py-1.5 text-xs font-semibold text-muted-foreground">
-										Drafts ({drafts.length})
-									</li>
-									{drafts.map(renderItem)}
-								</>
-							) : (
-								mailboxThreads.map(renderItem)
-							)}
+							{mailboxThreads.map(renderItem)}
 						</ul>
 					</div>
 				)}

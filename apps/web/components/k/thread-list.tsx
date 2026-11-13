@@ -1,14 +1,14 @@
 "use client";
 // SS2i (nouvelle interface) : liste des fils d'un dossier. Memes donnees et
 // memes comportements que webmail-list.tsx (fils masques des le clic via
-// pending-moves, Outbox des envois en attente dans Drafts, actualisation tant
-// qu'un envoi est en cours), presentation de la nouvelle interface, filtre
+// pending-moves, brouillons de la Boite d'envoi retires de Drafts, actualisation
+// tant qu'un envoi est en cours), presentation de la nouvelle interface, filtre
 // Tous / Non lus (servi par le serveur, page par page), fils epingles en tete.
 import * as React from "react";
 import { use } from "react";
 import { usePathname } from "next/navigation";
 import { Inbox } from "lucide-react";
-import { IconMail, IconPinnedFilled, IconSend } from "@tabler/icons-react";
+import { IconMail, IconPinnedFilled } from "@tabler/icons-react";
 import { PublicConfig } from "@schema";
 import {
 	FetchIdentityMailboxListResult,
@@ -18,7 +18,8 @@ import {
 import { FetchLabelsResult, FetchMailboxThreadLabelsResult } from "@/lib/actions/labels";
 import { DynamicContextProvider, useDynamicContext } from "@/hooks/use-dynamic-context";
 import { useHiddenThreads } from "@/lib/pending-moves";
-import { isSendingDraft, useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
+import { useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
+import { inOutbox } from "@/lib/outbox-view";
 import KListHeader from "@/components/k/list-header";
 import KThreadRow from "@/components/k/thread-row";
 import { mailboxTitle } from "@/components/k/format";
@@ -47,6 +48,8 @@ type Props = {
 	workspacePublicId?: string;
 	/** Page de depart (?page=), les suivantes se chargent au defilement. */
 	startPage?: number;
+	/** ss2i : ids des envois visibles dans la Boite d'envoi (fetchOutboxIds), page du dossier seulement. */
+	outboxIdsPromise?: Promise<string[]>;
 };
 
 const NO_PINS: Promise<PinnedData> = Promise.resolve({ pinnedIds: [], mailboxThreads: [], labelsByThreadId: {}, realAttachments: [] });
@@ -75,6 +78,7 @@ function ListBody({
 	workspacePublicId,
 	fetchMailboxPromise,
 	startPage = 1,
+	outboxIdsPromise,
 }: Props) {
 	const { labelsByThreadId: serverLabels, mailboxThreads: serverFirst, realAttachments: serverFiles } = use(mailboxThreadPromise);
 	const pinnedData = use(pinnedPromise);
@@ -138,10 +142,15 @@ function ListBody({
 	React.useEffect(() => settlePins(serverPinned), [serverPinned]);
 	const isPinned = (id: string) => pinOverride.get(String(id)) ?? serverPinned.has(String(id));
 
-	const visible = baseThreads.filter((t) => !isHidden(String(t.mailboxId), String(t.threadId)));
+	// ss2i : dans Drafts, les brouillons dont l'envoi est dans la Boite d'envoi (en attente, en
+	// cours, en echec) n'y figurent plus : ils sont dans la Boite d'envoi (OI 10519).
+	const outboxIds = new Set(outboxIdsPromise ? use(outboxIdsPromise) : []);
+	const inOutboxRow = (t: Thread) => activeMailbox.kind === "drafts" && inOutbox(t.draftSend, outboxIds);
+	const unhidden = baseThreads.filter((t) => !isHidden(String(t.mailboxId), String(t.threadId)));
+	const visible = unhidden.filter((t) => !inOutboxRow(t));
 	const visibleKeys = new Set(visible.map(keyOf));
 	const fromPins = withFiles(pinnedData.mailboxThreads as Thread[]).filter(
-		(t) => !visibleKeys.has(keyOf(t)) && !isHidden(String(t.mailboxId), String(t.threadId)),
+		(t) => !visibleKeys.has(keyOf(t)) && !isHidden(String(t.mailboxId), String(t.threadId)) && !inOutboxRow(t),
 	);
 	const pinnedRows = [...fromPins, ...visible]
 		.filter((t) => isPinned(String(t.threadId)))
@@ -173,8 +182,9 @@ function ListBody({
 		);
 	}, [allThreads, pinnedData.mailboxThreads]);
 
-	// Tant qu'un brouillon de la liste est en cours d'envoi, la liste est actualisee.
-	useSendListRefresh(shown.map((t) => t.draftSend));
+	// Tant qu'un brouillon de la liste est en cours d'envoi, la liste est actualisee (y compris
+	// ceux que la Boite d'envoi retire de la liste, pour les voir revenir en cas d'echec).
+	useSendListRefresh(unhidden.map((t) => t.draftSend));
 
 	return (
 		<>
@@ -290,11 +300,6 @@ function Rows({
 		/>
 	);
 
-	// Dans Drafts, les envois en attente (Undo encore possible) forment une Outbox
-	// en tete, a part des brouillons.
-	const isDraftsBox = activeMailbox.kind === "drafts";
-	const sending = isDraftsBox ? rows.filter((t) => isSendingDraft(t.draftSend)) : [];
-	const drafts = isDraftsBox ? rows.filter((t) => !isSendingDraft(t.draftSend)) : rows;
 	const section = "px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-[0.06em] text-k-ink-3";
 
 	return (
@@ -309,7 +314,7 @@ function Rows({
 					{/* Fin des epingles : bande vide de la couleur du fond de page, d'un
 					    bord a l'autre du panneau. Epingles et reste de la liste se lisent
 					    comme deux cartes empilees. */}
-					{rows.length > 0 && sending.length === 0 && (
+					{rows.length > 0 && (
 						<>
 							<li aria-hidden className="!my-1.5 -mx-1.5 h-3 border-y border-k-line bg-k-canvas" />
 							<li className={`${section} flex items-center gap-1.5`}>
@@ -320,19 +325,7 @@ function Rows({
 					)}
 				</>
 			)}
-			{sending.length > 0 ? (
-				<>
-					<li className={`${section} flex items-center gap-1.5 !text-k-accent`}>
-						<IconSend size={13} aria-hidden />
-						Envois en attente ({sending.length}) · annulables
-					</li>
-					{sending.map(row(false))}
-					<li className={section}>Brouillons ({drafts.length})</li>
-					{drafts.map(row(false))}
-				</>
-			) : (
-				rows.map(row(false))
-			)}
+			{rows.map(row(false))}
 		</ul>
 	);
 }

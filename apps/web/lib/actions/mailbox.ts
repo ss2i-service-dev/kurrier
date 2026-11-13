@@ -65,6 +65,7 @@ import {
 import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3 } from "@/lib/create-s3-client";
+import type { OutboxTracking } from "@/lib/outbox-view";
 
 let typeSenseClient: Client | null = null;
 function getTypeSenseClient(): Client {
@@ -2092,6 +2093,8 @@ const outboxCandidate = or(
 	and(eq(draftMessages.status, "sent"), notInArray(draftMessages.deliveryState, ["none", "delivered"])),
 );
 
+const iso = (d: Date | string | null | undefined) => (d == null ? null : new Date(d).toISOString());
+
 const outboxStateCols = {
 	id: draftMessages.id,
 	identityId: draftMessages.identityId,
@@ -2103,14 +2106,15 @@ const outboxStateCols = {
 };
 
 // Compteur de la barre laterale, par identite visible de l'utilisateur : total des envois
-// visibles et nombre d'alertes (echec, interrompu). Ni contenu ni destinataires.
-export type OutboxCount = { identityId: string; total: number; alert: number };
+// visibles et nombre d'alertes (echec, interrompu), plus de quoi actualiser la page tant qu'un
+// envoi bouge (lib/outbox-view.ts, outboxRefreshOf). Ni contenu ni destinataires.
+export type OutboxCount = { identityId: string; total: number; alert: number } & OutboxTracking;
 
 export const fetchOutboxCounts = async (): Promise<OutboxCount[]> => {
 	const rls = await rlsClient();
 	const rows = await rls((tx) =>
 		tx
-			.select(outboxStateCols)
+			.select({ ...outboxStateCols, scheduledAt: draftMessages.scheduledAt })
 			.from(draftMessages)
 			.innerJoin(identities, eq(draftMessages.identityId, identities.id))
 			.where(outboxCandidate),
@@ -2120,8 +2124,21 @@ export const fetchOutboxCounts = async (): Promise<OutboxCount[]> => {
 		if (!r.identityId) continue;
 		byIdentity.set(r.identityId, [...(byIdentity.get(r.identityId) ?? []), r]);
 	}
-	return [...byIdentity].map(([identityId, list]) => ({ identityId, ...outboxCountOf(list) }));
+	return [...byIdentity].map(([identityId, list]) => {
+		const states = list.map((r) => ({ r, state: sendStateOf(r) }));
+		return {
+			identityId,
+			...outboxCountOf(list),
+			busy: states.filter(({ state }) => state === "sending" || state === "queued" || state === "canceling").length,
+			pendingAt: states.filter(({ state }) => state === "pending").map(({ r }) => iso(r.scheduledAt)!).filter(Boolean),
+		};
+	});
 };
+
+// Lignes visibles de la Boite d'envoi d'une identite : Drafts en retire les brouillons
+// correspondants (lib/outbox-view.ts, inOutbox).
+export const fetchOutboxIds = async (identityPublicId: string): Promise<string[]> =>
+	(await fetchOutbox(identityPublicId)).map((i) => i.id);
 
 export type OutboxItem = {
 	id: string;
@@ -2135,8 +2152,6 @@ export type OutboxItem = {
 	error: string | null;
 	draftMessageId: string | null;
 };
-
-const iso = (d: Date | string | null | undefined) => (d == null ? null : new Date(d).toISOString());
 
 // Liste de la Boite d'envoi d'une identite : echecs d'abord (a traiter), puis en cours, puis en
 // attente par heure d'envoi. Le contenu du message reste sur le serveur.

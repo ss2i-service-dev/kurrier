@@ -15,3 +15,10 @@ export function showsUnreadCount(kind: string | null | undefined): boolean {
 export function showsSidebarCount(kind: string | null | undefined): boolean {
 	return kind === "drafts" || showsUnreadCount(kind);
 }
+
+// ss2i : Boite d'envoi (OI 10519) : le nombre d'envois visibles (en attente, en cours, en echec),
+// jamais des non lus ; rien a zero ; rouge des qu'un envoi demande une action.
+export function outboxSidebarCount(c: { total: number; alert: number } | null | undefined): { n: number; alert: boolean } | null {
+	if (!c || c.total <= 0) return null;
+	return { n: c.total, alert: c.alert > 0 };
+}

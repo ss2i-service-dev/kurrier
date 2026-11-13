@@ -22,10 +22,12 @@ import { Suspense, use, useEffect } from "react";
 import {
 	FetchIdentityMailboxListResult,
 	FetchMailboxUnreadCountsResult,
-	ScheduledDraftCount,
+	type OutboxCount,
 } from "@/lib/actions/mailbox";
 import { MailboxKind } from "@schema";
-import { showsSidebarCount } from "@/lib/folder-unread-counts";
+import { outboxSidebarCount, showsSidebarCount } from "@/lib/folder-unread-counts";
+import { outboxSlot } from "@/lib/outbox-view";
+import { useOutboxRefresh } from "@/components/mailbox/default/outbox-list";
 import {
 	IdentityEntity,
 	MailboxEntity,
@@ -127,23 +129,16 @@ function buildTree(
 
 function IdentityExtraCounts({
 								 identity,
-								 scheduledDraftsPromise,
 								 snoozedThreadsPromise,
 								 workspacePublicId,
 								 currentSlug,
 							 }: {
 	identity: IdentityEntity;
-	scheduledDraftsPromise: Promise<ScheduledDraftCount[]>;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
 	workspacePublicId: string | undefined;
 	currentSlug: string;
 }) {
-	const scheduledDrafts = use(scheduledDraftsPromise);
 	const { threads: snoozedThreads } = use(snoozedThreadsPromise);
-
-	const scheduledCount = scheduledDrafts.filter(
-		(d) => d.identityId === identity.id,
-	).length;
 
 	const snoozedCount = snoozedThreads.filter(
 		(s) => s.identityId === identity.id,
@@ -151,22 +146,6 @@ function IdentityExtraCounts({
 
 	return (
 		<>
-			{scheduledCount > 0 && (
-				<Link
-					href={`/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/scheduled`}
-					className={`my-2 rounded hover:dark:bg-neutral-800 ${
-						currentSlug === "scheduled"
-							? "dark:bg-neutral-800 dark:text-brand-foreground bg-brand-200 text-brand"
-							: ""
-					} flex justify-start gap-1 w-full p-1.5`}
-				>
-					<IconMailFast size={22} />
-					<span className="font-normal text-sm">
-						Scheduled ({scheduledCount})
-					</span>
-				</Link>
-			)}
-
 			{snoozedCount > 0 && (
 				<Link
 					href={`/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/snoozed`}
@@ -191,6 +170,48 @@ function IdentityExtraCounts({
 // derniere activite. Au-dela de SIDEBAR_CLIENTS, un champ filtre la liste complete.
 // La section se replie (chevron), etat garde par identite dans le navigateur.
 const SIDEBAR_CLIENTS = 20;
+
+// ss2i : Boite d'envoi (OI 10519) : entree virtuelle entre Drafts et Sent, toujours presente ;
+// compteur des envois visibles (jamais de non lus), rouge quand un envoi demande une action.
+function OutboxEntry({
+	identity,
+	count,
+	workspacePublicId,
+	active,
+	onComplete,
+}: {
+	identity: IdentityEntity;
+	count: OutboxCount | undefined;
+	workspacePublicId: string | undefined;
+	active: boolean;
+	onComplete?: () => void;
+}) {
+	const badge = outboxSidebarCount(count);
+	return (
+		<div className="flex items-center">
+			<span className="w-4" />
+			<Link
+				href={`/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/outbox`}
+				onClick={onComplete ? () => onComplete() : undefined}
+				className={cn(
+					"flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-2 text-sm",
+					"hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+					active &&
+						"bg-sidebar-accent text-brand dark:text-white bg-brand-100 dark:bg-neutral-800 hover:text-brand hover:bg-brand-100",
+				)}
+			>
+				<IconMailFast className="h-4 w-4 shrink-0" />
+				<span className="truncate">
+					Outbox
+					{badge && (
+						<span className={badge.alert ? "font-semibold text-red-600 dark:text-red-400" : ""}
+							title={badge.alert ? "A message was not sent" : undefined}> ({badge.n})</span>
+					)}
+				</span>
+			</Link>
+		</div>
+	);
+}
 
 export function IdentityClients({
 	identity,
@@ -367,7 +388,7 @@ export function IdentityClients({
 export default function IdentityMailboxesList({
 												  identityMailboxes,
 												  unreadCounts,
-												  scheduledDraftsPromise,
+												  outboxCounts,
 												  snoozedThreadsPromise,
 												  clientsPromise,
 												  workspacePublicId,
@@ -376,7 +397,8 @@ export default function IdentityMailboxesList({
 											  }: {
 	identityMailboxes: FetchIdentityMailboxListResult;
 	unreadCounts: FetchMailboxUnreadCountsResult;
-	scheduledDraftsPromise: Promise<ScheduledDraftCount[]>;
+	// ss2i : Boite d'envoi, compteurs par identite (fetchOutboxCounts).
+	outboxCounts: OutboxCount[];
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
 	// ss2i : clients (CRM) des identites pro, section sous les dossiers.
 	clientsPromise?: Promise<IdentityClientsData[]>;
@@ -416,6 +438,8 @@ export default function IdentityMailboxesList({
 	}, [pathname]);
 
 	const router = useRouter()
+	// ss2i : actualisation tant qu'un envoi part (compteur et liste de la Boite d'envoi).
+	useOutboxRefresh(outboxCounts);
 
 	const Item = ({
 					  m,
@@ -548,6 +572,15 @@ export default function IdentityMailboxesList({
 
 				const isCollapsed = collapsed.has(identity.publicId);
 				const inboxUnread = tree.find((m) => m.kind === "inbox")?.unread ?? 0;
+				const slot = outboxSlot(tree.map((m) => m.kind));
+				const item = (m: TreeMailbox) => (
+					<Item
+						key={`${identity.id}:${m.id}`}
+						m={m}
+						identityPublicId={identity.publicId}
+						identity={identity}
+					/>
+				);
 
 				return (
 					<div key={identity.id}>
@@ -574,20 +607,20 @@ export default function IdentityMailboxesList({
 
 						{!isCollapsed && (<>
 						<div className="space-y-1">
-							{tree.map((m) => (
-								<Item
-									key={`${identity.id}:${m.id}`}
-									m={m}
-									identityPublicId={identity.publicId}
-									identity={identity}
-								/>
-							))}
+							{tree.slice(0, slot).map(item)}
+							<OutboxEntry
+								identity={identity}
+								count={outboxCounts.find((c) => c.identityId === identity.id)}
+								workspacePublicId={workspacePublicId}
+								active={params.identityPublicId === identity.publicId && currentSlug === "outbox"}
+								onComplete={onComplete}
+							/>
+							{tree.slice(slot).map(item)}
 						</div>
 
 						<Suspense fallback={null}>
 							<IdentityExtraCounts
 								identity={identity}
-								scheduledDraftsPromise={scheduledDraftsPromise}
 								snoozedThreadsPromise={snoozedThreadsPromise}
 								workspacePublicId={workspacePublicId}
 								currentSlug={currentSlug}

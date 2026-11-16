@@ -379,7 +379,7 @@ async function moveGroupOnImap(
 		if (gone.length) {
 			gone.forEach((r) => settled.add(r.id));
 			console.warn(
-				`[mail:move] ${gone.length} message(s) absents de ${srcPath} (dossier lu en entier, ${tag}) : deja supprimes du serveur, laisses a destination sans UID`,
+				`[mail:move] ${gone.length} message(s) absents de ${srcPath} (absence prouvee, ${tag}) : deja supprimes du serveur, laisses a destination sans UID`,
 				gone.slice(0, 20).map((r) => r.id),
 			);
 		}

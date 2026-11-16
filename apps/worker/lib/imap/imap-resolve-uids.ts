@@ -26,6 +26,12 @@ const norm = (v?: string | null) =>
  * ni a leur UID, ni par SEARCH, ni dans la lecture COMPLETE des enveloppes du dossier (dossier
  * lisible, d'au plus SCAN_LIMIT messages, lecture sans erreur). Une ligne seulement « pas
  * trouvee » (dossier trop gros, lecture en erreur) n'y est pas.
+ *
+ * ss2i (16/11, INBOX Gmail de plus de 5 000 messages) : chez Gmail (X-GM-EXT-1), l'absence est
+ * aussi prouvee quand l'UID en base ne porte pas le message (FETCH sans erreur), que SEARCH
+ * HEADER Message-ID et X-GM-RAW « rfc822msgid: » repondent tous deux sans erreur et vides. Sans
+ * cela, un message supprime de Gmail par un autre client revenait dans INBOX a chaque mise a la
+ * corbeille, le dossier etant trop gros pour etre balaye.
  */
 const SCAN_LIMIT = 5000;
 
@@ -61,12 +67,15 @@ export async function resolveUids(
 	// Enveloppes des UID en base, en UN seul FETCH : une selection de 50 fils faisait
 	// 50 allers-retours (plusieurs secondes chez Gmail) avant de deplacer quoi que ce soit.
 	const atUid = new Map<number, string>();
+	let atUidRead = false;
+	const gmail = Boolean((client as any).capabilities?.has?.("X-GM-EXT-1"));
 	const uidList = [...new Set(rows.map((r) => Number(r.uid)).filter((u) => u > 0))];
 	if (uidList.length) {
 		try {
 			for await (const m of client.fetch(uidList.join(","), { uid: true, envelope: true }, { uid: true })) {
 				atUid.set(Number(m.uid), norm(m.envelope?.messageId));
 			}
+			atUidRead = true;
 		} catch {
 			// verification message par message ci-dessous
 		}
@@ -92,13 +101,26 @@ export async function resolveUids(
 			)
 			.catch(() => false as const);
 		let uids: number[] = Array.isArray(found) ? found : [];
+		// Gmail : seconde recherche par son operateur natif, qui fait foi.
+		let gmailEmpty = false;
+		if (!uids.length && gmail && Array.isArray(found)) {
+			const raw = await client
+				.search({ gmraw: `rfc822msgid:${wanted}` } as any, { uid: true })
+				.catch(() => false as const);
+			if (Array.isArray(raw)) {
+				uids = raw;
+				gmailEmpty = raw.length === 0;
+			}
+		}
 		if (!uids.length) {
 			uids = (await scan().catch(() => undefined))?.get(wanted) ?? [];
 		}
 		if (!uids.length) {
-			if (scanComplete) absent?.add(row.id);
+			const gmailProof = gmailEmpty && (Number(row.uid) <= 0 || atUidRead);
+			if (scanComplete || gmailProof) absent?.add(row.id);
+			const why = scanComplete ? ", dossier lu en entier" : gmailProof ? ", absent selon Gmail" : "";
 			console.warn(
-				`[imap:resolve-uids] message ${row.id} introuvable dans le dossier (uid en base ${row.uid}${scanComplete ? ", dossier lu en entier" : ""}), ignore`,
+				`[imap:resolve-uids] message ${row.id} introuvable dans le dossier (uid en base ${row.uid}${why}), ignore`,
 			);
 			continue;
 		}

@@ -173,20 +173,23 @@
 	border-radius: var(--k-radius-sm);
 }
 
-/* Ligne de liste : apparition douce des actions au survol */
+/* Ligne de liste : apparition douce des actions au survol. La ligne survolee est
+   marquee data-hot par components/k/row-hover.ts (position du pointeur) plutot
+   que par :hover, qui ne suit pas une ligne remontee sous un pointeur immobile
+   apres une suppression. */
 .k-row .k-row-actions {
 	opacity: 0;
 	transform: translateX(4px);
 	transition: opacity 120ms ease, transform 120ms ease;
 	pointer-events: none;
 }
-.k-row:hover .k-row-actions,
+.k-row[data-hot="true"] .k-row-actions,
 .k-row:focus-within .k-row-actions {
 	opacity: 1;
 	transform: none;
 	pointer-events: auto;
 }
-.k-row:hover .k-row-meta,
+.k-row[data-hot="true"] .k-row-meta,
 .k-row:focus-within .k-row-meta {
 	opacity: 0;
 }

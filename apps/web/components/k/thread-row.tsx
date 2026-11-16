@@ -28,6 +28,7 @@ import KIconButton from "@/components/k/icon-button";
 import { correspondents, listDate } from "@/components/k/format";
 import { kHref } from "@/components/k/href";
 import { arrivedSinceRead, closeCompose, mailActions, setActiveThread, useMailStore } from "@/components/k/mail-store";
+import { refreshRowHover, useRowHot } from "@/components/k/row-hover";
 
 type Props = {
 	item: FetchMailboxThreadsResult[number];
@@ -75,6 +76,9 @@ export default function KThreadRow({
 	const smtp = !!mailboxSync;
 	// Actions de survol montees seulement pour la ligne survolee ou focalisee.
 	const [armed, setArmed] = React.useState(false);
+	// Ligne sous le pointeur, suivie par sa position (voir row-hover.ts) : reste juste
+	// quand la ligne remonte sous un pointeur immobile apres une suppression.
+	const hot = useRowHot(String(item.threadId));
 
 	const { state, setState } = useDynamicContext<{
 		selectedThreadIds: Set<string>;
@@ -136,6 +140,13 @@ export default function KThreadRow({
 		router.prefetch(threadUrl);
 	};
 
+	React.useEffect(() => {
+		if (hot) arm();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [hot]);
+	// Ligne retiree (supprimee, archivee, deplacee) : la suivante remonte sous le pointeur.
+	React.useEffect(() => () => refreshRowHover(), []);
+
 	const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 	const starButton = (
 			<button
@@ -160,6 +171,7 @@ export default function KThreadRow({
 			data-thread-id={item.threadId}
 			aria-current={isActive ? "true" : undefined}
 			data-selected={isSelected ? "true" : undefined}
+			data-hot={hot ? "true" : undefined}
 			onClick={openThread}
 			onMouseEnter={arm}
 			onFocus={arm}
@@ -254,9 +266,18 @@ export default function KThreadRow({
 				)}
 			</div>
 
-			{armed && (
+			{(armed || hot) && (
 				<div
-					onClick={stop}
+					onClick={(e) => {
+						stop(e);
+						// Clic souris : le bouton ne garde pas le focus, sinon :focus-within
+						// laisserait les actions affichees sur cette ligne une fois le pointeur parti.
+						// (Sauf un bouton qui ouvre un menu : reporter, libelles.)
+						const button = e.target instanceof HTMLElement ? e.target.closest("button") : null;
+						if (e.detail > 0 && button && !button.hasAttribute("aria-haspopup")) button.blur();
+						// Epingler, desepingler, reporter : la liste se reordonne sous le pointeur.
+						refreshRowHover();
+					}}
 					data-k-small
 					className={`k-row-actions absolute right-2 top-1.5 flex items-center gap-0.5 rounded-k-sm p-0.5 shadow-k-pop ${isActive ? "bg-k-selected" : "bg-k-surface"}`}
 				>

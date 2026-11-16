@@ -1,3 +1,4 @@
+import { openMailboxLocked } from "../../imap-open-locked";
 import {db, identities, mailboxes, mailboxSync} from "@db";
 import { eq, inArray, sql } from "drizzle-orm";
 import { ImapFlow } from "imapflow";
@@ -120,7 +121,7 @@ export const discoverMailboxes = async (
 			pathIdMap.set(path, row.id);
 
 			if (selectable) {
-				const box = await client.mailboxOpen(path, { readOnly: true });
+				const box = await openMailboxLocked(client, path);
 				await db.insert(mailboxSync).values({
 					identityId: identity.id,
 					mailboxId: row.id,
@@ -152,7 +153,7 @@ export const discoverMailboxes = async (
 					.from(mailboxSync)
 					.where(eq(mailboxSync.mailboxId, existing.id));
 				if (!maybeSync) {
-					const box = await client.mailboxOpen(path, { readOnly: true });
+					const box = await openMailboxLocked(client, path);
 					await db.insert(mailboxSync).values({
 						identityId: identity.id,
 						mailboxId: existing.id,

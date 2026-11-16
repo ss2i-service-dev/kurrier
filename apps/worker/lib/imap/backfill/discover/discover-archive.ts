@@ -1,3 +1,4 @@
+import { openMailboxLocked } from "../../imap-open-locked";
 import { ImapFlow } from "imapflow";
 import { db, mailboxes, mailboxSync, type IdentityEntity } from "@db";
 import { and, eq } from "drizzle-orm";
@@ -33,7 +34,7 @@ export async function ensureArchiveFolder(
 	try {
 		await client.mailboxSubscribe(name);
 	} catch {}
-	const box = await client.mailboxOpen(name, { readOnly: true });
+	const box = await openMailboxLocked(client, name);
 	const [row] = await db
 		.insert(mailboxes)
 		.values({

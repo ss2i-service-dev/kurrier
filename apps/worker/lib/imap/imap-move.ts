@@ -81,6 +81,13 @@ export const moveMail = async (
 			);
 	}
 
+	// ss2i (16/11/2026) : on ne range pas du courrier dans les Brouillons ; seul le service de
+	// brouillons y ecrit.
+	if (destMailboxRow?.kind === "drafts") {
+		console.warn(`[mail:move] destination Brouillons refusee (identity=${srcMailbox.identityId})`);
+		return;
+	}
+
 	if (!destMailboxRow) {
 		console.warn(
 			`[mail:move] No destination for op=${op} identity=${srcMailbox.identityId}`,

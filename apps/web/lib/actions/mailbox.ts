@@ -1995,6 +1995,8 @@ export const moveToFolder = async (
 	const { mailbox: from, threadIds: ids } = await assertThreadsInMailbox(fromMailboxId, requestedIds);
 	const to = await assertMailboxAccess(toMailboxId);
 	if (!ids.length || to.identityId !== from.identityId) return;
+	// ss2i (16/11/2026) : pas de courrier deplace dans les Brouillons (le worker le refuse aussi).
+	if ((to as any).kind === "drafts") return;
 	if (messageId && !(await messageInMailbox(messageId, from.id))) return;
 	fromMailboxId = from.id;
 	toMailboxId = to.id;

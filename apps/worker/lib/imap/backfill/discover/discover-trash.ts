@@ -1,3 +1,4 @@
+import { openMailboxLocked } from "../../imap-open-locked";
 import { ImapFlow } from "imapflow";
 import { db, mailboxes, mailboxSync, type IdentityEntity } from "@db";
 import { and, eq, or } from "drizzle-orm";
@@ -55,7 +56,7 @@ export async function ensureTrashFolder(
 	for (const name of tryNames) {
 		try {
 			await client.mailboxCreate(name);
-			const box = await client.mailboxOpen(name, { readOnly: true });
+			const box = await openMailboxLocked(client, name);
 			const [row] = await db
 				.insert(mailboxes)
 				.values({

@@ -1,6 +1,7 @@
 import { FetchMessageObject, ImapFlow } from "imapflow";
 import { db, mailboxSync } from "@db";
 import { and, eq } from "drizzle-orm";
+import { selectedIs } from "./imap-open-locked";
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export async function syncMailbox(opts: {
@@ -47,6 +48,19 @@ export async function syncMailbox(opts: {
 		let lastSeen = Number(sync.lastSeenUid || 0);
 
 		const box = await client.mailboxOpen(path, { readOnly: true });
+		// ss2i (16/11/2026) : la connexion est partagee ; si un autre traitement a change de dossier
+		// sans verrou, le FETCH ci-dessous partirait sur ce dossier-la et ses messages seraient
+		// ranges ici (INBOX pris pour Drafts chez jb et hugo). On s'arrete, sans avancer le curseur.
+		const wrongFolder = () => {
+			if (selectedIs(client, path)) return false;
+			console.error("[imap:sync] dossier selectionne inattendu, passe abandonnee", {
+				identityId,
+				expected: path,
+				selected: (client.mailbox as any)?.path ?? null,
+			});
+			return true;
+		};
+		if (wrongFolder()) return;
 		const currentTop = Math.max(0, (box.uidNext ?? 1) - 1);
 		if (currentTop <= lastSeen) return; // nothing new
 
@@ -56,7 +70,9 @@ export async function syncMailbox(opts: {
 			const range = `${start}:${end}`;
 
 			let maxUid = lastSeen;
+			let aborted = false;
 
+			if (wrongFolder()) return;
 			for await (const msg of client.fetch(
 				{ uid: range },
 				{
@@ -68,6 +84,11 @@ export async function syncMailbox(opts: {
 					source: true,
 				},
 			)) {
+				// ss2i (16/11/2026) : selection changee pendant le FETCH : rien de ce lot n'est sur.
+				if (aborted || wrongFolder()) {
+					aborted = true;
+					continue;
+				}
 				// ss2i : un message que la base refuse faisait echouer toute la passe, a chaque
 				// passe, et les dossiers suivants n'etaient plus jamais synchronises.
 				try {
@@ -83,6 +104,7 @@ export async function syncMailbox(opts: {
 				if (msg.uid && msg.uid > maxUid) maxUid = msg.uid;
 			}
 
+			if (aborted) return;
 			if (maxUid > lastSeen) {
 				lastSeen = maxUid;
 				await db

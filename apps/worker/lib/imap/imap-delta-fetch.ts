@@ -146,6 +146,17 @@ export const deltaFetch = async (
 				// Outlook. Le prendre pour un deplacement faisait faire au fil des allers-retours
 				// INBOX <-> Envoyes, et le dernier emportait dans les Envoyes les reponses recues
 				// entre-temps (reponse d'OPTI MARCHE invisible dans la boite de reception).
+				// ss2i (16/11/2026) : un message deja connu dans un autre dossier n'arrive pas dans les
+				// Brouillons par un deplacement : les brouillons de courrier ont leur propre Message-ID
+				// (<draft-...>). Le prendre pour un deplacement a range dans Drafts des fils entiers de
+				// l'INBOX de jb et hugo (FETCH parti sur le mauvais dossier). On l'ignore, comme \All.
+				if (existing && existing.mailboxId !== row.id && row.kind === "drafts") {
+					console.warn(
+						`[deltaFetch] ${messageId} vu dans Drafts mais deja dans un autre dossier : ignore (uid=${uid})`,
+					);
+					return;
+				}
+
 				let isSentCopy = false;
 				if (existing && existing.mailboxId !== row.id && !isAllMail(row)) {
 					if (sentIds.has(row.id)) isSentCopy = true;

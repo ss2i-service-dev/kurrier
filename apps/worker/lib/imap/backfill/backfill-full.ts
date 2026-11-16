@@ -85,7 +85,19 @@ const DEFAULT_WINDOW = 300;
 // Pour rejouer un dossier : remettre son curseur a 0 (ou a un UID).
 const BACKFILL_DONE = -1;
 
+// ss2i (16/11/2026) : tout le rattrapage d'un dossier (ouverture, SEARCH, FETCH) se fait sous le
+// verrou du dossier, comme la synchro courante : sans lui, une autre ouverture sur la meme
+// connexion pouvait faire lire un autre dossier (voir imap-open-locked.ts).
 async function backfillMailboxFull(opts: BackfillMailboxOpts): Promise<boolean> {
+	const lock = await opts.client.getMailboxLock(opts.path, { readOnly: true });
+	try {
+		return await backfillMailboxFullLocked(opts);
+	} finally {
+		lock.release();
+	}
+}
+
+async function backfillMailboxFullLocked(opts: BackfillMailboxOpts): Promise<boolean> {
 	const {
 		client,
 		identityId,

@@ -6,7 +6,9 @@
 // collisions de cle (mailbox_threads, et messages : meme Message-ID deja a l'arrivee) sans perte
 // des autres fils, UID retire des la transaction, retour en base de ce que le serveur n'a pas
 // deplace (y compris ce qui n'a jamais ete envoye), IMAP indisponible = rien ne bouge, lot de
-// plus de 65 534 UID arrives, et deltaFetch qui ne supprime plus la copie des Envoyes.
+// plus de 65 534 UID arrives, et deltaFetch qui ne supprime plus la copie des Envoyes. Gmail (18/11) :
+// message deja a l'arrivee (absent de la source) qui reprend son UID par Message-ID, et ligne sans
+// UID cherchee par Message-ID au lieu d'un deplacement en base seule.
 // Base de test : voir mcp-test-env.ts :
 //   MCP_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55436/kurrier_test \
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/move-imap.ts
@@ -56,8 +58,15 @@ class FakeStalwart {
 	async status(path: string) {
 		return { path, uidNext: this.folders.get(path)!.uidNext };
 	}
-	async search() {
-		return []; // Stalwart ne rend rien sur SEARCH HEADER Message-ID
+	gmail = false; // X-GM-EXT-1 : SEARCH HEADER Message-ID et X-GM-RAW « rfc822msgid: » repondent
+	get capabilities() {
+		return new Map(this.gmail ? [["X-GM-EXT-1", true]] : []);
+	}
+	async search(q: any = {}) {
+		if (!this.gmail) return []; // Stalwart ne rend rien sur SEARCH HEADER Message-ID
+		const norm = (v: unknown) => String(v ?? "").trim().replace(/^<|>$/g, "").toLowerCase();
+		const want = norm(q.header ? q.header["message-id"] : String(q.gmraw ?? "").replace(/^rfc822msgid:/, ""));
+		return [...this.folders.get(this.selected)!.msgs].filter(([, m]) => norm(m) === want).map(([u]) => u);
 	}
 	async *fetch(range: string | { uid: string }) {
 		const f = this.folders.get(this.selected)!;
@@ -584,6 +593,99 @@ async function main() {
 		const rows = await msgRows([...sent.ids, r.id]);
 		assert(rows.find((m) => m.id === r.id)?.mailboxId === f.inbox.id, "copie d'un envoye : la reponse de la cliente reste dans l'INBOX");
 		assert(rows.find((m) => m.id === sent.ids[0])?.mailboxId === f.sent.id, "copie d'un envoye : le message envoye reste dans les Envoyes");
+	}
+
+	// 12. Gmail de sam.legros@ (16 et 18/11 : 526 messages archives sans UID) : message deja
+	//     archive par un autre client, absent de l'INBOX Gmail (absence prouvee) mais present dans
+	//     « Tous les messages » a son UID d'origine. Il reprend cet UID par Message-ID, sans MOVE ;
+	//     un UID deja tenu par une autre ligne du dossier n'est jamais pris ; un message supprime
+	//     partout reste a destination sans UID ; celui qui est encore dans l'INBOX part par le MOVE
+	//     dans le meme lot ; le job reussit.
+	{
+		const f = await createUserFixture("move-gmail-deja-archive");
+		const all = await folderOf(f, "archive", "[Gmail]/Tous les messages");
+		await syncRow(f, f.inbox.id, 9000);
+		await syncRow(f, all.id, 9000);
+		const a = `<Deja-Archive-${Date.now()}@x>`;
+		const pris = `<uid-pris-${Date.now()}@x>`;
+		const supprime = `<supprime-partout-${Date.now()}@x>`;
+		const present = `<encore-en-inbox-${Date.now()}@x>`;
+		const imap = new FakeStalwart({
+			INBOX: { uidNext: 9001, msgs: [[8000, `<sans-rapport-${Date.now()}@x>`], [8001, present]] },
+			"[Gmail]/Tous les messages": { uidNext: 9001, msgs: [[500, a.toLowerCase()], [501, pris]] },
+		});
+		imap.gmail = true;
+		imap.existsOverride = 9000; // gros dossiers Gmail : jamais balayes, SEARCH seulement
+		const autre = await thread(f, all.id, [{ mid: `<autre-ligne-${Date.now()}@x>`, uid: 501, path: "[Gmail]/Tous les messages" }]);
+		const t = await thread(f, f.inbox.id, [{ mid: a, uid: 7000 }, { mid: pris, uid: 7001 }, { mid: supprime, uid: 7002 }, { mid: present, uid: 8001 }]);
+		let error: unknown = null;
+		await moveMail({ threadId: t.id, threadIds: [t.id], mailboxId: f.inbox.id, op: "archive", moveImap: true }, on(f, imap)).catch((e) => (error = e));
+		assert(error === null, `Gmail, deja archive : le job ne leve pas (${error})`);
+		assert(imap.moves === 1 && !imap.folders.get("INBOX")!.msgs.has(8001), `Gmail, deja archive : un seul UID MOVE, pour le message encore dans l'INBOX (${imap.moves})`);
+		const rows = new Map((await msgRows(t.ids)).map((r) => [r.messageId, r]));
+		const ra = rows.get(a)!;
+		assert(
+			ra.mailboxId === all.id && (ra.metaData as any).imap.uid === 500 && (ra.metaData as any).imap.mailboxPath === "[Gmail]/Tous les messages",
+			`Gmail, deja archive : UID de « Tous les messages » repris par Message-ID (${JSON.stringify((ra.metaData as any).imap)})`,
+		);
+		const rp = rows.get(pris)!;
+		assert(rp.mailboxId === all.id && (rp.metaData as any).imap.uid === undefined, "Gmail, deja archive : UID tenu par une autre ligne du dossier jamais pris");
+		const [ro] = await msgRows(autre.ids);
+		assert((ro.metaData as any).imap.uid === 501, "Gmail, deja archive : l'autre ligne garde son UID");
+		const rs = rows.get(supprime)!;
+		assert(rs.mailboxId === all.id && (rs.metaData as any).imap.uid === undefined, "Gmail, supprime partout : a destination sans UID");
+		const rn = rows.get(present)!;
+		assert(rn.mailboxId === all.id && (rn.metaData as any).imap.uid === 9001, `Gmail, encore dans l'INBOX : UID d'arrivee du MOVE (${JSON.stringify((rn.metaData as any).imap)})`);
+		assert((await cursorOf(all.id)) === 9001, "Gmail, deja archive : curseur de « Tous les messages » au-dela du seul message arrive");
+	}
+
+	// 13. Ligne sans UID dans un dossier synchronise (laissee sans UID par un deplacement
+	//     precedent) : cherchee par Message-ID dans la source au lieu d'un deplacement « en base
+	//     seule » (la base disait Corbeille, Gmail gardait le message dans l'INBOX). Introuvable
+	//     sans preuve d'absence (gros dossier Stalwart, SEARCH en echec) : deplacee en base seule
+	//     comme avant, sans UID, et le job reussit (jamais de job qui echoue sans fin pour elle).
+	{
+		const f = await createUserFixture("move-sans-uid");
+		const trash = await trashOf(f);
+		await syncRow(f, f.inbox.id, 300);
+		await syncRow(f, trash.id, 0);
+		const s = `<sans-uid-${Date.now()}@x>`;
+		const imap = new FakeStalwart({
+			INBOX: { uidNext: 301, msgs: [[210, s]] },
+			"Deleted Items": { uidNext: 1, msgs: [] },
+		});
+		imap.gmail = true;
+		// chemin IMAP du dossier, comme en production (la fixture n'a que le nom « Inbox »)
+		await db.update(mailboxes).set({ metaData: { imap: { path: "INBOX" } } }).where(eq(mailboxes.id, f.inbox.id));
+		const ts = await thread(f, f.inbox.id, [{ mid: s, uid: null }]);
+		await moveMail(job([ts.id], f.inbox.id, true), on(f, imap));
+		assert(imap.moves === 1 && !imap.folders.get("INBOX")!.msgs.has(210), "sans UID : MOVE IMAP fait (trouve par Message-ID)");
+		const [r] = await msgRows(ts.ids);
+		assert(
+			r.mailboxId === trash.id && (r.metaData as any)?.imap?.uid === 1 && imap.folders.get("Deleted Items")!.msgs.get(1) === s,
+			`sans UID : en corbeille avec son UID d'arrivee (${JSON.stringify(r.metaData)})`,
+		);
+
+		const f2 = await createUserFixture("move-sans-uid-introuvable");
+		const trash2 = await trashOf(f2);
+		await syncRow(f2, f2.inbox.id, 300);
+		await syncRow(f2, trash2.id, 0);
+		const n = `<introuvable-${Date.now()}@x>`;
+		const imap2 = new FakeStalwart({
+			INBOX: { uidNext: 301, msgs: [[220, n]] },
+			"Deleted Items": { uidNext: 1, msgs: [] },
+		});
+		imap2.existsOverride = 6000;
+		await db.update(mailboxes).set({ metaData: { imap: { path: "INBOX" } } }).where(eq(mailboxes.id, f2.inbox.id));
+		const tn = await thread(f2, f2.inbox.id, [{ mid: n, uid: null }]);
+		let error2: unknown = null;
+		await moveMail(job([tn.id], f2.inbox.id, true), on(f2, imap2)).catch((e) => (error2 = e));
+		assert(error2 === null, `sans UID, introuvable sans preuve : le job ne leve pas (${error2})`);
+		const [r2] = await msgRows(tn.ids);
+		assert(
+			r2.mailboxId === trash2.id && (r2.metaData as any)?.imap?.uid === undefined && imap2.moves === 0 && imap2.folders.get("INBOX")!.msgs.has(220),
+			`sans UID, introuvable sans preuve : en corbeille en base seule, sans UID, serveur inchange (${JSON.stringify(r2.metaData)})`,
+		);
 	}
 }
 

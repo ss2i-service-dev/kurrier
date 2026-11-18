@@ -42,10 +42,13 @@ export function KindIcon({ kind }: { kind: string }) {
 export default function EditorAttachmentItem({
                                                  attachment,
                                                  publicConfig,
+                                                 onPreview,
                                              }: {
     // attachment: MessageAttachmentEntity;
     attachment: MessageAttachmentWithUrl;
     publicConfig: PublicConfig;
+    // ss2i : ouvre la visionneuse au lieu d'un onglet (pptx).
+    onPreview?: () => void;
 }) {
 
 
@@ -62,6 +65,7 @@ export default function EditorAttachmentItem({
             href={url || "#"}
             target="_blank"
             rel="noreferrer noopener"
+            onClick={onPreview ? (e) => { e.preventDefault(); onPreview(); } : undefined}
             className="group overflow-hidden rounded-2xl border border-neutral-200/70 bg-white transition dark:border-neutral-800 dark:bg-neutral-950"
         >
             <div className="h-44 bg-neutral-50 dark:bg-neutral-900/40 overflow-hidden">

@@ -28,11 +28,12 @@ export function normalizeCid(cid: string) {
 
 // Content-ID -> URL signee, pour resoudre les cid: restes dans le HTML.
 export function cidUrlMap(
-	attachments: (InlineCandidate & { signedUrl?: string | null })[],
+	attachments: (InlineCandidate & { signedUrl?: string | null; inlineUrl?: string | null })[],
 ): Record<string, string> {
 	const map: Record<string, string> = {};
 	for (const a of attachments ?? []) {
-		if (a.cid && a.signedUrl) map[normalizeCid(a.cid)] = a.signedUrl;
+		const url = a.inlineUrl || a.signedUrl;
+		if (a.cid && url) map[normalizeCid(a.cid)] = url;
 	}
 	return map;
 }

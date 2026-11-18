@@ -10,9 +10,14 @@ import { ChevronLeft, ChevronRight, Download, ExternalLink, Eye, Paperclip, X } 
 import { getKind } from "@/components/mailbox/default/editor/editor-attachment-item";
 import type { MessageAttachmentWithUrl } from "@/components/mailbox/default/email-renderer";
 import { formatBytes } from "@/components/k/format";
+import PptxPreview from "@/components/k/pptx-preview";
 
 type Kind = ReturnType<typeof getKind>;
 export const PREVIEWABLE: Kind[] = ["image", "pdf", "text", "video", "audio"];
+
+// Un pptx n'a pas de famille propre : il est previsualisable quand ses octets sont fournis.
+const isPreviewable = (a: MessageAttachmentWithUrl) =>
+	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl);
 
 // Pastille de type : couleur et sigle par famille de fichier.
 export function badgeFor(name: string, kind: Kind) {
@@ -56,7 +61,7 @@ export default function KAttachments({
 				{files.map((a, i) => {
 					const kind = getKind(a);
 					const name = a.filenameOriginal || "pièce jointe";
-					const canPreview = !!a.signedUrl && PREVIEWABLE.includes(kind);
+					const canPreview = isPreviewable(a);
 					const badge = badgeFor(name, kind);
 					return (
 						<button
@@ -116,7 +121,7 @@ export function Viewer({
 	// On ne fait defiler que les pieces previsualisables.
 	const previewable = files
 		.map((a, i) => ({ a, i }))
-		.filter(({ a }) => !!a.signedUrl && PREVIEWABLE.includes(getKind(a)));
+		.filter(({ a }) => isPreviewable(a));
 	const pos = Math.max(0, previewable.findIndex((p) => p.i === index));
 	const current = files[index];
 	const kind = getKind(current);
@@ -178,14 +183,17 @@ export function Viewer({
 							.join(" · ")}
 					</div>
 				</div>
-				<a
-					href={current.signedUrl}
-					target="_blank"
-					rel="noreferrer noopener"
-					className="flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] text-white/85 transition-colors hover:bg-white/15 hover:text-white"
-				>
-					<ExternalLink size={15} /> Ouvrir dans un onglet
-				</a>
+				{/* Un pptx ouvert dans un onglet serait simplement telecharge. */}
+				{!current.contentUrl && (
+					<a
+						href={current.signedUrl}
+						target="_blank"
+						rel="noreferrer noopener"
+						className="flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] text-white/85 transition-colors hover:bg-white/15 hover:text-white"
+					>
+						<ExternalLink size={15} /> Ouvrir dans un onglet
+					</a>
+				)}
 				{current.downloadUrl && (
 					<a
 						href={current.downloadUrl}
@@ -218,6 +226,9 @@ export function Viewer({
 				)}
 
 				<div className="flex h-full w-full items-center justify-center" onClick={(e) => e.stopPropagation()}>
+					{current.contentUrl && (
+						<PptxPreview key={current.id} url={current.contentUrl} name={name} downloadUrl={current.downloadUrl} />
+					)}
 					{kind === "image" && (
 						// biome-ignore lint/a11y/useAltText: le nom du fichier est dans la barre du haut
 						<img

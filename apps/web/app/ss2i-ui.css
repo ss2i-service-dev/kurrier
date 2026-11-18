@@ -483,6 +483,29 @@
 }
 /* Interface classique, nouveau message : la fenetre est bornee a la hauteur de l'ecran et son
    contenu defile ; la barre d'envoi reste collee en bas de la zone qui defile. */
+.ss2i-compose-scroll {
+	display: flex;
+	flex-direction: column;
+}
+/* La zone de texte remplit la fenetre : chaque niveau entre la zone qui defile et
+   l'editeur devient une colonne flexible qui grandit sans retrecir sous son contenu. */
+.ss2i-compose-scroll :is(div, form):has(.mantine-RichTextEditor-root),
+.ss2i-compose-scroll .mantine-RichTextEditor-root {
+	display: flex;
+	flex-direction: column;
+	flex: 1 0 auto;
+}
+.ss2i-compose-scroll .mantine-RichTextEditor-root > :not(.mantine-RichTextEditor-content) {
+	flex-shrink: 0;
+}
+.ss2i-compose-scroll .mantine-RichTextEditor-content {
+	display: flex;
+	flex-direction: column;
+	flex: 1 0 auto;
+}
+.ss2i-compose-scroll .mantine-RichTextEditor-content .ProseMirror {
+	flex: 1 1 auto;
+}
 .ss2i-compose-scroll .mantine-RichTextEditor-root > .border-t {
 	position: sticky;
 	bottom: 0;

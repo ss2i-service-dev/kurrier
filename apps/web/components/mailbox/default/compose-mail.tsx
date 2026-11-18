@@ -168,7 +168,9 @@ export default function ComposeMail({
 								"fixed z-[1000] bg-background border shadow-xl rounded-lg overflow-hidden flex flex-col",
 								"right-12 bottom-4",
 								// ss2i : jamais plus haute que l'ecran (ancree en bas, un long texte faisait sortir destinataires et objet par le haut) ; le contenu defile dedans.
-								expanded ? "w-[720px] h-[70vh]" : "w-[520px] h-auto max-h-[calc(100dvh-2rem)]",
+								// Elle exploite l'espace : toute la hauteur de l'ecran et jusqu'a 960 px de large (Samuel le 18/11), reduite a sa barre quand elle est minimisee.
+								"w-[min(960px,calc(100vw-6rem))] max-h-[calc(100dvh-2rem)]",
+								minimized ? "h-auto" : "h-[calc(100dvh-2rem)]",
 								"transition-[width,height] duration-200 ease-out",
 								"motion-safe:transition-opacity motion-safe:duration-200 motion-safe:ease-out motion-safe:transition-transform",
 								appeared

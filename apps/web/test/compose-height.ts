@@ -3,7 +3,8 @@
 // objet, debut du texte) sortait par le haut de la fenetre du navigateur, hors d'atteinte
 // (Samuel le 18/11 : « on a un pb de presentation quand on redige un brouillon from scratch »).
 // La fenetre est maintenant bornee a la hauteur de l'ecran, son contenu defile a l'interieur, et
-// la barre d'envoi reste collee en bas de la zone qui defile.
+// la barre d'envoi reste collee en bas de la zone qui defile. Elle prend aussi toute la hauteur de
+// l'ecran et jusqu'a 960 px de large, la zone de texte remplissant l'espace (au lieu de 520 px).
 // Lance par Dockerfile.web avant le build. Depuis la racine :
 //   node_modules/.bin/tsx apps/web/test/compose-height.ts
 import assert from "node:assert/strict";
@@ -27,6 +28,13 @@ test("la fenetre du nouveau message ne depasse jamais la hauteur de l'ecran", ()
 	assert.ok(compose.includes("max-h-[calc(100dvh-2rem)]"), "hauteur maximale bornee a l'ecran");
 	assert.doesNotMatch(compose, /"max-h-none"/, "plus de max-h-none sur le corps");
 	assert.match(compose, /fixed z-\[1000\][^"]*flex flex-col/, "fenetre en colonne flexible");
+});
+test("la fenetre exploite l'espace de l'ecran (Samuel le 18/11)", () => {
+	assert.ok(compose.includes("w-[min(960px,calc(100vw-6rem))]"), "largeur jusqu'a 960 px");
+	assert.ok(compose.includes("h-[calc(100dvh-2rem)]"), "toute la hauteur de l'ecran");
+	assert.doesNotMatch(compose, /w-\[520px\]/, "plus de fenetre etroite de 520 px");
+	const css = src("app/ss2i-ui.css");
+	assert.match(css, /\.ss2i-compose-scroll \.mantine-RichTextEditor-content\s*\{[^}]*flex: 1 0 auto;/, "zone de texte qui remplit la fenetre");
 });
 test("le contenu de la fenetre defile a l'interieur", () => {
 	assert.match(compose, /ss2i-compose-scroll min-h-0 overflow-y-auto/, "corps de la fenetre en defilement");

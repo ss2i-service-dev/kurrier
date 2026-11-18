@@ -5,6 +5,8 @@ import React, { startTransition, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { registerRefresher, setActiveThread, setClosingThread, setComposeSlot, useMailStore } from "@/components/k/mail-store";
 import { Inbox } from "lucide-react";
+import KReaderTabsBar from "@/components/k/reader-tabs-bar";
+import { setTabsScope, tabFor, threadShown } from "@/components/k/reader-tabs";
 
 export const isThreadPath = (p?: string | null) => /\/threads\/[^/]+/.test(p ?? "");
 
@@ -32,8 +34,13 @@ export default function MailPanes({ list, reader }: { list: React.ReactNode; rea
 	// (non bloquant). Et fin de « l'ouverture en cours » quand l'URL a change.
 	useEffect(() => registerRefresher(() => startTransition(() => router.refresh())), [router]);
 	useEffect(() => {
-		setActiveThread(pathname?.match(/\/threads\/([^/]+)/)?.[1] ?? null);
+		const threadId = pathname?.match(/\/threads\/([^/]+)/)?.[1] ?? null;
+		setActiveThread(threadId);
 		setClosingThread(null);
+		// Onglets internes (option, reader-tabs.ts) : ceux de l'identite affichee,
+		// et le fil affiche remplace l'onglet courant s'il n'en a pas deja un.
+		setTabsScope(pathname?.match(/\/dashboard\/mail\/([^/]+)\//)?.[1] ?? null);
+		threadShown(threadId && pathname ? tabFor(threadId, pathname) : null);
 	}, [pathname]);
 
 	const reopen = React.useRef<{ list: string; target: string } | null>(null);
@@ -67,6 +74,7 @@ export default function MailPanes({ list, reader }: { list: React.ReactNode; rea
 				{composingRaw && (
 					<div ref={setComposeSlot} data-k-compose className={composing ? "flex min-h-0 flex-1 flex-col" : "hidden"} />
 				)}
+				{!composing && <KReaderTabsBar />}
 				{!composing && (onThread ? reader : <EmptyReader />)}
 			</section>
 		</div>

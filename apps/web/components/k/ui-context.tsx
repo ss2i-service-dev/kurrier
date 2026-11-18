@@ -8,6 +8,7 @@ import { usePathname } from "next/navigation";
 import KToastFr from "@/components/k/toast-fr";
 import KNewMailNotifier from "@/components/k/new-mail-notifier";
 import KShortcutsConfig from "@/components/k/shortcuts-config";
+import { KOpenPrefsConfig } from "@/components/k/reader-tabs-bar";
 
 const KUiContext = createContext(false);
 
@@ -23,6 +24,8 @@ export function KUiProvider({ nouvelle, children }: { nouvelle: boolean; childre
 			{inApp && <KNewMailNotifier nouvelle={nouvelle} />}
 			{/* Raccourcis clavier personnalises (Parametres > Raccourcis clavier). */}
 			{inApp && <KShortcutsConfig nouvelle={nouvelle} />}
+			{/* Ouverture des fils : onglets internes (Parametres > Ouverture des mails). */}
+			{inApp && nouvelle && <KOpenPrefsConfig />}
 			{children}
 		</KUiContext.Provider>
 	);

@@ -29,6 +29,8 @@ import { correspondents, listDate } from "@/components/k/format";
 import { kHref } from "@/components/k/href";
 import { arrivedSinceRead, closeCompose, mailActions, setActiveThread, useMailStore } from "@/components/k/mail-store";
 import { refreshRowHover, useRowHot } from "@/components/k/row-hover";
+import { resolveRowOpen } from "@/components/k/open-prefs";
+import { getOpenPrefs, openTab, rememberSubject, tabFor } from "@/components/k/reader-tabs";
 
 type Props = {
 	item: FetchMailboxThreadsResult[number];
@@ -119,11 +121,30 @@ export default function KThreadRow({
 	};
 
 
+	// Objet retenu pour nommer l'onglet interne si le fil y est ouvert.
+	rememberSubject(String(item.threadId), stripSubjectPrefixes(item.subject) || "(sans objet)");
+
 	const openThread = (e: React.MouseEvent) => {
 		// Mode selection (comme la classique) : un clic coche au lieu d'ouvrir.
-		if (selecting) {
+		if (selecting && e.button === 0 && !e.ctrlKey && !e.metaKey) {
 			toggleSelection(e.shiftKey);
 			return;
+		}
+		// Ouverture selon le reglage (Parametres > Ouverture des mails, open-prefs.ts) :
+		// onglet du navigateur (clic molette ou Ctrl/Cmd+clic par defaut), onglet
+		// interne (option), ou fil seul (clic, comportement d'origine).
+		const how = resolveRowOpen(getOpenPrefs(), e);
+		if (!how) return;
+		if (how === "browser") {
+			window.open(threadUrl, "_blank", "noopener");
+			return;
+		}
+		if (how === "tab") {
+			// Clic molette sur une ligne alors qu'un fil est deja affiche : l'onglet
+			// s'ouvre en arriere-plan, comme dans le navigateur.
+			const background = e.button === 1 && /\/threads\/[^/]+/.test(window.location.pathname);
+			openTab(tabFor(String(item.threadId), new URL(threadUrl, window.location.origin).pathname));
+			if (background) return;
 		}
 		if (isOnSnoozedPage) {
 			window.location.href = threadUrl;
@@ -172,6 +193,13 @@ export default function KThreadRow({
 	return (
 		<li
 			onMouseDown={preventShiftTextSelection}
+			onAuxClick={(e) => {
+				if (e.button !== 1) return;
+				// Clic molette sur un bouton de la ligne (etoile, actions) : rien.
+				if ((e.target as Element).closest?.("button, a, input, [role='menu']")) return;
+				e.preventDefault();
+				openThread(e);
+			}}
 			role="listitem"
 			data-thread-id={item.threadId}
 			aria-current={isActive ? "true" : undefined}

@@ -1,6 +1,7 @@
 "use client";
 import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
+import { closeTabs } from "@/components/k/reader-tabs";
 
 // ss2i : fils retires de l'affichage des le clic (corbeille, archive, deplacement,
 // suppression definitive), sans attendre le worker. Avant, rien ne bougeait a l'ecran
@@ -28,6 +29,8 @@ export function hideThreads(mailboxId: string, threadIds: string[], archive = fa
 	const until = Date.now() + TTL_MS;
 	threadIds.forEach((id) => pending.set(key(mailboxId, id), { until, archive }));
 	publish();
+	// ss2i : un fil archive, supprime ou deplace quitte aussi les onglets internes.
+	closeTabs(threadIds.map(String));
 }
 
 export function showThreads(mailboxId: string, threadIds: string[]) {

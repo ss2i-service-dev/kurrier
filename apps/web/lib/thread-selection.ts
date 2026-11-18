@@ -35,6 +35,8 @@ export function toggleThreadSelection<T extends Partial<ThreadSelectionState>>(
 // cliquee (selection native du navigateur, 05/11/2026). Bloquer l'appui souris avec Maj
 // empeche la selection de texte sans empecher le clic ; sans Maj, rien ne change
 // (texte selectionnable, glisser-deposer d'un fil).
-export function preventShiftTextSelection(e: { shiftKey: boolean; preventDefault: () => void }) {
-	if (e.shiftKey) e.preventDefault();
+export function preventShiftTextSelection(e: { shiftKey: boolean; button?: number; preventDefault: () => void }) {
+	// ss2i : clic molette aussi, pas de defilement automatique sur une ligne (elle
+	// s'ouvre alors dans un onglet, a auxclick : components/k/thread-row.tsx).
+	if (e.shiftKey || e.button === 1) e.preventDefault();
 }

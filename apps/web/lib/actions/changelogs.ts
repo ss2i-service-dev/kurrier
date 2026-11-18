@@ -63,7 +63,7 @@ export async function markChangelogSeen(version: string): Promise<{ success: boo
 	if (current && compareVersions(version, current) <= 0) return { success: true, lastSeen: current };
 	await db.execute(sql`
 		update workspaces
-		set meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object(
+		set meta = (case when jsonb_typeof(meta) = 'object' then meta else '{}'::jsonb end) || jsonb_build_object(
 			'ss2iChangelogSeen',
 			coalesce(meta->'ss2iChangelogSeen', '{}'::jsonb)
 				|| jsonb_build_object(${ctx.userId}::text, ${version}::text)

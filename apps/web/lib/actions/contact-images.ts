@@ -62,7 +62,7 @@ export async function setRemoteImagesForContact(input: {
 	// Mise a jour atomique de la liste de l'utilisateur, sans doublon.
 	await db.execute(sql`
 		update workspaces
-		set meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object(
+		set meta = (case when jsonb_typeof(meta) = 'object' then meta else '{}'::jsonb end) || jsonb_build_object(
 			'ss2iRemoteImages',
 			coalesce(meta->'ss2iRemoteImages', '{}'::jsonb) || jsonb_build_object(
 				${ctx.userId}::text,

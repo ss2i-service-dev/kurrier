@@ -8,7 +8,8 @@
 // deplace (y compris ce qui n'a jamais ete envoye), IMAP indisponible = rien ne bouge, lot de
 // plus de 65 534 UID arrives, et deltaFetch qui ne supprime plus la copie des Envoyes. Gmail (18/11) :
 // message deja a l'arrivee (absent de la source) qui reprend son UID par Message-ID, et ligne sans
-// UID cherchee par Message-ID au lieu d'un deplacement en base seule.
+// UID cherchee par Message-ID au lieu d'un deplacement en base seule. Messages envoyes dont meta
+// vaut le JSON `null` (18/11 : 189 lignes, job 8355 en echec) : deplaces, ou remis en place.
 // Base de test : voir mcp-test-env.ts :
 //   MCP_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55436/kurrier_test \
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/move-imap.ts
@@ -16,7 +17,7 @@ import { assert, expectThrow } from "./mcp-test-env";
 import { createUserFixture } from "./mcp-fixtures";
 import { db, mailboxes, mailboxSync, mailboxThreads, messages, threads } from "@db";
 import { upsertMailboxThreadItem } from "@common";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { ImapFlow } from "imapflow";
 import { moveMail } from "../lib/imap/imap-move";
 import { deltaFetch } from "../lib/imap/imap-delta-fetch";
@@ -164,7 +165,7 @@ async function cursorOf(mailboxId: string) {
 }
 
 // Un fil de messages dans `mailboxId` ; uid null = message sans UID IMAP.
-async function thread(f: Fixture, mailboxId: string, items: Array<{ mid: string; uid: number | null; path?: string }>) {
+async function thread(f: Fixture, mailboxId: string, items: Array<{ mid: string; uid: number | null; path?: string; nullMeta?: boolean }>) {
 	const [t] = await db
 		.insert(threads)
 		.values({ ownerId: f.user.id, workspaceId: f.workspace.id, lastMessageDate: new Date() })
@@ -187,6 +188,8 @@ async function thread(f: Fixture, mailboxId: string, items: Array<{ mid: string;
 			} as any)
 			.returning();
 		ids.push(m.id);
+		// JSON `null` (jsonb 'null'), pas le NULL SQL : drizzle ecrit un NULL SQL pour `null`.
+		if (it.nullMeta) await db.execute(sql`update messages set meta = 'null'::jsonb where id = ${m.id}::uuid`);
 	}
 	await upsertMailboxThreadItem(ids[ids.length - 1]);
 	return { id: t.id, ids };
@@ -685,6 +688,45 @@ async function main() {
 		assert(
 			r2.mailboxId === trash2.id && (r2.metaData as any)?.imap?.uid === undefined && imap2.moves === 0 && imap2.folders.get("INBOX")!.msgs.has(220),
 			`sans UID, introuvable sans preuve : en corbeille en base seule, sans UID, serveur inchange (${JSON.stringify(r2.metaData)})`,
+		);
+	}
+
+	// 14. Messages envoyes dont meta vaut le JSON `null` (pas le NULL SQL : drizzle ecrit `null` en
+	//     jsonb 'null', 189 lignes en production, job mail:move 8355 du 13/11 en echec) : coalesce
+	//     ne les remplace pas, `'null'::jsonb || objet` fabrique un tableau et jsonb_set y echoue.
+	//     Le deplacement reussit (UID d'arrivee recopie) ; un message que le serveur n'a pas
+	//     deplace est remis dans la source avec un meta objet.
+	{
+		const f = await createUserFixture("move-meta-null");
+		const trash = await trashOf(f);
+		await syncRow(f, f.inbox.id, 300);
+		await syncRow(f, trash.id, 0);
+		const a = `<meta-null-a-${Date.now()}@x>`;
+		const b = `<meta-null-b-${Date.now()}@x>`;
+		const imap = new FakeStalwart({
+			INBOX: { uidNext: 301, msgs: [[210, a], [211, b]] },
+			"Deleted Items": { uidNext: 1, msgs: [] },
+		});
+		imap.skipOnMove.add(211);
+		await db.update(mailboxes).set({ metaData: { imap: { path: "INBOX" } } }).where(eq(mailboxes.id, f.inbox.id));
+		const ta = await thread(f, f.inbox.id, [{ mid: a, uid: null, nullMeta: true }]);
+		const tb = await thread(f, f.inbox.id, [{ mid: b, uid: null, nullMeta: true }]);
+		const typeOf = async (id: string) =>
+			String((await db.execute(sql`select coalesce(jsonb_typeof(meta), 'sql-null') as t from messages where id = ${id}::uuid`))[0]?.t);
+		assert((await typeOf(ta.ids[0])) === "null", "meta a null : la fixture ecrit bien le JSON null");
+		let error: unknown = null;
+		await moveMail(job([ta.id], f.inbox.id, true), on(f, imap)).catch((e) => (error = e));
+		assert(error === null, `meta a null : le job ne leve pas (${error})`);
+		const [ra] = await msgRows(ta.ids);
+		assert(
+			ra.mailboxId === trash.id && (ra.metaData as any)?.imap?.mailboxPath === "Deleted Items" && imap.folders.get("Deleted Items")!.msgs.get(1) === a && (ra.metaData as any)?.imap?.uid === 1,
+			`meta a null : en corbeille avec chemin et UID d'arrivee (${JSON.stringify(ra.metaData)})`,
+		);
+		await expectThrow(() => moveMail(job([tb.id], f.inbox.id, true), on(f, imap)), /non deplaces sur IMAP/, "meta a null, non deplace par le serveur : le job echoue pour etre rejoue");
+		const [rb] = await msgRows(tb.ids);
+		assert(
+			rb.mailboxId === f.inbox.id && (await typeOf(tb.ids[0])) === "object" && (rb.metaData as any)?.imap?.mailboxPath === "INBOX" && imap.folders.get("INBOX")!.msgs.has(211),
+			`meta a null, non deplace par le serveur : remis dans l'INBOX, meta objet (${JSON.stringify(rb.metaData)})`,
 		);
 	}
 }

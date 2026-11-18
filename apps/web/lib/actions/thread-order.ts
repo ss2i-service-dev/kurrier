@@ -59,7 +59,7 @@ export async function setThreadOrder(order: ThreadOrder) {
 		order === "newest_first" ? "newest_first" : "oldest_first";
 	await db.execute(sql`
 		update workspaces
-		set meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object(
+		set meta = (case when jsonb_typeof(meta) = 'object' then meta else '{}'::jsonb end) || jsonb_build_object(
 			'ss2iThreadOrder',
 			coalesce(meta->'ss2iThreadOrder', '{}'::jsonb)
 				|| jsonb_build_object(${ctx.userId}::text, ${value}::text)

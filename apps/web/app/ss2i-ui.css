@@ -478,6 +478,14 @@
 	background: var(--k-hover);
 	border-radius: var(--k-radius-sm);
 }
+/* Interface classique, nouveau message : la fenetre est bornee a la hauteur de l'ecran et son
+   contenu defile ; la barre d'envoi reste collee en bas de la zone qui defile. */
+.ss2i-compose-scroll .mantine-RichTextEditor-root > .border-t {
+	position: sticky;
+	bottom: 0;
+	z-index: 3;
+	background: var(--background);
+}
 /* Pied de l'editeur : un seul filet, espacement regulier, et toujours visible
    en bas de la zone qui defile (le bouton Envoyer ne part plus sous la citation). */
 [data-ui="ss2i"] .k-editor > .border-t {

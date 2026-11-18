@@ -71,6 +71,10 @@ test("bloc present en haut des trois pages de fil", () => {
 	}
 });
 
+test("bloc du fil : pastille de type comme les vignettes des mails", () => {
+	assert.match(readFileSync(join(web, "components/mailbox/default/message-attachments.tsx"), "utf8"), /badgeFor\(name, kind\)\.label/);
+});
+
 if (failures > 0) {
 	console.error(`${failures} test(s) en echec`);
 	process.exit(1);

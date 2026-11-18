@@ -16,7 +16,7 @@ import EditorAttachmentItem, {
 } from "@/components/mailbox/default/editor/editor-attachment-item";
 import type { MessageAttachmentWithUrl } from "@/components/mailbox/default/email-renderer";
 import { useK, useNouvelle } from "@/components/k/ui-context";
-import { isPreviewable, Viewer } from "@/components/k/attachments";
+import { badgeFor, isPreviewable, Viewer } from "@/components/k/attachments";
 
 // Variante « thread » : bloc du haut de la conversation, au-dela on replie.
 const THREAD_VISIBLE = 8;
@@ -136,9 +136,24 @@ export default function MessageAttachments({
 									}
 									className="inline-flex min-w-0 items-center gap-2 py-1.5 pl-2.5 pr-1"
 								>
-									<span className="shrink-0 text-neutral-500">
-										<KindIcon kind={kind} />
-									</span>
+									{inThread ? (
+										// Meme repere que les vignettes des mails : image reelle ou pastille de type.
+										kind === "image" && a.signedUrl ? (
+											// biome-ignore lint/a11y/useAltText: vignette decorative, le nom est affiche a cote
+											<img src={a.signedUrl} alt="" loading="lazy" className="h-5 w-5 shrink-0 rounded-[4px] object-cover" />
+										) : (
+											<span
+												className="shrink-0 rounded-[4px] px-1.5 py-0.5 text-[10px] font-bold leading-none tracking-wide text-white"
+												style={{ background: badgeFor(name, kind).color }}
+											>
+												{badgeFor(name, kind).label}
+											</span>
+										)
+									) : (
+										<span className="shrink-0 text-neutral-500">
+											<KindIcon kind={kind} />
+										</span>
+									)}
 									<span className="min-w-0 truncate hover:underline">{name}</span>
 									{size && (
 										<span className="shrink-0 text-xs text-muted-foreground">{size}</span>

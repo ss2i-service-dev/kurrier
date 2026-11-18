@@ -165,10 +165,10 @@ export default function ComposeMail({
 							role="dialog"
 							aria-modal="true"
 							className={[
-								"fixed z-[1000] bg-background border shadow-xl rounded-lg overflow-hidden",
+								"fixed z-[1000] bg-background border shadow-xl rounded-lg overflow-hidden flex flex-col",
 								"right-12 bottom-4",
-								// expanded ? "w-[720px] h-[70vh]" : "w-[520px] h-auto",
-								expanded ? "w-[720px] h-[70vh]" : "w-[520px] h-auto",
+								// ss2i : jamais plus haute que l'ecran (ancree en bas, un long texte faisait sortir destinataires et objet par le haut) ; le contenu defile dedans.
+								expanded ? "w-[720px] h-[70vh]" : "w-[520px] h-auto max-h-[calc(100dvh-2rem)]",
 								"transition-[width,height] duration-200 ease-out",
 								"motion-safe:transition-opacity motion-safe:duration-200 motion-safe:ease-out motion-safe:transition-transform",
 								appeared
@@ -200,11 +200,10 @@ export default function ComposeMail({
 										? "grid-rows-[0fr] opacity-0"
 										: "grid-rows-[1fr] opacity-100",
 									"transition-[grid-template-rows,opacity] duration-200 ease-out",
-									"overflow-hidden",
-									expanded ? "max-h-[calc(70vh-48px)]" : "max-h-none",
+									"overflow-hidden min-h-0 flex-1",
 								].join(" ")}
 							>
-								<div className="min-h-0">
+								<div className="ss2i-compose-scroll min-h-0 overflow-y-auto">
 									<EmailEditor
 										sentMailboxId={String(sentMailboxId)}
 										ref={editorRef}

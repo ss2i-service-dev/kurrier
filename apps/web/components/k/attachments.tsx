@@ -11,13 +11,17 @@ import { getKind } from "@/components/mailbox/default/editor/editor-attachment-i
 import type { MessageAttachmentWithUrl } from "@/components/mailbox/default/email-renderer";
 import { formatBytes } from "@/components/k/format";
 import PptxPreview from "@/components/k/pptx-preview";
+import TextPreview from "@/components/k/text-preview";
+import ZipPreview from "@/components/k/zip-preview";
+import { isTabular } from "@/lib/text-preview";
 
 type Kind = ReturnType<typeof getKind>;
 export const PREVIEWABLE: Kind[] = ["image", "pdf", "text", "video", "audio"];
 
-// Un pptx n'a pas de famille propre : il est previsualisable quand ses octets sont fournis.
+// Un pptx, un CSV envoye en application/vnd.ms-excel ou un zip n'ont pas de famille propre :
+// ils sont previsualisables quand la page porte l'URL de leur apercu.
 export const isPreviewable = (a: MessageAttachmentWithUrl) =>
-	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl);
+	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl || !!a.textUrl || !!a.zipUrl);
 
 // Pastille de type : couleur et sigle par famille de fichier.
 export function badgeFor(name: string, kind: Kind) {
@@ -183,8 +187,8 @@ export function Viewer({
 							.join(" · ")}
 					</div>
 				</div>
-				{/* Un pptx ouvert dans un onglet serait simplement telecharge. */}
-				{!current.contentUrl && (
+				{/* Un pptx, un CSV ou un zip ouvert dans un onglet serait simplement telecharge. */}
+				{!current.contentUrl && !current.zipUrl && !(current.textUrl && isTabular(current)) && (
 					<a
 						href={current.signedUrl}
 						target="_blank"
@@ -240,7 +244,19 @@ export function Viewer({
 							style={{ minWidth: "min(420px, 100%)" }}
 						/>
 					)}
-					{(kind === "pdf" || kind === "text") && (
+					{current.textUrl && (
+						<TextPreview
+							key={current.id}
+							url={current.textUrl}
+							name={name}
+							tabular={isTabular(current)}
+							downloadUrl={current.downloadUrl}
+						/>
+					)}
+					{current.zipUrl && (
+						<ZipPreview key={current.id} url={current.zipUrl} name={name} downloadUrl={current.downloadUrl} />
+					)}
+					{(kind === "pdf" || (kind === "text" && !current.textUrl)) && (
 						<iframe
 							key={current.id}
 							src={current.signedUrl}

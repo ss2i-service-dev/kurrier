@@ -57,7 +57,7 @@ export async function setListUnderThread(mode: ListUnderThread) {
 	const value = parseListUnderThread(mode);
 	await db.execute(sql`
 		update workspaces
-		set meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object(
+		set meta = (case when jsonb_typeof(meta) = 'object' then meta else '{}'::jsonb end) || jsonb_build_object(
 			'ss2iListUnderThread',
 			coalesce(meta->'ss2iListUnderThread', '{}'::jsonb)
 				|| jsonb_build_object(${ctx.userId}::text, ${value}::text)

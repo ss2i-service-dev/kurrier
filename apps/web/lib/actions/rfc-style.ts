@@ -52,7 +52,7 @@ export async function setRfcStyleEnabled(enabled: boolean) {
 	if (!ctx) return { success: false, error: "Not authenticated" };
 	await db.execute(sql`
 		update workspaces
-		set meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object(
+		set meta = (case when jsonb_typeof(meta) = 'object' then meta else '{}'::jsonb end) || jsonb_build_object(
 			'ss2iRfcStyle',
 			coalesce(meta->'ss2iRfcStyle', '{}'::jsonb)
 				|| jsonb_build_object(${ctx.userId}::text, ${Boolean(enabled)}::boolean)

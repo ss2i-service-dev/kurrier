@@ -120,7 +120,7 @@ export async function setDraftSendState(
 	},
 	opts: { ifJobId?: string } = {},
 ) {
-	let expr = sql`coalesce(${messages.metaData}, '{}'::jsonb)`;
+	let expr = sql`(case when jsonb_typeof(${messages.metaData}) = 'object' then ${messages.metaData} else '{}'::jsonb end)`;
 	for (const key of ["pendingSend", "sendError"] as const) {
 		if (!(key in patch)) continue;
 		const value = patch[key];
@@ -449,7 +449,7 @@ export async function upsertDraftRow(input: DraftInput) {
 				...fields,
 				// pendingSend est repris de la base au moment de l'ecriture (envoi pose entre la
 				// lecture et ici).
-				metaData: sql`jsonb_set(coalesce(${messages.metaData}, '{}'::jsonb), '{draft}', (${JSON.stringify(draftMeta)}::jsonb - 'pendingSend') || case when ${messages.metaData} #> '{draft,pendingSend}' is not null then jsonb_build_object('pendingSend', ${messages.metaData} #> '{draft,pendingSend}') else '{}'::jsonb end, true)`,
+				metaData: sql`jsonb_set((case when jsonb_typeof(${messages.metaData}) = 'object' then ${messages.metaData} else '{}'::jsonb end), '{draft}', (${JSON.stringify(draftMeta)}::jsonb - 'pendingSend') || case when ${messages.metaData} #> '{draft,pendingSend}' is not null then jsonb_build_object('pendingSend', ${messages.metaData} #> '{draft,pendingSend}') else '{}'::jsonb end, true)`,
 			})
 			.where(eq(messages.id, existing.id))
 			.returning();

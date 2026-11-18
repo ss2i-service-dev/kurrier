@@ -27,6 +27,7 @@ import {
 import { hideThreads, moveWithUndo } from "@/lib/pending-moves";
 import { setThreadPinned } from "@/lib/actions/k-pins";
 import { refreshUnreadBadge } from "@/components/k/new-mail-notifier";
+import { createArrivalTracker, type ArrivalSnapshot } from "@/lib/arrival-tracker";
 
 type State = {
 	read: Map<string, boolean>;
@@ -157,7 +158,7 @@ const ids = (x: string | string[]) => (Array.isArray(x) ? x : [x]);
 function setRead(threadIds: string[], value: boolean | null) {
 	const read = new Map(state.read);
 	threadIds.forEach((id) => {
-		readBaseline.delete(String(id));
+		arrivals.reset(String(id));
 		if (value === null) read.delete(id);
 		else read.set(id, value);
 	});
@@ -176,20 +177,13 @@ export function isManuallyUnread(threadId: string) {
 	return manualUnread.has(String(threadId));
 }
 
-// Fil lu ou ouvert a l'ecran : date de son dernier message a ce moment-la. Un
-// message qui arrive ensuite (fil ouvert : il est aussitot marque lu au serveur
-// par son affichage) reprend le liseré des non lus, comme indicateur visuel,
-// jusqu'a la prochaine ouverture du fil depuis la liste (mailActions.read).
-const readBaseline = new Map<string, string>();
-export function arrivedSinceRead(threadId: string, lastActivityAt: unknown, track: boolean): boolean {
-	const id = String(threadId);
-	const now = String(lastActivityAt ?? "");
-	const base = readBaseline.get(id);
-	if (base === undefined) {
-		if (track) readBaseline.set(id, now);
-		return false;
-	}
-	return base !== now;
+// Fil lu ou ouvert a l'ecran : un message d'un autre qui y arrive ensuite (fil ouvert : il est
+// aussitot marque lu au serveur par son affichage) reprend le liseré des non lus, comme
+// indicateur visuel, jusqu'a la prochaine ouverture du fil depuis la liste (mailActions.read).
+// Ma reponse et la copie de mon propre mail (alias dev@) ne le rallument pas (lib/arrival-tracker).
+const arrivals = createArrivalTracker();
+export function arrivedSinceRead(threadId: string, snap: ArrivalSnapshot, own: Set<string>, track: boolean): boolean {
+	return arrivals.arrived(threadId, snap, own, track);
 }
 
 /** Fil deja marque lu a l'ecran (au clic dans la liste) : pas de second marquage. */

@@ -70,7 +70,12 @@ export default function KThreadRow({
 	// Un message est arrive depuis que le fil a ete lu ou ouvert a l'ecran : liseré
 	// des non lus, meme si son affichage l'a deja marque lu.
 	const incoming = activeMailbox.kind !== "sent" && !isDrafts;
-	const arrived = incoming && arrivedSinceRead(item.threadId, item.lastActivityAt, isActive || readOverride === true);
+	const arrived = incoming && arrivedSinceRead(
+			item.threadId,
+			{ count: item.messageCount, lastFrom: item.participants?.from?.[0]?.e },
+			ownAddresses,
+			isActive || readOverride === true,
+		);
 	const isUnread = !isTrash && (arrived || (readOverride === undefined ? item.unreadCount > 0 : !readOverride));
 	const starred = starOverride ?? item.starred;
 	const smtp = !!mailboxSync;

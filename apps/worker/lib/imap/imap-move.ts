@@ -143,12 +143,17 @@ export const moveMail = async (
 	// A relever AVANT la mise a jour en base, qui reecrit imap.mailboxPath.
 	type Group = { path: string; rows: UidRow[] };
 	const byPath = new Map<string, Group>();
+	const folderPath: string = (srcMailbox.metaData as any)?.imap?.path ?? srcMailbox.name;
 	if (moveImap) {
 		for (const m of toMove) {
 			const im = (m.meta as any)?.imap;
-			const uid = im?.uid as number | undefined;
-			const srcPath = im?.mailboxPath as string | undefined;
-			if (!uid || !srcPath) continue;
+			const uid = Number(im?.uid ?? 0);
+			// ss2i (18/11) : une ligne sans UID (laissee sans UID par un deplacement precedent) est
+			// cherchee par Message-ID dans le dossier source (resolveUids, UID 0) au lieu d'un
+			// deplacement en base seule : la base disait Corbeille, Gmail gardait le message dans
+			// l'INBOX. Sans Message-ID, rien a chercher : base seule, comme avant.
+			const srcPath = uid > 0 ? (im?.mailboxPath as string | undefined) : normMessageId(m.messageId) ? folderPath : undefined;
+			if (!srcPath) continue;
 			const g = byPath.get(srcPath) ?? { path: srcPath, rows: [] };
 			g.rows.push({ id: m.id, uid: Number(uid), messageId: m.messageId });
 			byPath.set(srcPath, g);
@@ -208,10 +213,12 @@ export const moveMail = async (
 		if (moveImap) {
 			// ss2i (OI 10286) : l'UID de la source part avec le changement de dossier (il est releve
 			// avant, dans byPath) ; un arret du worker entre cette transaction et la recopie des UID
-			// laissait sinon un UID de la source sur un chemin d'arrivee.
+			// laissait sinon un UID de la source sur un chemin d'arrivee. ss2i (18/11) : objet imap
+			// cree au besoin (ligne sans UID partie par Message-ID), jsonb_set ne cree pas les
+			// niveaux intermediaires et laissait la ligne sans chemin ni UID.
 			set.metaData = sql`
         jsonb_set(
-          coalesce(${messages.metaData}, '{}'::jsonb),
+          coalesce(${messages.metaData}, '{}'::jsonb) || jsonb_build_object('imap', coalesce(${messages.metaData}->'imap', '{}'::jsonb)),
           '{imap,mailboxPath}',
           to_jsonb(${destPath}::text),
           true
@@ -344,7 +351,9 @@ type MoveCtx = {
  *    curseur pose en un compare-and-set ;
  * 5. ce qui a ete envoye mais n'est pas arrive est cherche dans la source a son UID : s'il y
  *    est, il est remis dans le dossier source en base (le serveur ne l'a pas deplace) ; s'il
- *    n'est nulle part, il reste a destination sans UID.
+ *    n'est nulle part, il reste a destination ;
+ * 6. ce qui reste a destination sans etre arrive par le MOVE (absent de la source, ou etape 5)
+ *    y est cherche par Message-ID (adoptInDest) : UID repris s'il y est, sinon sans UID.
  * Rend le nombre de messages remis dans la source.
  */
 async function moveGroupOnImap(
@@ -358,6 +367,9 @@ async function moveGroupOnImap(
 	const isDup = (id: string) => ctx.dupIds.has(id);
 	const settled = new Set<string>();
 	const srcUid = new Map<string, number>();
+	const claimed = new Set<number>(); // UID d'arrivee deja attribues ou tenus (etape 6)
+	const orphans: UidRow[] = []; // a destination sans etre arrives par le MOVE (etape 6)
+	let adoptDone = false;
 	let state: "avant" | "envoye" | "fait" | "refuse" = "avant";
 	let reverted = 0;
 
@@ -380,23 +392,24 @@ async function moveGroupOnImap(
 		// ss2i (12/11, Spam Gmail de sam.legros@) : absence de la source PROUVEE (dossier lu en
 		// entier) : le message n'est plus sur le serveur (supprime depuis un autre client, Gmail
 		// qui vide son Spam), seule la base l'avait encore. Le remettre dans la source le faisait
-		// revenir a chaque « vider le spam » et le job echouait sans fin : il reste a destination
-		// sans UID, comme un message envoye mais arrive nulle part (etape 5).
+		// revenir a chaque « vider le spam » et le job echouait sans fin : il reste a destination,
+		// avec l'UID qu'il y a deja s'il y est (etape 6), sinon sans UID.
 		const gone = rows.filter((r) => !srcUid.has(r.id) && absent.has(r.id));
-		if (gone.length) {
-			gone.forEach((r) => settled.add(r.id));
-			console.warn(
-				`[mail:move] ${gone.length} message(s) absents de ${srcPath} (absence prouvee, ${tag}) : deja supprimes du serveur, laisses a destination sans UID`,
-				gone.slice(0, 20).map((r) => r.id),
-			);
-		}
+		gone.forEach((r) => settled.add(r.id));
+		orphans.push(...gone.filter((r) => !isDup(r.id)));
+		// Ligne sans UID introuvable sans preuve d'absence (gros dossier Stalwart, SEARCH en echec) :
+		// deplacee en base seule comme avant (etape 6), jamais remise dans la source (le job
+		// echouerait a chaque reprise, rien ne permettant de la retrouver).
+		const blind = rows.filter((r) => !srcUid.has(r.id) && !absent.has(r.id) && !(r.uid > 0));
+		blind.forEach((r) => settled.add(r.id));
+		orphans.push(...blind.filter((r) => !isDup(r.id)));
 
 		// Jamais envoyes dans le MOVE : resolveUids ne les a pas trouves dans la source (UID
 		// perime que Stalwart ne retrouve pas : SEARCH HEADER vide, balayage borne a 5 000
 		// messages ; ou lecture en erreur). Le serveur ne les a peut-etre pas deplaces : remis
 		// dans la source en base, sans relire leur UID en base, qui designe peut-etre un autre
 		// message.
-		const notSent = rows.filter((r) => !srcUid.has(r.id) && !absent.has(r.id));
+		const notSent = rows.filter((r) => !srcUid.has(r.id) && !absent.has(r.id) && r.uid > 0);
 		if (notSent.length) {
 			const back = notSent.filter((r) => !isDup(r.id));
 			reverted += await revertToSource(back.map((r) => ({ id: r.id, uid: r.uid })), srcPath, ctx);
@@ -431,6 +444,7 @@ async function moveGroupOnImap(
 			const movedRows = sentIds.filter((id) => !isDup(id)).map((id) => rowById.get(id)!);
 			const taken = heldUids(found, await heldInDest(ctx, found));
 			const m = matchMovedUids(movedRows, found, taken);
+			for (const u of [...taken, ...m.assigned.values()]) claimed.add(Number(u));
 			await setUids([...m.assigned], ctx.dest.id);
 			for (const id of m.assigned.keys()) settled.add(id);
 			if (m.ambiguous.length) {
@@ -499,13 +513,31 @@ async function moveGroupOnImap(
 			}
 			if (nowhere.length) {
 				nowhere.forEach((id) => settled.add(id));
-				console.warn(
-					`[mail:move] ${nowhere.length} message(s) ni dans la source ni dans le lot arrive (${tag}) : laisses a destination sans UID`,
-					nowhere.slice(0, 20),
-				);
+				orphans.push(...nowhere.map((id) => rowById.get(id)!));
 			}
 		}
+
+		if (orphans.length) {
+			adoptDone = true;
+			const adopted = await adoptInDest(client, orphans, ctx, claimed).catch((err) => {
+				console.warn(`[mail:move] recherche par Message-ID dans ${ctx.destPath} en erreur (${tag})`, err);
+				return new Set<string>();
+			});
+			const left = orphans.filter((r) => !adopted.has(r.id));
+			const nGone = gone.filter((r) => !isDup(r.id)).length;
+			const nBlind = blind.filter((r) => !isDup(r.id)).length;
+			console.warn(
+				`[mail:move] ${orphans.length} message(s) pas arrives par le MOVE (${nGone} absents de ${srcPath}, absence prouvee ; ${nBlind} sans UID introuvables sans preuve ; ${orphans.length - nGone - nBlind} ni dans la source ni dans le lot arrive ; ${tag}) : ${adopted.size} deja dans ${ctx.destPath}, UID repris par Message-ID ; ${left.length} laisses a destination sans UID`,
+				left.slice(0, 20).map((r) => r.id),
+			);
+		}
 	} catch (err) {
+		if (orphans.length && !adoptDone) {
+			console.warn(
+				`[mail:move] ${orphans.length} message(s) absents de ${srcPath} laisses a destination sans UID, sans recherche par Message-ID (${tag})`,
+				orphans.slice(0, 20).map((r) => r.id),
+			);
+		}
 		const rest = rows.filter((r) => !settled.has(r.id) && !isDup(r.id));
 		// Serveur qui a repondu OK au MOVE : ces messages sont a destination, UID inconnu (deja
 		// retire en base). Sinon (refus, coupure avant ou pendant le MOVE) : remis dans la source.
@@ -564,6 +596,38 @@ async function envelopesAt(client: ImapFlow, uids: number[]) {
 
 // Messages du dossier d'arrivee (hors job) qui tiennent deja l'un de ces UID en base. Par
 // tranches (limite de parametres), les messages du job ecartes ici plutot qu'en SQL.
+/**
+ * ss2i (18/11, Gmail de sam.legros@ : 526 messages archives sans UID les 16 et 18/11) : messages
+ * restes a destination sans etre arrives par le MOVE. Chez Gmail, un message deja archive ou mis a
+ * la corbeille par un autre client est absent de l'INBOX mais present a l'arrivee (« Tous les
+ * messages » a tout ce qui n'est ni Spam ni Corbeille), a son UID d'origine. Il y est cherche par
+ * Message-ID (resolveUids : SEARCH HEADER, X-GM-RAW chez Gmail, lecture d'un petit dossier) ;
+ * l'UID n'est repris que s'il est seul pour ce message, porte bien ce Message-ID, n'est tenu par
+ * aucune autre ligne du dossier ni deja attribue par ce job. Rend les lignes qui ont un UID.
+ */
+async function adoptInDest(client: ImapFlow, rows: UidRow[], ctx: MoveCtx, claimed: Set<number>): Promise<Set<string>> {
+	const list = rows.filter((r) => normMessageId(r.messageId));
+	if (!list.length) return new Set();
+	await client.mailboxOpen(ctx.destPath, { readOnly: true });
+	const found = await resolveUids(client, list.map((r) => ({ id: r.id, uid: 0, messageId: r.messageId })));
+	const uidsOf = new Map<string, number[]>();
+	for (const [uid, id] of found) uidsOf.set(id, [...(uidsOf.get(id) ?? []), Number(uid)]);
+	const single = [...uidsOf].filter(([, u]) => u.length === 1).map(([id, [uid]]) => ({ id, uid }));
+	if (!single.length) return new Set();
+	const perUid = new Map<number, number>();
+	for (const s of single) perUid.set(s.uid, (perUid.get(s.uid) ?? 0) + 1);
+	const held = new Set((await heldInDest(ctx, single.map((s) => ({ uid: s.uid, messageId: null })))).map((h) => h.uid));
+	// SEARCH HEADER cherche une sous-chaine : l'enveloppe de l'UID fait foi.
+	const midAt = await envelopesAt(client, single.map((s) => s.uid));
+	const midOf = new Map(list.map((r) => [r.id, normMessageId(r.messageId)]));
+	const pairs: Array<[string, number]> = single
+		.filter((s) => perUid.get(s.uid) === 1 && !held.has(s.uid) && !claimed.has(s.uid) && midAt.get(s.uid) === midOf.get(s.id))
+		.map((s) => [s.id, s.uid]);
+	await setUids(pairs, ctx.dest.id);
+	for (const [, uid] of pairs) claimed.add(uid);
+	return new Set(pairs.map(([id]) => id));
+}
+
 async function heldInDest(ctx: MoveCtx, found: DestEnvelope[]): Promise<DestEnvelope[]> {
 	const uidText = sql<string>`${messages.metaData}->'imap'->>'uid'`;
 	const out: DestEnvelope[] = [];
@@ -608,9 +672,13 @@ async function revertToSource(
 				update messages
 				set mailbox_id = ${ctx.src.id}::uuid,
 				    updated_at = now(),
-				    meta = jsonb_set(
-				      jsonb_set(coalesce(messages.meta, '{}'::jsonb), '{imap,mailboxPath}', to_jsonb(${srcPath}::text), true),
-				      '{imap,uid}', to_jsonb(v.uid), true)
+				    meta = case when v.uid > 0
+				      then jsonb_set(
+				        jsonb_set(coalesce(messages.meta, '{}'::jsonb), '{imap,mailboxPath}', to_jsonb(${srcPath}::text), true),
+				        '{imap,uid}', to_jsonb(v.uid), true)
+				      -- ligne partie sans UID (cherchee par Message-ID) : aucun UID 0 ecrit
+				      else jsonb_set(coalesce(messages.meta, '{}'::jsonb), '{imap,mailboxPath}', to_jsonb(${srcPath}::text), true) #- '{imap,uid}'
+				    end
 				from (values ${sql.join(
 					part.map((it) => sql`(${it.id}::uuid, ${Number(it.uid)}::bigint)`),
 					sql`, `,

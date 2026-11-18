@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	attachmentLink,
+	attachmentUrls,
 	canPreviewPptx,
 	isAttachmentId,
 	parseAttachmentMode,
@@ -64,8 +65,12 @@ test("images du corps : URL S3 directe, pas la route (iframe du message)", () =>
 
 test("la page ne recoit plus d'URL signee pour les pieces jointes", () => {
 	const body = source("lib/actions/mailbox.ts").split("export async function getSignedUrlsForMessage")[1].split("export const revalidateMailbox")[0];
-	assert.match(body, /signedUrl: attachmentLink\(attachment\.id\)/);
-	assert.match(body, /downloadUrl: attachmentLink\(attachment\.id, "download"\)/);
+	assert.match(body, /\.\.\.attachmentUrls\(attachment\)/);
+	assert.deepEqual(attachmentUrls({ id: ID, filenameOriginal: "a.pdf" }), {
+		signedUrl: `/api/attachments/${ID}`,
+		downloadUrl: `/api/attachments/${ID}?mode=download`,
+		contentUrl: undefined,
+	});
 });
 
 test("octets du pptx jamais interpretables sur l'origine de l'application", () => {

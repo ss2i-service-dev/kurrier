@@ -71,6 +71,7 @@ test("la page ne recoit plus d'URL signee pour les pieces jointes", () => {
 		downloadUrl: `/api/attachments/${ID}?mode=download`,
 		contentUrl: undefined,
 		textUrl: undefined,
+		sheetUrl: undefined,
 		zipUrl: undefined,
 	});
 });

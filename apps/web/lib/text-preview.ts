@@ -125,3 +125,24 @@ export function parseCsv(text: string, delim: string, maxRows = Number.POSITIVE_
 	if (field !== "" || row.length > 0) endRow();
 	return { rows, totalRows, truncated: totalRows > rows.length };
 }
+
+// Au-dela, le rendu du tableau ralentit le navigateur : le reste s'obtient en telechargeant.
+export const MAX_TABLE_ROWS = 5000;
+const NUMBER = /^[-+]?[\d\s  .,]*\d[\d\s  .,]*\s?(%|€|\$|£|EUR|CAD|USD)?$/i;
+
+// Tableau affichable (CSV ou feuille de classeur) : premiere ligne = en-tetes, `rows` peut etre
+// plus court que `totalRows` (lignes lues au plus MAX_TABLE_ROWS + 1), `totalRows` compte l'en-tete.
+export function buildTable(rows: string[][], totalRows: number) {
+	const columns = rows.reduce((m, r) => Math.max(m, r.length), 0);
+	const [header = [], ...body] = rows;
+	// Une colonne est numerique si toutes ses cellules non vides le sont : alignee a droite.
+	const numeric = Array.from({ length: columns }, (_, c) => {
+		const values = body.map((r) => (r[c] ?? "").trim()).filter(Boolean);
+		return values.length > 0 && values.every((v) => NUMBER.test(v));
+	});
+	// Colonne de texte long (libelles) : retour a la ligne et largeur mini ; les autres
+	// (dates, codes, montants) restent sur une ligne.
+	const long = Array.from({ length: columns }, (_, c) => body.some((r) => (r[c] ?? "").length > 40));
+	return { header, body: body.slice(0, MAX_TABLE_ROWS), totalRows: Math.max(0, totalRows - 1), columns, numeric, long };
+}
+export type PreviewTable = ReturnType<typeof buildTable>;

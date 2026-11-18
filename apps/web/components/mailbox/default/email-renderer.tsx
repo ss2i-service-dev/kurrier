@@ -46,6 +46,8 @@ export type MessageAttachmentWithUrl = MessageAttachmentEntity & {
 	contentUrl?: string;
 	// ss2i : memes octets pour un texte ou un CSV, rendus en texte ou en tableau.
 	textUrl?: string;
+	// ss2i : memes octets pour un classeur xls, xlsx ou ods, lus dans le navigateur.
+	sheetUrl?: string;
 	// ss2i : liste JSON des fichiers d'un zip.
 	zipUrl?: string;
 	// ss2i : URL S3 directe d'une image referencee par cid: dans le corps du message.

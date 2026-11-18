@@ -44,6 +44,10 @@ export type MessageAttachmentWithUrl = MessageAttachmentEntity & {
 	downloadUrl?: string;
 	// ss2i : octets du fichier sur notre origine, presents si un apercu pptx est possible.
 	contentUrl?: string;
+	// ss2i : memes octets pour un texte ou un CSV, rendus en texte ou en tableau.
+	textUrl?: string;
+	// ss2i : liste JSON des fichiers d'un zip.
+	zipUrl?: string;
 	// ss2i : URL S3 directe d'une image referencee par cid: dans le corps du message.
 	inlineUrl?: string;
 };

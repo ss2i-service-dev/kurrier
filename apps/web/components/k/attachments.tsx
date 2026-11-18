@@ -11,6 +11,7 @@ import { getKind } from "@/components/mailbox/default/editor/editor-attachment-i
 import type { MessageAttachmentWithUrl } from "@/components/mailbox/default/email-renderer";
 import { formatBytes } from "@/components/k/format";
 import PptxPreview from "@/components/k/pptx-preview";
+import SheetPreview from "@/components/k/sheet-preview";
 import TextPreview from "@/components/k/text-preview";
 import ZipPreview from "@/components/k/zip-preview";
 import { isTabular } from "@/lib/text-preview";
@@ -18,10 +19,10 @@ import { isTabular } from "@/lib/text-preview";
 type Kind = ReturnType<typeof getKind>;
 export const PREVIEWABLE: Kind[] = ["image", "pdf", "text", "video", "audio"];
 
-// Un pptx, un CSV envoye en application/vnd.ms-excel ou un zip n'ont pas de famille propre :
+// Un pptx, un classeur, un CSV envoye en application/vnd.ms-excel ou un zip n'ont pas de famille propre :
 // ils sont previsualisables quand la page porte l'URL de leur apercu.
 export const isPreviewable = (a: MessageAttachmentWithUrl) =>
-	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl || !!a.textUrl || !!a.zipUrl);
+	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl || !!a.textUrl || !!a.sheetUrl || !!a.zipUrl);
 
 // Pastille de type : couleur et sigle par famille de fichier.
 export function badgeFor(name: string, kind: Kind) {
@@ -187,8 +188,8 @@ export function Viewer({
 							.join(" · ")}
 					</div>
 				</div>
-				{/* Un pptx, un CSV ou un zip ouvert dans un onglet serait simplement telecharge. */}
-				{!current.contentUrl && !current.zipUrl && !(current.textUrl && isTabular(current)) && (
+				{/* Un pptx, un classeur, un CSV ou un zip ouvert dans un onglet serait simplement telecharge. */}
+				{!current.contentUrl && !current.sheetUrl && !current.zipUrl && !(current.textUrl && isTabular(current)) && (
 					<a
 						href={current.signedUrl}
 						target="_blank"
@@ -213,7 +214,7 @@ export function Viewer({
 			</div>
 
 			{/* Apercu */}
-			<div className="relative flex min-h-0 flex-1 items-center justify-center px-16 pb-6">
+			<div className={`relative flex min-h-0 flex-1 items-center justify-center pb-6 ${previewable.length > 1 ? "px-16" : "px-4"}`}>
 				{previewable.length > 1 && (
 					<button
 						type="button"
@@ -253,6 +254,9 @@ export function Viewer({
 							downloadUrl={current.downloadUrl}
 						/>
 					)}
+					{current.sheetUrl && (
+						<SheetPreview key={current.id} url={current.sheetUrl} name={name} downloadUrl={current.downloadUrl} />
+					)}
 					{current.zipUrl && (
 						<ZipPreview key={current.id} url={current.zipUrl} name={name} downloadUrl={current.downloadUrl} />
 					)}
@@ -261,7 +265,7 @@ export function Viewer({
 							key={current.id}
 							src={current.signedUrl}
 							title={name}
-							className="h-full w-full max-w-[1000px] rounded-k bg-white shadow-2xl"
+							className="h-full w-full rounded-k bg-white shadow-2xl"
 						/>
 					)}
 					{kind === "video" && (

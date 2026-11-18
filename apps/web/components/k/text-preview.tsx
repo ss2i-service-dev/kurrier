@@ -5,11 +5,8 @@
 // interpretes : un CSV en tableau (separateur et encodage detectes), le reste en texte.
 import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
-import { decodeText, detectDelimiter, parseCsv } from "@/lib/text-preview";
-
-// Au-dela, le rendu du tableau ralentit le navigateur : le reste s'obtient en telechargeant.
-const MAX_ROWS = 5000;
-const NUMBER = /^[-+]?[\d\s  .,]*\d[\d\s  .,]*\s?(%|€|\$|£|EUR|CAD|USD)?$/i;
+import DataTable from "@/components/k/data-table";
+import { buildTable, decodeText, detectDelimiter, MAX_TABLE_ROWS, parseCsv } from "@/lib/text-preview";
 
 const DELIM_LABEL: Record<string, string> = { ";": "point-virgule", ",": "virgule", "\t": "tabulation", "|": "barre verticale" };
 
@@ -54,18 +51,8 @@ export default function TextPreview({
 	const table = useMemo(() => {
 		if (!loaded || !tabular) return null;
 		const delimiter = detectDelimiter(loaded.text);
-		const parsed = parseCsv(loaded.text, delimiter, MAX_ROWS + 1);
-		const columns = parsed.rows.reduce((m, r) => Math.max(m, r.length), 0);
-		const [header = [], ...body] = parsed.rows;
-		// Une colonne est numerique si toutes ses cellules non vides le sont : alignee a droite.
-		const numeric = Array.from({ length: columns }, (_, c) => {
-			const values = body.map((r) => (r[c] ?? "").trim()).filter(Boolean);
-			return values.length > 0 && values.every((v) => NUMBER.test(v));
-		});
-		// Colonne de texte long (libelles) : retour a la ligne et largeur mini ; les autres
-		// (dates, codes, montants) restent sur une ligne.
-		const long = Array.from({ length: columns }, (_, c) => body.some((r) => (r[c] ?? "").length > 40));
-		return { delimiter, header, body: body.slice(0, MAX_ROWS), totalRows: parsed.totalRows - 1, columns, numeric, long };
+		const parsed = parseCsv(loaded.text, delimiter, MAX_TABLE_ROWS + 1);
+		return { delimiter, ...buildTable(parsed.rows, parsed.totalRows) };
 	}, [loaded, tabular]);
 
 	const plain = useMemo(() => {
@@ -106,7 +93,7 @@ export default function TextPreview({
 	return (
 		<div
 			aria-label={name}
-			className="flex h-full w-full max-w-[1400px] flex-col overflow-hidden rounded-k bg-white text-neutral-900 shadow-2xl"
+			className="flex h-full w-full flex-col overflow-hidden rounded-k bg-white text-neutral-900 shadow-2xl"
 		>
 			<div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-[12px] text-neutral-600">
 				{table && asTable ? (
@@ -133,54 +120,9 @@ export default function TextPreview({
 
 			<div className="min-h-0 flex-1 overflow-auto">
 				{table && asTable ? (
-					<table className="min-w-full border-separate border-spacing-0 text-[13px] tabular-nums">
-						<thead>
-							<tr>
-								<th className="sticky top-0 left-0 z-20 border-r border-b border-neutral-300 bg-neutral-100 px-2 py-1.5 text-right font-normal text-neutral-400">
-									#
-								</th>
-								{Array.from({ length: table.columns }, (_, c) => (
-									<th
-										key={c}
-										className={`sticky top-0 z-10 border-r border-b border-neutral-300 bg-neutral-100 px-3 py-1.5 font-semibold ${table.long[c] ? "min-w-[18rem] max-w-[32rem] whitespace-pre-wrap" : "whitespace-nowrap"} ${table.numeric[c] ? "text-right" : "text-left"}`}
-									>
-										{table.header[c] ?? ""}
-									</th>
-								))}
-							</tr>
-						</thead>
-						<tbody>
-							{table.body.map((row, r) => (
-								// biome-ignore lint/suspicious/noArrayIndexKey: lignes d'un fichier fige
-								<tr key={r} className="even:bg-neutral-50 hover:bg-amber-50">
-									<td className="sticky left-0 border-r border-b border-neutral-200 bg-inherit px-2 py-1 text-right text-neutral-400 select-none">
-										{r + 1}
-									</td>
-									{Array.from({ length: table.columns }, (_, c) => (
-										<td
-											// biome-ignore lint/suspicious/noArrayIndexKey: colonnes d'un fichier fige
-											key={c}
-											className={`border-r border-b border-neutral-200 px-3 py-1 align-top ${table.long[c] ? "min-w-[18rem] max-w-[32rem] whitespace-pre-wrap" : "whitespace-nowrap"} ${table.numeric[c] ? "text-right" : ""}`}
-										>
-											{row[c] ?? ""}
-										</td>
-									))}
-								</tr>
-							))}
-						</tbody>
-					</table>
+					<DataTable table={table} downloadUrl={downloadUrl} />
 				) : (
 					<pre className="min-w-max p-4 font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words">{plain}</pre>
-				)}
-				{table && asTable && table.totalRows > table.body.length && (
-					<div className="border-t border-neutral-200 px-4 py-3 text-[13px] text-neutral-600">
-						{table.body.length.toLocaleString("fr-CA")} premières lignes affichées sur {table.totalRows.toLocaleString("fr-CA")}.
-						{downloadUrl && (
-							<a href={downloadUrl} className="ml-2 font-medium text-blue-700 underline">
-								Télécharger le fichier complet
-							</a>
-						)}
-					</div>
 				)}
 			</div>
 		</div>

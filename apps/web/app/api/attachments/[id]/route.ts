@@ -3,7 +3,7 @@
 // - open / download : redirection vers une URL S3 fraiche. Le fichier reste servi par
 //   l'origine S3 : une piece jointe HTML ou SVG ne s'execute jamais sur celle de l'application.
 // - listing : liste JSON des fichiers d'un zip, lue par plages S3 (lib/zip-listing.ts).
-// - content : octets d'un pptx, d'un texte ou d'un CSV pour l'apercu, sur la meme origine (S3 refuse le fetch du
+// - content : octets d'un pptx, d'un texte, d'un CSV ou d'un classeur pour l'apercu, sur la meme origine (S3 refuse le fetch du
 //   navigateur, CORS). Jamais interpretables : type binaire, attachment, nosniff, sandbox.
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -18,6 +18,7 @@ import {
 	parseAttachmentMode,
 	PPTX_PREVIEW_MAX_BYTES,
 } from "@/lib/attachment-links";
+import { canPreviewSheet, SHEET_PREVIEW_MAX_BYTES } from "@/lib/sheet-preview";
 import { canPreviewText, TEXT_PREVIEW_MAX_BYTES } from "@/lib/text-preview";
 import {
 	canListZip,
@@ -69,7 +70,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 			? PPTX_PREVIEW_MAX_BYTES
 			: canPreviewText(attachment)
 				? TEXT_PREVIEW_MAX_BYTES
-				: 0;
+				: canPreviewSheet(attachment)
+					? SHEET_PREVIEW_MAX_BYTES
+					: 0;
 		if (!maxBytes) return failure(415, "Aperçu indisponible pour ce fichier.");
 		const object = await s3.send(new GetObjectCommand({ Bucket, Key }));
 		if (!object.Body) return failure(404, "Pièce jointe introuvable.");

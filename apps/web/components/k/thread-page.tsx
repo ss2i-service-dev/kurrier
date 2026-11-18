@@ -21,6 +21,7 @@ import ThreadMessages from "@/components/k/thread-messages";
 import ReplyDock from "@/components/k/reply-dock";
 import MailUnsubscriber from "@/components/mailbox/default/mail-unsubscriber";
 import { dedupeThreadMessages } from "@/lib/thread-dedupe";
+import ThreadAttachments from "@/components/mailbox/default/thread-attachments";
 
 // SS2i (nouvelle interface) : panneau de lecture. Barre d'actions, objet, messages a plat (les
 // anciens replies et regroupes), reponse ancree en bas.
@@ -115,6 +116,10 @@ export default async function KThreadPage({
 								<MailUnsubscriber mailSubscription={byMessageId.get(first.id) ?? null} message={first} />
 							</div>
 						</div>
+
+						<Suspense fallback={null}>
+							<ThreadAttachments messages={messages} className="mb-4" />
+						</Suspense>
 
 						<ThreadMessages expanded={order.map((i) => expanded[i])}>
 							{order.map((threadIndex) => messages[threadIndex]).map((message) => {

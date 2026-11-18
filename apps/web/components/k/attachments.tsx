@@ -16,7 +16,7 @@ type Kind = ReturnType<typeof getKind>;
 export const PREVIEWABLE: Kind[] = ["image", "pdf", "text", "video", "audio"];
 
 // Un pptx n'a pas de famille propre : il est previsualisable quand ses octets sont fournis.
-const isPreviewable = (a: MessageAttachmentWithUrl) =>
+export const isPreviewable = (a: MessageAttachmentWithUrl) =>
 	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl);
 
 // Pastille de type : couleur et sigle par famille de fichier.

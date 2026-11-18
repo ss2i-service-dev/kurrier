@@ -16,38 +16,58 @@ import EditorAttachmentItem, {
 } from "@/components/mailbox/default/editor/editor-attachment-item";
 import type { MessageAttachmentWithUrl } from "@/components/mailbox/default/email-renderer";
 import { useK, useNouvelle } from "@/components/k/ui-context";
-import { Viewer } from "@/components/k/attachments";
+import { isPreviewable, Viewer } from "@/components/k/attachments";
+
+// Variante « thread » : bloc du haut de la conversation, au-dela on replie.
+const THREAD_VISIBLE = 8;
 
 export default function MessageAttachments({
 	attachments,
 	publicConfig,
 	hiddenIds,
+	variant = "message",
 }: {
 	attachments: MessageAttachmentWithUrl[];
 	publicConfig: PublicConfig;
 	// Images inline deja affichees dans le corps du message.
 	hiddenIds: string[];
+	variant?: "message" | "thread";
 }) {
 	const k = useK();
 	const nouvelle = useNouvelle();
 	const [showPreviews, setShowPreviews] = useState(false);
 	// ss2i : un pptx s'ouvre dans la visionneuse, le navigateur ne sait pas l'afficher.
 	const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+	const [showAll, setShowAll] = useState(false);
 
 	const files = (attachments ?? []).filter((a) => !hiddenIds.includes(a.id));
 	if (files.length === 0) return null;
 
-	const previewable = files.some((a) => {
+	const inThread = variant === "thread";
+	const visibleFiles = inThread && !showAll ? files.slice(0, THREAD_VISIBLE) : files;
+	// En haut du fil, tout ce qui se previsualise s'ouvre dans la visionneuse.
+	const opensInViewer = (a: MessageAttachmentWithUrl) => (inThread ? isPreviewable(a) : !!a.contentUrl);
+
+	const previewable = !inThread && files.some((a) => {
 		const k = getKind(a);
 		return !!a.signedUrl && (k === "image" || k === "pdf" || k === "video");
 	});
 
+	const frame = inThread
+		? nouvelle
+			? "rounded-k border border-k-line bg-k-surface px-3 py-2.5"
+			: "rounded-lg border border-neutral-200 px-3 py-2.5 dark:border-neutral-800"
+		: nouvelle
+			? "border-t border-k-line py-3"
+			: "border-t border-dotted py-3";
+
 	return (
-		<div className={nouvelle ? "border-t border-k-line py-3" : "border-t border-dotted py-3"}>
+		<div className={frame}>
 			<div className={`mb-2 flex items-center gap-3 text-sm ${nouvelle ? "text-k-ink" : ""}`}>
 				<span className="inline-flex items-center gap-1.5 font-semibold">
 					<Paperclip className="h-4 w-4" />
 					{files.length} {files.length > 1 ? k("attachments", "pièces jointes") : k("attachment", "pièce jointe")}
+					{inThread && ` ${k("in this thread", "dans ce fil")}`}
 				</span>
 				{previewable && (
 					<button
@@ -85,8 +105,9 @@ export default function MessageAttachments({
 				</div>
 			) : (
 				<div className="flex flex-wrap gap-2">
-					{files.map((a, i) => {
+					{visibleFiles.map((a, i) => {
 						const kind = getKind(a);
+						const inViewer = opensInViewer(a);
 						const name = a.filenameOriginal || k("attachment", "pièce jointe");
 						const size = formatBytes(a.sizeBytes);
 						return (
@@ -104,9 +125,9 @@ export default function MessageAttachments({
 									href={a.signedUrl || "#"}
 									target="_blank"
 									rel="noreferrer noopener"
-									title={a.contentUrl ? k(`Preview ${name}`, `Aperçu de ${name}`) : k(`Open ${name}`, `Ouvrir ${name}`)}
+									title={inViewer ? k(`Preview ${name}`, `Aperçu de ${name}`) : k(`Open ${name}`, `Ouvrir ${name}`)}
 									onClick={
-										a.contentUrl
+										inViewer
 											? (e) => {
 													e.preventDefault();
 													setViewerIndex(i);
@@ -135,6 +156,19 @@ export default function MessageAttachments({
 							</div>
 						);
 					})}
+					{visibleFiles.length < files.length && (
+						<button
+							type="button"
+							onClick={() => setShowAll(true)}
+							className={
+								nouvelle
+									? "k-focus rounded-k-sm px-2 py-1.5 text-[13px] text-k-ink-3 hover:bg-k-hover hover:text-k-ink"
+									: "rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+							}
+						>
+							{k(`Show ${files.length - visibleFiles.length} more`, `Afficher les ${files.length - visibleFiles.length} autres`)}
+						</button>
+					)}
 				</div>
 			)}
 

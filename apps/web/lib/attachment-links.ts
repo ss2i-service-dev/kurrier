@@ -35,3 +35,16 @@ export function canPreviewPptx(a: {
 	const isPptx = type === PPTX_MIME || /\.pptx$/i.test(a.filenameOriginal || "");
 	return isPptx && Number(a.sizeBytes ?? 0) <= PPTX_PREVIEW_MAX_BYTES;
 }
+
+export function attachmentUrls(a: {
+	id: string;
+	filenameOriginal?: string | null;
+	contentType?: string | null;
+	sizeBytes?: number | null;
+}) {
+	return {
+		signedUrl: attachmentLink(a.id),
+		downloadUrl: attachmentLink(a.id, "download"),
+		contentUrl: canPreviewPptx(a) ? attachmentLink(a.id, "content") : undefined,
+	};
+}

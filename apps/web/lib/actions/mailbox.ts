@@ -65,7 +65,7 @@ import {
 import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3 } from "@/lib/create-s3-client";
-import { attachmentLink, canPreviewPptx } from "@/lib/attachment-links";
+import { attachmentUrls } from "@/lib/attachment-links";
 import type { OutboxTracking } from "@/lib/outbox-view";
 
 let typeSenseClient: Client | null = null;
@@ -344,9 +344,7 @@ export async function getSignedUrlsForMessage(messageId: string) {
 	const results = await Promise.all(
 		attachments.map(async (attachment) => ({
 			...attachment,
-			signedUrl: attachmentLink(attachment.id),
-			downloadUrl: attachmentLink(attachment.id, "download"),
-			contentUrl: canPreviewPptx(attachment) ? attachmentLink(attachment.id, "content") : undefined,
+			...attachmentUrls(attachment),
 			inlineUrl: attachment.cid
 				? await getSignedUrl(
 						s3,

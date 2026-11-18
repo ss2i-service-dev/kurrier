@@ -495,9 +495,12 @@
 	flex-direction: column;
 	flex: 1 0 auto;
 }
-.ss2i-compose-scroll .mantine-RichTextEditor-root > :not(.mantine-RichTextEditor-content) {
+.ss2i-compose-scroll .mantine-RichTextEditor-root > :not(.mantine-RichTextEditor-content):not(.mantine-RichTextEditor-Typography) {
 	flex-shrink: 0;
 }
+/* RichTextEditor.Content rend ici un wrapper Typography (prose) enfant de la racine,
+   qui contient la zone de contenu : les deux s'etirent. */
+.ss2i-compose-scroll .mantine-RichTextEditor-root > .mantine-RichTextEditor-Typography,
 .ss2i-compose-scroll .mantine-RichTextEditor-content {
 	display: flex;
 	flex-direction: column;

@@ -34,7 +34,10 @@ test("la fenetre exploite l'espace de l'ecran (Samuel le 18/11)", () => {
 	assert.ok(compose.includes("h-[calc(100dvh-2rem)]"), "toute la hauteur de l'ecran");
 	assert.doesNotMatch(compose, /w-\[520px\]/, "plus de fenetre etroite de 520 px");
 	const css = src("app/ss2i-ui.css");
-	assert.match(css, /\.ss2i-compose-scroll \.mantine-RichTextEditor-content\s*\{[^}]*flex: 1 0 auto;/, "zone de texte qui remplit la fenetre");
+	// Interface classique : RichTextEditor.Content rend un wrapper Typography (prose, min-h-96) enfant
+	// direct de la racine, qui contient .mantine-RichTextEditor-content ; sans lui la zone restait a 52 px.
+	assert.match(css, /\.ss2i-compose-scroll \.mantine-RichTextEditor-root > \.mantine-RichTextEditor-Typography,\s*\.ss2i-compose-scroll \.mantine-RichTextEditor-content\s*\{[^}]*flex: 1 0 auto;/, "zone de texte qui remplit la fenetre");
+	assert.match(css, /:not\(\.mantine-RichTextEditor-content\):not\(\.mantine-RichTextEditor-Typography\)/, "le wrapper Typography n'est pas fige");
 });
 test("le contenu de la fenetre defile a l'interieur", () => {
 	assert.match(compose, /ss2i-compose-scroll min-h-0 overflow-y-auto/, "corps de la fenetre en defilement");

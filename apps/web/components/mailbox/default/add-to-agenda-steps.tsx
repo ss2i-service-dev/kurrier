@@ -1,13 +1,16 @@
 "use client";
 import React from "react";
 import { Checkbox, NativeSelect, TextInput } from "@mantine/core";
-import { type AgendaEvent, type AgendaReminder, agendaWhen, remindersFor } from "@common/thread-agenda";
+import { ALL_DAY_REMINDERS, type AgendaEvent, TIMED_REMINDERS, agendaWhen, defaultReminders } from "@common/thread-agenda";
 
 // ss2i : les deux etapes de « Ajouter a l'agenda » (OI 10280), sans etat ni appel serveur :
-// propositions a corriger, puis recapitulatif de ce qui sera cree avec le rappel de chaque
-// evenement (« Aucun rappel » par defaut). Libelles en francais dans les deux interfaces.
+// propositions a corriger, puis recapitulatif de ce qui sera cree avec les rappels de chaque
+// evenement : trois cases cochees d'emblee pour un horaire (1 h avant, 15 min avant, a l'heure),
+// la veille a 8 h pour une journee entiere (Samuel, 19/11 : « on les decoche si on a envie »).
+// Libelles en francais dans les deux interfaces.
 
-export type AgendaRow = AgendaEvent & { key: number; checked: boolean; error?: string };
+/** timeToCheck : proposition sans heure dans le fil, 09:00 mise a sa place, a verifier. */
+export type AgendaRow = AgendaEvent & { key: number; checked: boolean; error?: string; timeToCheck?: boolean };
 
 const datePart = (v: string) => v.slice(0, 10);
 const timePart = (v: string) => (v.length >= 16 ? v.slice(11, 16) : "");
@@ -46,19 +49,19 @@ export function ProposalsStep({
 }) {
 	const { muted, card } = styles(nouvelle);
 	const ring = nouvelle ? "ring-2 ring-k-accent" : "ring-2 ring-primary";
-	// Journee entiere <-> horaire : on garde les jours, 09:00-10:00 par defaut a corriger ; le
-	// rappel repart a « aucun » (les choix ne sont pas les memes).
+	// Journee entiere <-> horaire : on garde les jours, 09:00-10:00 par defaut a corriger ; les
+	// rappels repartent a ceux par defaut du type (les choix ne sont pas les memes).
 	const toggleAllDay = (r: AgendaRow, allDay: boolean) =>
 		onChange(
 			r.key,
 			allDay
-				? { allDay, start: datePart(r.start), end: datePart(r.end), reminder: "none" }
-				: { allDay, start: `${datePart(r.start)}T09:00`, end: `${datePart(r.start)}T10:00`, reminder: "none" },
+				? { allDay, start: datePart(r.start), end: datePart(r.end), reminders: defaultReminders(true), timeToCheck: false }
+				: { allDay, start: `${datePart(r.start)}T09:00`, end: `${datePart(r.start)}T10:00`, reminders: defaultReminders(false), timeToCheck: false },
 		);
 	const setDate = (r: AgendaRow, which: "start" | "end", date: string) =>
 		onChange(r.key, { [which]: r.allDay ? date : `${date}T${timePart(r[which]) || "09:00"}` });
 	const setTime = (r: AgendaRow, which: "start" | "end", time: string) =>
-		onChange(r.key, { [which]: `${datePart(r[which])}T${time}` });
+		onChange(r.key, { [which]: `${datePart(r[which])}T${time}`, timeToCheck: false });
 
 	return (
 		<>
@@ -111,6 +114,11 @@ export function ProposalsStep({
 								</div>
 							))}
 						</div>
+						{r.timeToCheck && !r.allDay && (
+							<div className="text-xs text-amber-700" role="note">
+								Heure à vérifier : le fil n'en donne pas
+							</div>
+						)}
 						<TextInput
 							size="xs"
 							placeholder="Lieu"
@@ -132,20 +140,20 @@ export function ConfirmStep({
 	rows,
 	mailbox,
 	nouvelle,
-	onReminder,
+	onReminders,
 }: {
 	rows: AgendaRow[];
 	mailbox: string;
 	nouvelle: boolean;
-	onReminder: (key: number, reminder: AgendaReminder) => void;
+	onReminders: (key: number, reminders: number[]) => void;
 }) {
 	const { muted, card } = styles(nouvelle);
 	return (
 		<>
 			<div className={`text-xs ${muted}`}>
 				{rows.length > 1
-					? `Ces ${rows.length} événements seront créés dans l'agenda Outlook de ${mailbox}. Choisissez un rappel pour chacun.`
-					: `Cet événement sera créé dans l'agenda Outlook de ${mailbox}. Choisissez son rappel.`}
+					? `Ces ${rows.length} événements seront créés dans l'agenda Outlook de ${mailbox}. Les rappels de chacun sont cochés, décochez ceux dont vous n'avez pas besoin.`
+					: `Cet événement sera créé dans l'agenda Outlook de ${mailbox}. Ses rappels sont cochés, décochez ceux dont vous n'avez pas besoin.`}
 			</div>
 			<ul className="max-h-[60vh] space-y-2 overflow-y-auto">
 				{rows.map((r) => (
@@ -153,18 +161,38 @@ export function ConfirmStep({
 						<div className="text-sm font-medium">{r.title}</div>
 						<div className="text-sm">{agendaWhen(r)}</div>
 						{r.location && <div className={`text-sm ${muted}`}>Lieu : {r.location}</div>}
-						<NativeSelect
-							size="xs"
-							className="max-w-xs pt-1"
-							label="Rappel"
-							value={r.reminder ?? "none"}
-							onChange={(e) => onReminder(r.key, e.currentTarget.value as AgendaReminder)}
-							data={remindersFor(r.allDay).map((o) => ({ value: o.value, label: o.label }))}
-						/>
+						<Reminders row={r} onChange={(reminders) => onReminders(r.key, reminders)} />
 						<RowError error={r.error} />
 					</li>
 				))}
 			</ul>
 		</>
+	);
+}
+
+// Horaire : une case par rappel, toutes cochees d'emblee, aucune cochee = aucun rappel.
+// Journee entiere : un seul choix.
+function Reminders({ row, onChange }: { row: AgendaRow; onChange: (reminders: number[]) => void }) {
+	const list = row.reminders ?? defaultReminders(row.allDay);
+	if (row.allDay) {
+		return (
+			<NativeSelect
+				size="xs"
+				className="max-w-xs pt-1"
+				label="Rappel"
+				value={String(list[0] ?? "none")}
+				onChange={(e) => onChange(e.currentTarget.value === "none" ? [] : [Number(e.currentTarget.value)])}
+				data={ALL_DAY_REMINDERS.map((o) => ({ value: String(o.minutes ?? "none"), label: o.label }))}
+			/>
+		);
+	}
+	return (
+		<Checkbox.Group value={list.map(String)} onChange={(v) => onChange(v.map(Number).sort((a, b) => b - a))} label="Rappels" size="xs" className="pt-1">
+			<div className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
+				{TIMED_REMINDERS.map((o) => (
+					<Checkbox key={o.minutes} size="xs" value={String(o.minutes)} label={o.label} />
+				))}
+			</div>
+		</Checkbox.Group>
 	);
 }

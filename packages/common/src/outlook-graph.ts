@@ -11,7 +11,8 @@
 //   provisoire, refuser, avec un mot facultatif). Les invitations et mises a jour partent
 //   des serveurs Microsoft comme depuis Outlook.
 // Dates en heure de Paris, sans decalage, comme le reste de l'agenda.
-import { AGENDA_TIMEZONE, AgendaError, type GraphConfig, addDays, graphToken } from "./thread-agenda";
+import { AGENDA_TIMEZONE, AgendaError, type GraphConfig, REMINDERS_PROPERTY_ID, addDays, graphToken } from "./thread-agenda";
+import { type ReminderSource, parseReminderOffsets } from "./meeting-reminders";
 import { type BusyBlock, type CalendarEvent, checkRange, convertZone, fromGraphEvent, safeTimeZone } from "./outlook-calendar";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -778,6 +779,8 @@ export type DueReminder = {
 	joinUrl?: string;
 	/** Heure de declenchement ("YYYY-MM-DDTHH:mm", fuseau d'affichage). */
 	fireAt: string;
+	/** Palier calcule par courrier (propriete ss2iReminders), pas un rappel d'Outlook : le fermer ne vaut que dans courrier. */
+	extra?: boolean;
 };
 
 /**
@@ -798,6 +801,47 @@ export async function listReminders(cfg: GraphConfig, mailbox: string, from: str
 			fireAt: graphZoned(r.reminderFireTime, tz),
 		}))
 		.filter((r: DueReminder) => r.eventId && r.start && r.fireAt);
+}
+
+/**
+ * Evenements proches portant des rappels multiples (propriete etendue ss2iReminders, posee par
+ * « Ajouter a l'agenda ») : Graph ne declenche que le rappel natif, courrier calcule les autres.
+ * Le filtre de la propriete est dans $expand : calendarView n'accepte pas le filtre /Any(...)
+ * documente pour /events ; les evenements sans la propriete reviennent sans elle et sont ecartes ici.
+ */
+export async function listReminderSources(cfg: GraphConfig, mailbox: string, from: string, to: string, tz: string = AGENDA_TIMEZONE): Promise<ReminderSource[]> {
+	// Espaces en %20 (pas « + ») : l'identifiant de la propriete en contient.
+	const query = Object.entries({
+		startDateTime: `${from}:00`,
+		endDateTime: `${to}:00`,
+		$select: "id,subject,start,end,isAllDay,isCancelled,location,webLink,onlineMeeting,isReminderOn,reminderMinutesBeforeStart",
+		$expand: `singleValueExtendedProperties($filter=id eq '${REMINDERS_PROPERTY_ID}')`,
+		$top: "100",
+	})
+		.map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+		.join("&");
+	const data = await graph(cfg, mailbox, "GET", `/calendarView?${query}`, undefined, "Rappel", tz);
+	const out: ReminderSource[] = [];
+	for (const raw of Array.isArray(data?.value) ? data.value : []) {
+		if (raw?.isCancelled || raw?.isAllDay) continue;
+		// Graph renvoie le GUID de l'identifiant en minuscules : comparaison sans casse.
+		const prop = (Array.isArray(raw?.singleValueExtendedProperties) ? raw.singleValueExtendedProperties : []).find((p: any) => String(p?.id ?? "").toLowerCase() === REMINDERS_PROPERTY_ID.toLowerCase());
+		const offsets = parseReminderOffsets(prop?.value);
+		const start = graphZoned(raw?.start, tz);
+		if (!raw?.id || !offsets.length || !start) continue;
+		out.push({
+			eventId: String(raw.id),
+			title: String(raw.subject ?? "").trim() || "(Sans titre)",
+			start,
+			end: graphZoned(raw?.end, tz),
+			location: String(raw?.location?.displayName ?? "").trim() || undefined,
+			webLink: raw?.webLink ? String(raw.webLink) : undefined,
+			joinUrl: raw?.onlineMeeting?.joinUrl ? String(raw.onlineMeeting.joinUrl) : undefined,
+			nativeMinutes: raw?.isReminderOn ? Number(raw?.reminderMinutesBeforeStart ?? 15) : null,
+			offsets,
+		});
+	}
+	return out;
 }
 
 /** Ferme le rappel dans Outlook aussi. */

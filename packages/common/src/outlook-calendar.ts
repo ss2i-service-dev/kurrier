@@ -5,7 +5,7 @@
 // que « Ajouter a l'agenda », permission Calendars.ReadWrite), dates en heure de Paris.
 // Code pur (dates, mise en page des colonnes) et appels HTTP, sans base : partage par le web
 // et les tests.
-import { AGENDA_TIMEZONE, AgendaError, type AgendaEvent, type GraphConfig, addDays, graphToken } from "./thread-agenda";
+import { AGENDA_TIMEZONE, AgendaError, type AgendaEvent, type GraphConfig, addDays, defaultReminders, graphToken } from "./thread-agenda";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 
@@ -287,12 +287,12 @@ export function slotFromOffset(offsetPx: number, hourHeight: number): number {
 const daySpan = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 
 /** Proposition deplacee sur un creneau de l'agenda (minutes = null : journee entiere). */
-export function placeEvent(r: Pick<AgendaEvent, "allDay" | "start" | "end" | "reminder">, date: string, minutes: number | null): Pick<AgendaEvent, "allDay" | "start" | "end" | "reminder"> {
+export function placeEvent(r: Pick<AgendaEvent, "allDay" | "start" | "end" | "reminders">, date: string, minutes: number | null): Pick<AgendaEvent, "allDay" | "start" | "end" | "reminders"> {
 	const valid = (v: string, len: number) => v.length >= len && !Number.isNaN(Date.parse(`${v.slice(0, 10)}T00:00:00Z`));
 	if (minutes === null) {
 		// Journee entiere : meme nombre de jours qu'avant.
 		const span = r.allDay && valid(r.start, 10) && valid(r.end, 10) ? Math.max(0, daySpan(r.start.slice(0, 10), r.end.slice(0, 10))) : 0;
-		return { allDay: true, start: date, end: addDays(date, span), reminder: r.allDay ? r.reminder : "none" };
+		return { allDay: true, start: date, end: addDays(date, span), reminders: r.allDay ? r.reminders : defaultReminders(true) };
 	}
 	// Horaire : meme duree le meme jour (1 h par defaut), jamais au-dela de 23:59.
 	let duration = 60;
@@ -303,7 +303,7 @@ export function placeEvent(r: Pick<AgendaEvent, "allDay" | "start" | "end" | "re
 		allDay: false,
 		start: `${date}T${hhmm(minutes)}`,
 		end: `${date}T${hhmm(Math.min(minutes + duration, 23 * 60 + 59))}`,
-		reminder: r.allDay ? "15m" : r.reminder,
+		reminders: r.allDay ? defaultReminders(false) : r.reminders,
 	};
 }
 

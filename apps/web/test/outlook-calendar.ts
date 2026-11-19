@@ -196,20 +196,20 @@ const ev = (id: string, start: string, end: string, extra: Partial<CalendarEvent
 	});
 
 	await test("placement d'une proposition : durée gardée, journée entière, passage horaire <-> jour", () => {
-		const timed = { allDay: false, start: "2026-11-06T14:00", end: "2026-11-06T14:45", reminder: "1h" as const };
+		const timed = { allDay: false, start: "2026-11-06T14:00", end: "2026-11-06T14:45", reminders: [60, 15] };
 		assert.deepEqual(placeEvent(timed, "2026-11-12", 9 * 60 + 30), {
 			allDay: false,
 			start: "2026-11-12T09:30",
 			end: "2026-11-12T10:15",
-			reminder: "1h",
+			reminders: [60, 15],
 		});
 		// fin bornee a 23:59 le meme jour
 		assert.equal(placeEvent(timed, "2026-11-12", 23 * 60 + 30).end, "2026-11-12T23:59");
-		const allDay = { allDay: true, start: "2026-11-09", end: "2026-11-11", reminder: "week-8h" as const };
-		assert.deepEqual(placeEvent(allDay, "2026-11-16", null), { allDay: true, start: "2026-11-16", end: "2026-11-18", reminder: "week-8h" });
-		// journee entiere -> horaire : 1 h, rappel 15 min ; horaire -> journee : aucun rappel
-		assert.deepEqual(placeEvent(allDay, "2026-11-16", 9 * 60), { allDay: false, start: "2026-11-16T09:00", end: "2026-11-16T10:00", reminder: "15m" });
-		assert.deepEqual(placeEvent(timed, "2026-11-16", null), { allDay: true, start: "2026-11-16", end: "2026-11-16", reminder: "none" });
+		const allDay = { allDay: true, start: "2026-11-09", end: "2026-11-11", reminders: [9600] };
+		assert.deepEqual(placeEvent(allDay, "2026-11-16", null), { allDay: true, start: "2026-11-16", end: "2026-11-18", reminders: [9600] });
+		// journee entiere -> horaire : 1 h, rappels par defaut (1 h, 15 min, a l'heure) ; horaire -> journee : la veille a 8 h
+		assert.deepEqual(placeEvent(allDay, "2026-11-16", 9 * 60), { allDay: false, start: "2026-11-16T09:00", end: "2026-11-16T10:00", reminders: [60, 15, 0] });
+		assert.deepEqual(placeEvent(timed, "2026-11-16", null), { allDay: true, start: "2026-11-16", end: "2026-11-16", reminders: [960] });
 		// saisie incomplete : 1 h par defaut
 		assert.equal(placeEvent({ allDay: false, start: "2026-11-06T", end: "" }, "2026-11-09", 600).end, "2026-11-09T11:00");
 	});

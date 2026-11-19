@@ -21,6 +21,7 @@ import {
 	parseMailboxList,
 } from "@common/thread-agenda";
 import { type CalendarEvent, checkRange, safeTimeZone, utcToZoned } from "@common/outlook-calendar";
+import { extraReminders, mergeReminders } from "@common/meeting-reminders";
 import {
 	ATTACHMENT_MAX_BYTES,
 	type CalendarRole,
@@ -48,6 +49,7 @@ import {
 	getAttachment,
 	getEvent,
 	getSchedules,
+	listReminderSources,
 	getTeamsOptions,
 	listCalendarEvents,
 	listCalendars,
@@ -560,7 +562,9 @@ export async function outlookSchedule(input: { identityPublicId: string; address
 /**
  * Rappels a afficher maintenant (ou dans les 5 minutes) : ceux qu'Outlook tient pour la boite
  * (fermes ou repousses dans Outlook compris). Sans reminderView, calcules a partir des
- * evenements de l'agenda par defaut.
+ * evenements de l'agenda par defaut. Avec, les paliers supplementaires des evenements crees
+ * par « Ajouter a l'agenda » (1 h, 15 min, a l'heure : Graph n'en declenche qu'un), calcules
+ * ici a partir de la propriete ss2iReminders ; une lecture qui echoue ne coupe pas les autres.
  */
 export async function outlookDueReminders(input: { identityPublicId: string; tz?: string }): Promise<Result<{ reminders: DueReminder[]; now: string }>> {
 	try {
@@ -586,6 +590,10 @@ export async function outlookDueReminders(input: { identityPublicId: string; tz?
 					});
 			});
 		}
+		const extraFrom = `${addDays(today, -1)}T00:00`;
+		const extraTo = `${addDays(today, 2)}T00:00`;
+		const sources = demo.on() ? demo.reminderSources(me, extraFrom, extraTo, tz) : await listReminderSources(graphConfig(), me, extraFrom, extraTo, tz).catch(() => []);
+		list = mergeReminders(list, extraReminders(sources));
 		const due = list.filter((r) => r.fireAt <= soon && r.end > now).slice(0, 10);
 		if (!demo.on()) {
 			const cfg = graphConfig();

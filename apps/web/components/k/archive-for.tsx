@@ -14,6 +14,7 @@ import { CalendarClock } from "lucide-react";
 import { toast } from "sonner";
 import KIconButton from "@/components/k/icon-button";
 import { mailActions, scheduleRefresh } from "@/components/k/mail-store";
+import { useShortcutHint } from "@/components/k/shortcuts-config";
 import { useNouvelle } from "@/components/k/ui-context";
 import { setThreadExpiry } from "@/lib/actions/mailbox";
 import { expiryMenuOptions, pickerDate } from "@/lib/archive-for";
@@ -34,7 +35,17 @@ type Props = {
 	/** Barre de selection, ligne de l'interface classique : bouton nu de cette classe (icone seule, comme ses voisins) au lieu d'un KIconButton. */
 	bulkClassName?: string;
 	/** Interface classique, barre du mail ouvert : declencheur du cote de l'appelant (ActionIcon Mantine), icone a la taille voulue. */
-	renderTrigger?: (t: { label: string; disabled: boolean; icon: (size: number) => React.ReactNode }) => React.ReactElement;
+	renderTrigger?: (t: {
+		label: string;
+		/** Libelle d'infobulle : libelle et touche de `A` entre parentheses (reglages de l'utilisateur). */
+		tip: string;
+		disabled: boolean;
+		icon: (size: number) => React.ReactNode;
+		/** Marque lue par ss2i-shortcuts.js (touche `A`) : a poser sur le declencheur. */
+		mark: Record<string, string>;
+	}) => React.ReactElement;
+	/** Contexte de la touche `A` (Maj+a, ss2i-shortcuts.js) : le mail ouvert ou la barre de selection ; rien pour une ligne de liste. */
+	shortcut?: "open" | "selection";
 	size?: "sm" | "md";
 };
 
@@ -48,6 +59,7 @@ export default function KArchiveFor({
 	before,
 	bulkClassName,
 	renderTrigger,
+	shortcut,
 	size = "md",
 }: Props) {
 	// Les jetons --k-* n'existent que dans la nouvelle interface : date du menu en gris Tailwind en classique.
@@ -59,6 +71,11 @@ export default function KArchiveFor({
 	const [saving, setSaving] = useState(false);
 	const [options, setOptions] = useState(() => expiryMenuOptions(new Date()));
 	const label = inArchive ? "Durée de vie…" : "Archiver pour…";
+	// Infobulle « Archiver pour… (Maj+A) » : la touche vient des reglages, rien si elle est retiree.
+	const hint = useShortcutHint("archiveFor");
+	const tip = hint ? `${label} (${hint.replace(/ \+ /g, "+")})` : label;
+	// Marque lue par ss2i-shortcuts.js : `A` clique le declencheur du contexte (jamais par title, jamais data-k-action de `a`).
+	const mark: Record<string, string> = shortcut ? { "data-ss2i-shortcut": `${shortcut}-archive-for` } : {};
 
 	// Dates recalculees a l'ouverture : l'onglet reste ouvert des jours.
 	const onMenuChange = (opened: boolean) => {
@@ -105,15 +122,17 @@ export default function KArchiveFor({
 	const trigger = renderTrigger ? (
 		renderTrigger({
 			label,
+			tip,
+			mark,
 			disabled: saving,
 			icon: (px) => (saving ? <Loader size={px - 3} color="gray" /> : <CalendarClock size={px} />),
 		})
 	) : bulkClassName ? (
-		<button type="button" aria-label={label} title={label} disabled={saving} className={bulkClassName}>
+		<button type="button" aria-label={label} title={tip} disabled={saving} className={bulkClassName} {...mark}>
 			{icon}
 		</button>
 	) : (
-		<KIconButton size={size} label={label} disabled={saving}>
+		<KIconButton size={size} label={label} shortcut={hint} disabled={saving} {...mark}>
 			{icon}
 		</KIconButton>
 	);

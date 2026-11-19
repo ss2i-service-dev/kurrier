@@ -156,6 +156,7 @@ export default function ThreadToolbar({
 				threadIds={() => [String(threadId)]}
 				starred={() => !!starred}
 				before={advance}
+				shortcut="open"
 			/>
 			<SnoozeMail mailboxThreadId={threadId} activeMailboxId={activeMailboxId} />
 			<KIconButton

@@ -7,7 +7,7 @@
 // docs/plans/archive-duree-de-vie.md, bloc 3. Aucune base, aucun reseau. Depuis la racine :
 //   node_modules/.bin/tsx apps/web/test/archive-expiry.ts
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { archivedMessage, expiryMenuOptions, mailboxKindOf, pickerDate } from "../lib/archive-for";
 
@@ -172,7 +172,7 @@ test("archive-for.tsx : ne capte pas le raccourci `a` ; bouton de la barre : inf
 	// Le repli de ss2i-shortcuts.js lit textContent (« Archive... ») : le bouton nu ne contient que l'icone.
 	const bulk = /<button\b[^>]*aria-label=\{label\}[^>]*>([\s\S]*?)<\/button>/.exec(s);
 	assert.ok(bulk, "bouton nu de la barre de selection introuvable");
-	assert.match(bulk![0], /\btitle=\{label\}/, "title={label}");
+	assert.match(bulk![0], /\btitle=\{tip\}/, "title={tip} (libelle + touche)");
 	assert.equal(bulk![1].trim(), "{icon}", "aucun texte dans le bouton : textContent vide");
 	const shortcuts = readFileSync(join(WEB, "public", "ss2i-shortcuts.js"), "utf8");
 	assert.match(shortcuts, /b\.textContent\.trim\(\)\.startsWith\(libelle\)/, "le repli par textContent existe toujours (et ne lit pas title)");
@@ -185,9 +185,62 @@ test("archive-for : place a cote de chaque « Archiver » (selection, ligne, bar
 	}
 });
 
-test("raccourci `a` et catalogue inchanges : aucun nouveau raccourci", () => {
-	const s = code("components/k/shortcuts-catalog.ts");
-	assert.ok(!/expir|archive-for|archiver pour/i.test(s), "le catalogue ne parle pas d'expiration");
+test("raccourci `a` inchange ; `A` (Maj+a) : entree du catalogue, aide et script", () => {
+	const c = code("components/k/shortcuts-catalog.ts");
+	assert.match(c, /\{ id: "archive", group: "organize",[^}]*defaults: \["a"\] \}/, "archive reste sur `a`");
+	assert.match(c, /\|\s*"archiveFor"/, "ShortcutId archiveFor");
+	assert.match(c, /\{ id: "archiveFor", group: "organize", en: "Archive for[^}]*fr: "Archiver pour[^}]*defaults: \["Shift\+a"\]/, "entree archiveFor, defaut Shift+a");
+	assert.ok(!/expir/i.test(c), "le catalogue ne parle pas d'expiration");
+	const sh = code("public/ss2i-shortcuts.js");
+	assert.match(sh, /\["archive", \["a"\], [^\n]*surMailOuSelection\("Archive"\)\]/, "`a` inchange dans le script");
+	assert.match(sh, /\["archiveFor", \["Shift\+a"\], [^\n]*archiverPour\(\)\]/, "`A` dans la table du script");
+	// Meme combinaison que le catalogue : Maj + lettre -> « Shift+a » (les touches viennent de touchesDe, donc des reglages).
+	assert.match(sh, /const archiverPour = /);
+	const f = sh.slice(sh.indexOf("const archiverPour"), sh.indexOf("const archiverPour") + 1400);
+	assert.match(f, /open-archive-for/, "mail ouvert");
+	assert.match(f, /selection-archive-for/, "selection multiple");
+	assert.match(f, /dansUnMail\(\)/, "meme partage que `a` : mail ouvert ou selection");
+	assert.match(f, /role="menu"|\[role=\\?"menu\\?"\]/, "ne reagit pas menu deja ouvert");
+	assert.match(f, /\.focus\(\)/, "le focus est rendu au menu ouvert");
+	assert.ok(!/getAttribute\(["']title["']\)|\[title[\]=*^$~|]/.test(sh), "jamais par title");
+	// Le verrou de saisie est celui de `a` : le gestionnaire commun ecarte les champs de saisie avant toute action.
+	assert.match(sh, /!avecModificateur\(combo\) && dansUneSaisie\(e\.target\)\) return;/);
+});
+
+test("`A` : les declencheurs du menu portent une marque data-ss2i-shortcut, sans texte ni data-k-action", () => {
+	const s = code("components/k/archive-for.tsx");
+	assert.match(s, /shortcut\?: "open" \| "selection"/, "prop shortcut");
+	assert.match(s, /`?data-ss2i-shortcut`?[^\n]*archive-for|"data-ss2i-shortcut": `\$\{shortcut\}-archive-for`/, "marque posee");
+	assert.ok(!/data-k-action/.test(s), "jamais data-k-action");
+	for (const [f, mark] of [
+		["components/k/thread-toolbar.tsx", "open"],
+		["components/mailbox/default/email-renderer.tsx", "open"],
+		["components/k/list-header.tsx", "selection"],
+		["components/mailbox/default/mail-list-header.tsx", "selection"],
+	] as const) {
+		const c = code(f);
+		const at = c.indexOf("<KArchiveFor");
+		assert.ok(at >= 0, f);
+		assert.ok(c.slice(at, c.indexOf("/>", at + 40) + 2).includes(`shortcut="${mark}"`), `${f} : shortcut="${mark}"`);
+	}
+	// Les lignes de liste n'en portent pas : `a` n'y agit pas non plus (un seul declencheur visible par contexte).
+	for (const f of ["components/k/thread-row.tsx", "components/mailbox/default/webmail-list-item.tsx"]) {
+		const c = code(f);
+		const at = c.indexOf("<KArchiveFor");
+		assert.ok(!/shortcut=/.test(c.slice(at, c.indexOf("/>", at) + 2)), f);
+	}
+});
+
+test("`A` : infobulle « Archiver pour... (Maj+A) » dans les deux interfaces, selon le reglage de l'utilisateur", () => {
+	const s = code("components/k/archive-for.tsx");
+	assert.match(s, /useShortcutHint\("archiveFor"\)/, "touche lue des reglages (useShortcutHint)");
+	assert.match(s, /const tip = /, "libelle d'infobulle");
+	assert.match(s, /\(\$\{[^}]*\}\)/, "libelle (touche)");
+	assert.match(s, /replace\(\/ \\\+ \/g, "\+"\)/, "Maj + A -> Maj+A");
+	assert.match(s, /<button\b[^>]*aria-label=\{label\}[^>]*\btitle=\{tip\}/, "bouton nu : title={tip}");
+	assert.match(s, /<KIconButton\b[^>]*\bshortcut=\{hint\}/, "KIconButton : touche dans l'infobulle");
+	assert.match(s, /renderTrigger\(\{[^}]*\btip\b/, "renderTrigger recoit tip");
+	assert.match(code("components/mailbox/default/email-renderer.tsx"), /renderTrigger=\{\(\{[^)]*\btip\b[^)]*\}\) => \(\s*<Tooltip label=\{tip\}/, "Tooltip Mantine : tip");
 });
 
 test("vue « Expire bientot » : page expiring et lien de la barre laterale sous « Reportes »", () => {
@@ -354,6 +407,18 @@ test("classique, barre laterale : « Expire bientot » sous Snoozed, compteur se
 test("note Nouveautes : mentionne l'interface classique", () => {
 	const s = readFileSync(join(WEB, "changelogs", "2026-11-19-5.md"), "utf8");
 	assert.match(s, /interface classique/i);
+});
+
+test("note Nouveautes du jour : `A` ouvre « Archiver pour… »", () => {
+	const dir = join(WEB, "changelogs");
+	const notes = readdirSync(dir).filter((f) => /^2026-11-19(-\d+)?\.md$/.test(f));
+	const note = notes.find((f) => /Maj\+A|Maj \+ A|Maj\+a/.test(readFileSync(join(dir, f), "utf8")));
+	assert.ok(note, "aucune note 2026-11-19-N.md ne mentionne Maj+A");
+	const t = readFileSync(join(dir, note!), "utf8");
+	assert.match(t, /^---\ntitle: ".+"\n---\n/);
+	assert.match(t, /## Nouveautés/);
+	assert.match(t, /\bA\b|Maj/);
+	assert.match(t, /raccourci `a`|`a` archive/i, "dit que `a` ne change pas");
 });
 
 if (failed) {

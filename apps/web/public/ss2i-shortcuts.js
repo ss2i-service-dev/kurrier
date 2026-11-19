@@ -24,6 +24,7 @@
     ["reply", ["r"], "Repondre", () => cliquer("Reply")],
     ["forward", ["f"], "Transferer", () => cliquer("Forward")],
     ["archive", ["a"], "Archiver (le mail ouvert ou les mails coches)", () => surMailOuSelection("Archive")],
+    ["archiveFor", ["Shift+a"], "Archiver pour... (ouvre le menu des durees : le mail ouvert ou les mails coches)", () => archiverPour()],
     ["delete", ["e", "#"], "Supprimer (le mail ouvert ou les mails coches)", () => surMailOuSelection("Delete")],
     ["unread", ["u"], "Marquer non lu et revenir a la liste", () => marquerNonLu()],
     ["search", ["/"], "Rechercher", () => focaliserRecherche()],
@@ -111,6 +112,28 @@
     ).find((b) => b.offsetParent !== null);
     if (cible) cible.click();
     return Boolean(cible);
+  };
+
+  // « Archiver pour... » (A, Maj+a) : ouvre le menu de KArchiveFor du meme contexte que `a`, le mail
+  // ouvert ou la barre de selection (marque data-ss2i-shortcut posee par KArchiveFor, jamais par
+  // title ni par data-k-action, que `a` garde). Pas de second menu : on clique le declencheur.
+  // Menu ou fenetre deja ouvert : leur clavier leur appartient, rien ne se passe.
+  const archiverPour = () => {
+    if (document.querySelector('[role="menu"], [role="dialog"]')) return false;
+    const marque = dansUnMail() ? "open-archive-for" : "selection-archive-for";
+    const cible = Array.from(document.querySelectorAll(`button[data-ss2i-shortcut="${marque}"]`)).find(visible);
+    if (!cible || cible.disabled) return false;
+    cible.click();
+    rendreLeFocusAuMenu(8);
+    return true;
+  };
+  // Mantine Menu piege le focus a l'ouverture ; sinon (declencheur remonte, rendu tardif) on le
+  // pose sur le menu : fleches puis Entree choisissent une duree.
+  const rendreLeFocusAuMenu = (essais) => {
+    const menu = Array.from(document.querySelectorAll('[role="menu"]')).find(visible);
+    if (menu) {
+      if (!menu.contains(document.activeElement)) menu.focus();
+    } else if (essais > 0) setTimeout(() => rendreLeFocusAuMenu(essais - 1), 40);
   };
 
   // Non lu : seulement dans un mail ouvert (URL .../threads/<id>). Le bouton est une

@@ -348,6 +348,7 @@ function KListHeader({
 							}}
 							before={clearSelection}
 							bulkClassName={bulkBtn}
+							shortcut="selection"
 						/>
 						<button type="button" onClick={markRead} className={bulkBtn} title="Marquer comme lu">
 							<MailOpen className="h-4 w-4" />

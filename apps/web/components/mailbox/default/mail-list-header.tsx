@@ -399,6 +399,7 @@ function MailListHeader({
 							}}
 							before={clearSelection}
 							bulkClassName="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs hover:bg-muted"
+							shortcut="selection"
 						/>
 						<button
 							type="button"

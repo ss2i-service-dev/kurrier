@@ -130,19 +130,18 @@ function buildTree(
 function IdentityExtraCounts({
 								 identity,
 								 snoozedThreadsPromise,
-								 expiringThreadsPromise,
+								 expiringCountsPromise,
 								 workspacePublicId,
 								 currentSlug,
 							 }: {
 	identity: IdentityEntity;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
-	expiringThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
+	expiringCountsPromise: Promise<Record<string, number>>;
 	workspacePublicId: string | undefined;
 	currentSlug: string;
 }) {
 	const { threads: snoozedThreads } = use(snoozedThreadsPromise);
-	const { threads: expiringThreads } = use(expiringThreadsPromise);
-	const expiringCount = expiringThreads.filter((s) => s.identityId === identity.id).length;
+	const expiringCount = use(expiringCountsPromise)[identity.id] ?? 0;
 
 	const snoozedCount = snoozedThreads.filter(
 		(s) => s.identityId === identity.id,
@@ -231,7 +230,7 @@ export default function KSidebarNav({
 	unreadCounts,
 	outboxCounts,
 	snoozedThreadsPromise,
-	expiringThreadsPromise,
+	expiringCountsPromise,
 	workspacePublicId,
 	onComplete,
 	clientsPromise,
@@ -241,7 +240,7 @@ export default function KSidebarNav({
 	// ss2i : Boite d'envoi, compteurs par identite (fetchOutboxCounts).
 	outboxCounts: OutboxCount[];
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
-	expiringThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
+	expiringCountsPromise: Promise<Record<string, number>>;
 	workspacePublicId: string | undefined;
 	onComplete?: () => void;
 	clientsPromise?: Promise<IdentityClientsData[]>;
@@ -405,7 +404,7 @@ export default function KSidebarNav({
 					<IdentityExtraCounts
 						identity={identity}
 						snoozedThreadsPromise={snoozedThreadsPromise}
-						expiringThreadsPromise={expiringThreadsPromise}
+						expiringCountsPromise={expiringCountsPromise}
 						workspacePublicId={workspacePublicId}
 						currentSlug={currentSlug}
 					/>

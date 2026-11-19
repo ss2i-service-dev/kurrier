@@ -77,11 +77,13 @@ export default function KArchiveFor({
 		}
 		setSaving(true);
 		try {
-			const results = await Promise.all(ids.map((threadId) => setThreadExpiry({ threadId, mailboxId, expiresAt: iso })));
-			const refused = results.find((r) => !r.ok);
-			const done = results.filter((r) => r.ok).length;
-			if (refused && !refused.ok) {
-				toast.error(done ? `${done} sur ${ids.length} mis à jour. ${refused.reason}` : refused.reason, { position: "bottom-center" });
+			const res = await setThreadExpiry({ threadIds: ids, mailboxId, expiresAt: iso });
+			if (!res.ok) {
+				toast.error(res.reason, { position: "bottom-center" });
+			} else if (res.skipped > 0) {
+				toast.error(`${res.updated} sur ${ids.length} mis à jour : les fils étoilés ou déjà dans la boîte de réception n'expirent pas`, {
+					position: "bottom-center",
+				});
 			} else {
 				toast.success(`Disparaît le ${formatExpiry(at)}`, { position: "bottom-center" });
 			}
@@ -95,7 +97,7 @@ export default function KArchiveFor({
 
 	const icon = saving ? <Loader size={15} color="gray" /> : <CalendarClock className={bulkClassName ? "h-4 w-4" : undefined} />;
 	const trigger = bulkClassName ? (
-		<button type="button" aria-label={label} disabled={saving} className={bulkClassName}>
+		<button type="button" aria-label={label} title={label} disabled={saving} className={bulkClassName}>
 			{icon}
 		</button>
 	) : (

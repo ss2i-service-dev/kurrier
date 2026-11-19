@@ -104,6 +104,9 @@ if (mig !== null) {
 		assert.match(mig!, /DROP TRIGGER IF EXISTS ss2i_mbth_expiry_guard/i);
 		assert.match(mig!, /WHEN \(NEW\.starred AND NEW\.expires_at IS NOT NULL\)/i);
 	});
+	test("migration ss2i_011 : lock_timeout de 5 s, premiere instruction", () => {
+		assert.ok(mig!.trim().startsWith("SET lock_timeout = '5s';"), "SET lock_timeout = '5s'; en tete");
+	});
 }
 
 test("schema drizzle : expiresAt et index partiel sur mailbox_threads", () => {

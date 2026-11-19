@@ -1,6 +1,6 @@
 import {
 	fetchIdentityMailboxList,
-	fetchIdentityExpiringThreads,
+	fetchExpiringCounts,
 	fetchIdentitySnoozedThreads,
 	fetchMailboxUnreadCounts,
 	fetchOutboxCounts,
@@ -38,7 +38,7 @@ export default async function KSidebarNavWrapper() {
 				unreadCounts={unreadCounts}
 				outboxCounts={outboxCounts}
 				snoozedThreadsPromise={fetchIdentitySnoozedThreads()}
-				expiringThreadsPromise={fetchIdentityExpiringThreads()}
+				expiringCountsPromise={fetchExpiringCounts()}
 				clientsPromise={fetchIdentityClients()}
 				workspacePublicId={workspacePublicId}
 			/>

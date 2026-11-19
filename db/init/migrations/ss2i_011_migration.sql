@@ -3,6 +3,7 @@
 -- supprimee puis recreee (resync, EXPUNGE, fusion) la perd, le fil est conserve (sens sur). Le
 -- trigger annule l'echeance de tout fil etoile, quel que soit le chemin d'ecriture de starred.
 -- Idempotent.
+SET lock_timeout = '5s';
 ALTER TABLE public.mailbox_threads ADD COLUMN IF NOT EXISTS expires_at timestamptz;
 CREATE INDEX IF NOT EXISTS ix_mbth_expires_at ON public.mailbox_threads (expires_at) WHERE expires_at IS NOT NULL;
 CREATE OR REPLACE FUNCTION public.ss2i_mbth_expiry_guard() RETURNS trigger LANGUAGE plpgsql AS $$

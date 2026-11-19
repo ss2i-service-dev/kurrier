@@ -2385,80 +2385,122 @@ export async function snoozeThread(input: {
 	});
 }
 
-// ss2i : archiver avec une duree de vie, fil deja archive. expiresAt null annule l'echeance.
-// Refus (et non erreur) pour un fil etoile ou ayant une ligne dans l'Inbox de la meme identite :
-// le trigger ss2i_mbth_expiry_guard et upsertMailboxThreadItem les videraient aussitot, la date
-// affichee serait un mensonge.
+// ss2i : archiver avec une duree de vie, fils deja archives, en un seul appel. expiresAt null
+// annule l'echeance. Un fil etoile ou ayant une ligne dans l'Inbox de la meme identite est ecarte
+// (compte dans skipped) : le trigger ss2i_mbth_expiry_guard et upsertMailboxThreadItem
+// videraient aussitot l'echeance, la date affichee serait un mensonge. Aucune ligne touchee (fil
+// parti a la Corbeille ou ailleurs entre-temps) n'est jamais un succes : ok false, avec la raison.
 export async function setThreadExpiry(input: {
-	threadId: string;
+	threadIds: string[];
 	mailboxId: string;
 	expiresAt: string | null;
-}): Promise<{ ok: true; expiresAt: string | null } | { ok: false; reason: string }> {
+}): Promise<{ ok: true; updated: number; skipped: number; expiresAt: string | null } | { ok: false; reason: string }> {
 	try {
-		const { mailbox, threadIds } = await assertThreadsInMailbox(input.mailboxId, [input.threadId]);
+		const { mailbox, threadIds } = await assertThreadsInMailbox(input.mailboxId, input.threadIds);
 		if (!threadIds.length) return { ok: false, reason: "Fil introuvable dans ce dossier" };
 		if (mailbox.kind !== "archive") {
 			return { ok: false, reason: "La durée de vie ne se règle que dans l'archive" };
 		}
-		const threadId = threadIds[0];
 		const expiry = input.expiresAt === null ? null : parseExpiry(input.expiresAt, new Date());
 		if (input.expiresAt !== null && !expiry) {
 			return { ok: false, reason: "Date invalide : choisir un jour à venir, dans les dix ans" };
 		}
 
 		const rls = await rlsClient();
+		let eligible = threadIds;
 		if (expiry) {
-			const [row] = await rls((tx) =>
+			const rows = await rls((tx) =>
 				tx
-					.select({ starred: mailboxThreads.starred })
+					.select({ threadId: mailboxThreads.threadId, starred: mailboxThreads.starred })
 					.from(mailboxThreads)
-					.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, mailbox.id)))
-					.limit(1),
+					.where(and(inArray(mailboxThreads.threadId, threadIds), eq(mailboxThreads.mailboxId, mailbox.id))),
 			);
-			if (!row) return { ok: false, reason: "Fil introuvable dans ce dossier" };
-			if (row.starred) return { ok: false, reason: "Un fil étoilé n'expire pas : retirer l'étoile d'abord" };
-			const [inbox] = await rls((tx) =>
+			const inboxRows = await rls((tx) =>
 				tx
-					.select({ id: mailboxThreads.mailboxId })
+					.select({ threadId: mailboxThreads.threadId })
 					.from(mailboxThreads)
 					.innerJoin(mailboxes, eq(mailboxes.id, mailboxThreads.mailboxId))
 					.where(
 						and(
-							eq(mailboxThreads.threadId, threadId),
+							inArray(mailboxThreads.threadId, threadIds),
 							eq(mailboxThreads.identityId, mailbox.identityId),
 							eq(mailboxes.kind, "inbox"),
 						),
-					)
-					.limit(1),
+					),
 			);
-			if (inbox) return { ok: false, reason: "Ce fil est aussi dans la boîte de réception : il n'expirera pas" };
+			const starred = new Set(rows.filter((r) => r.starred).map((r) => r.threadId));
+			const inInbox = new Set(inboxRows.map((r) => r.threadId));
+			eligible = rows.map((r) => r.threadId).filter((id) => !starred.has(id) && !inInbox.has(id));
+			if (!eligible.length) {
+				if (!rows.length) return { ok: false, reason: "Fil introuvable dans ce dossier" };
+				return {
+					ok: false,
+					reason: starred.size
+						? "Un fil étoilé n'expire pas : retirer l'étoile d'abord"
+						: "Ce fil est aussi dans la boîte de réception : il n'expirera pas",
+				};
+			}
 		}
 
-		await rls((tx) =>
+		const touched = await rls((tx) =>
 			tx
 				.update(mailboxThreads)
 				.set({ expiresAt: expiry, updatedAt: new Date() })
-				.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, mailbox.id))),
+				.where(and(inArray(mailboxThreads.threadId, eligible), eq(mailboxThreads.mailboxId, mailbox.id)))
+				.returning({ threadId: mailboxThreads.threadId }),
 		);
+		if (touched.length === 0) {
+			return { ok: false, reason: "Rien n'a été mis à jour : le fil n'est plus dans l'archive (déplacé ou supprimé entre-temps)" };
+		}
 		revalidatePath("/dashboard/mail");
-		return { ok: true, expiresAt: expiry ? expiry.toISOString() : null };
+		return {
+			ok: true,
+			updated: touched.length,
+			skipped: threadIds.length - touched.length,
+			expiresAt: expiry ? expiry.toISOString() : null,
+		};
 	} catch (e: any) {
 		return { ok: false, reason: e?.message ?? "Échec de la mise à jour" };
 	}
 }
 
-// ss2i : fils dont l'echeance est posee, les plus proches d'abord (vue « Expire bientot »).
-export const fetchIdentityExpiringThreads = async (): Promise<{ threads: MailboxThreadEntity[] }> => {
+// ss2i : fils de l'identite dont l'echeance est posee, dans son dossier archive, les plus proches
+// d'abord (vue « Expire bientot »). Filtres cote serveur : les 200 lignes sont celles de l'identite.
+export const fetchIdentityExpiringThreads = async (
+	identityPublicId: string,
+): Promise<{ threads: MailboxThreadEntity[] }> => {
 	const rls = await rlsClient();
 	const rows = await rls((tx) =>
 		tx
 			.select({ thread: mailboxThreads })
 			.from(mailboxThreads)
-			.where(isNotNull(mailboxThreads.expiresAt))
+			.innerJoin(mailboxes, eq(mailboxes.id, mailboxThreads.mailboxId))
+			.where(
+				and(
+					isNotNull(mailboxThreads.expiresAt),
+					eq(mailboxThreads.identityPublicId, identityPublicId),
+					eq(mailboxes.kind, "archive"),
+				),
+			)
 			.orderBy(asc(mailboxThreads.expiresAt), desc(mailboxThreads.lastActivityAt))
 			.limit(200),
 	);
 	return { threads: rows.map((r) => r.thread) };
+};
+
+// ss2i : nombre de fils qui vont expirer, par identite (id), pour la barre laterale. Calcule cote
+// serveur : aucune limite de lignes, aucun filtre a refaire dans le navigateur.
+export const fetchExpiringCounts = async (): Promise<Record<string, number>> => {
+	const rls = await rlsClient();
+	const rows = await rls((tx) =>
+		tx
+			.select({ identityId: mailboxThreads.identityId, n: count() })
+			.from(mailboxThreads)
+			.innerJoin(mailboxes, eq(mailboxes.id, mailboxThreads.mailboxId))
+			.where(and(isNotNull(mailboxThreads.expiresAt), eq(mailboxes.kind, "archive")))
+			.groupBy(mailboxThreads.identityId),
+	);
+	return Object.fromEntries(rows.map((r) => [String(r.identityId), Number(r.n)]));
 };
 
 // ss2i : echeance et etoile du fil ouvert, dans le dossier ou il est (encart « Disparait le »

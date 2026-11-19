@@ -72,6 +72,17 @@ test("archiveThread : 5e parametre expiresAt, valide par parseExpiry, ajoute aux
 	assert.match(job, /expiresAt/, "l'echeance part dans les donnees du job");
 });
 
+test("setThreadExpiry : une liste de fils en un appel, erreur claire si aucune ligne touchee (.returning)", () => {
+	const s = code("lib/actions/mailbox.ts");
+	const at = s.indexOf("export async function setThreadExpiry");
+	const body = s.slice(at, s.indexOf("\nexport ", at + 10));
+	assert.match(body, /threadIds:\s*string\[\]/, "threadIds est une liste");
+	assert.match(body, /inArray\(mailboxThreads\.threadId/, "un seul update pour la liste");
+	assert.match(body, /\.returning\(/, "l'update rend les lignes touchees");
+	assert.match(body, /length\s*===\s*0/, "aucune ligne touchee -> echec");
+	assert.match(body, /ok:\s*false,\s*reason:[^\n]*(entre-temps|plus dans)/, "message clair");
+});
+
 test("setThreadExpiry : archive seulement, null annule, refus etoile ou ligne INBOX", () => {
 	const s = code("lib/actions/mailbox.ts");
 	const at = s.indexOf("export async function setThreadExpiry");
@@ -86,14 +97,28 @@ test("setThreadExpiry : archive seulement, null annule, refus etoile ou ligne IN
 	assert.match(body, /ok:\s*false/);
 });
 
-test("fetchIdentityExpiringThreads : expires_at non nul, tri croissant, 200 lignes", () => {
+test("fetchIdentityExpiringThreads : identite en parametre, dossier archive, tri croissant, 200 lignes, filtres cote serveur", () => {
 	const s = code("lib/actions/mailbox.ts");
 	const at = s.indexOf("export const fetchIdentityExpiringThreads");
 	assert.ok(at > 0, "fetchIdentityExpiringThreads introuvable");
-	const body = s.slice(at, at + 1200);
+	const body = s.slice(at, s.indexOf("\nexport ", at + 10));
+	assert.match(body.slice(0, 200), /\(\s*identityPublicId:\s*string/, "identite en parametre");
 	assert.match(body, /isNotNull\(mailboxThreads\.expiresAt\)/);
+	assert.match(body, /eq\(mailboxThreads\.identityPublicId,\s*identityPublicId\)/, "filtre d'identite cote serveur");
+	assert.match(body, /innerJoin\(mailboxes/, "jointure sur le dossier");
+	assert.match(body, /eq\(mailboxes\.kind,\s*"archive"\)/, "dossier archive seulement");
 	assert.match(body, /asc\(mailboxThreads\.expiresAt\)/);
 	assert.match(body, /\.limit\(200\)/);
+});
+
+test("fetchExpiringCounts : compteur de la barre laterale par identite, dossier archive, calcule cote serveur", () => {
+	const s = code("lib/actions/mailbox.ts");
+	const at = s.indexOf("export const fetchExpiringCounts");
+	assert.ok(at > 0, "fetchExpiringCounts introuvable");
+	const body = s.slice(at, s.indexOf("\nexport ", at + 10));
+	assert.match(body, /isNotNull\(mailboxThreads\.expiresAt\)/);
+	assert.match(body, /eq\(mailboxes\.kind,\s*"archive"\)/);
+	assert.match(body, /groupBy\(mailboxThreads\.identityId\)/);
 });
 
 test("mail-store : mailActions.archive passe expiresAt a archiveThread", () => {
@@ -132,11 +157,26 @@ test("archive-for.tsx : aucun selecteur 12 h, aucun AM/PM, date seule", () => {
 	assert.match(s, /EXPIRY_PRESETS|expiryMenuOptions/);
 });
 
-test("archive-for.tsx : ne capte pas le raccourci `a` (pas de data-k-action archive, ni selection-archive)", () => {
+test("archive-for.tsx : une selection en Archive = un seul appel serveur", () => {
+	const s = code("components/k/archive-for.tsx");
+	assert.match(s, /setThreadExpiry\(\{\s*threadIds:\s*ids\b/, "setThreadExpiry({ threadIds: ids, ... })");
+	assert.ok(!/ids\.map\([^)]*setThreadExpiry/.test(s), "plus un appel par fil");
+	assert.ok(!/Promise\.all/.test(s), "plus de Promise.all");
+});
+
+test("archive-for.tsx : ne capte pas le raccourci `a` ; bouton de la barre : infobulle title, aucun texte", () => {
 	const s = code("components/k/archive-for.tsx");
 	assert.ok(!/data-k-action|action=["{]\s*"?archive/.test(s), 'data-k-action="archive"');
 	assert.ok(!/data-ss2i-shortcut="selection-archive"/.test(s), "selection-archive");
-	assert.ok(!/<(button|KIconButton)\b[^>]*\btitle=/.test(s), "aucun title sur un bouton (les raccourcis ne visent jamais par title)");
+	assert.ok(!/<KIconButton\b[^>]*\btitle=/.test(s), "le KIconButton a deja son infobulle (label)");
+	// Le repli de ss2i-shortcuts.js lit textContent (« Archive... ») : le bouton nu ne contient que l'icone.
+	const bulk = /<button\b[^>]*aria-label=\{label\}[^>]*>([\s\S]*?)<\/button>/.exec(s);
+	assert.ok(bulk, "bouton nu de la barre de selection introuvable");
+	assert.match(bulk![0], /\btitle=\{label\}/, "title={label}");
+	assert.equal(bulk![1].trim(), "{icon}", "aucun texte dans le bouton : textContent vide");
+	const shortcuts = readFileSync(join(WEB, "public", "ss2i-shortcuts.js"), "utf8");
+	assert.match(shortcuts, /b\.textContent\.trim\(\)\.startsWith\(libelle\)/, "le repli par textContent existe toujours (et ne lit pas title)");
+	assert.ok(!/getAttribute\(["']title["']\)|\[title[\]=*^$~|]/.test(shortcuts), "ss2i-shortcuts.js ne vise jamais par title");
 });
 
 test("archive-for : place a cote de chaque « Archiver » (selection, ligne, barre du mail ouvert)", () => {
@@ -153,12 +193,13 @@ test("raccourci `a` et catalogue inchanges : aucun nouveau raccourci", () => {
 test("vue « Expire bientot » : page expiring et lien de la barre laterale sous « Reportes »", () => {
 	const page = "app/[locale]/w/[wPublicId]/dashboard/(unified)/(mail)/mail/[identityPublicId]/expiring/page.tsx";
 	assert.ok(existsSync(join(WEB, page)), page);
-	assert.match(code(page), /fetchIdentityExpiringThreads\(/);
+	assert.match(code(page), /fetchIdentityExpiringThreads\(\s*identityPublicId\s*\)/);
 	const nav = code("components/k/sidebar-nav.tsx");
 	assert.match(nav, /\/expiring`/);
 	assert.match(nav, /Expire bientôt/);
 	assert.ok(nav.indexOf("Reportés") < nav.indexOf("Expire bientôt"), "« Expire bientôt » sous « Reportés »");
-	assert.match(code("components/k/sidebar-nav-wrapper.tsx"), /fetchIdentityExpiringThreads\(\)/);
+	assert.match(code("components/k/sidebar-nav-wrapper.tsx"), /fetchExpiringCounts\(\)/);
+	assert.ok(!/expiringThreads\.filter|identityId === identity\.id/.test(code("components/k/sidebar-nav.tsx").slice(nav.indexOf("expiringCount") - 200, nav.indexOf("expiringCount") + 400)), "plus de filtre d'identite cote client");
 });
 
 test("listes : les requetes de liste rendent la ligne entiere (expiresAt compris)", () => {
@@ -179,6 +220,9 @@ test("note Nouveautes : premiere note libre du 19/11, durees, annulations, Expir
 	assert.match(s, /Expire bientôt/);
 	assert.match(s, /[Cc]orbeille/);
 	assert.match(s, /étoile/);
+	assert.ok(!/À vérifier/.test(s), "aucun « À vérifier » a l'utilisateur");
+	assert.match(s, /vide automatiquement/, "la Corbeille est videe automatiquement apres un delai");
+	assert.match(s, /Un fil étoilé n'expire jamais/);
 });
 
 if (failed) {

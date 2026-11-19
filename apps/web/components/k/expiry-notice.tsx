@@ -20,7 +20,7 @@ export default function KExpiryNotice({ threadId, mailboxId, expiresAt }: { thre
 		setBusy(true);
 		setError(null);
 		try {
-			const res = await setThreadExpiry({ threadId, mailboxId, expiresAt: null });
+			const res = await setThreadExpiry({ threadIds: [threadId], mailboxId, expiresAt: null });
 			if (!res.ok) {
 				setError(res.reason);
 				toast.error(res.reason, { position: "bottom-center" });

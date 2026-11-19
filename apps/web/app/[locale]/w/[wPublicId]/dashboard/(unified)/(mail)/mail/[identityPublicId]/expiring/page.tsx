@@ -20,7 +20,7 @@ async function ClassicExpiringPage({
 	const identityMailboxes = await fetchIdentityMailboxList();
 	const globalLabels = await fetchLabels();
 
-	const { threads } = await fetchIdentityExpiringThreads();
+	const { threads } = await fetchIdentityExpiringThreads(identityPublicId);
 	const labelsByThreadId =
 		threads.length > 0 ? await fetchMailboxThreadLabels(threads) : {};
 
@@ -30,9 +30,7 @@ async function ClassicExpiringPage({
 		firstMailboxSlug,
 	);
 
-	const filteredThreads = threads.filter(
-		(thread) => thread.identityPublicId === identityPublicId,
-	);
+	const filteredThreads = threads;
 
 	const workspacePublicId = await getWorkspacePublicId()
 
@@ -70,8 +68,8 @@ async function NouvelleExpiringPage({ params }: { params: { identityPublicId: st
 	const identityMailboxes = await fetchIdentityMailboxList();
 	const globalLabels = await fetchLabels();
 
-	const { threads } = await fetchIdentityExpiringThreads();
-	const filteredThreads = threads.filter((thread) => thread.identityPublicId === identityPublicId);
+	const { threads } = await fetchIdentityExpiringThreads(identityPublicId);
+	const filteredThreads = threads;
 	const labelsByThreadId = filteredThreads.length > 0 ? await fetchMailboxThreadLabels(filteredThreads) : {};
 	const { activeMailbox } = await fetchMailbox(identityPublicId, threads[0]?.mailboxSlug || "archive");
 	const workspacePublicId = await getWorkspacePublicId();

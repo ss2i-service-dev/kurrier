@@ -3,6 +3,7 @@
 // exemple dans une conversation Claude »). Pur : les notes arrivent deja en texte (htmlToText
 // de lib/mail-copy, cote navigateur). Test : apps/web/test/event-copy.ts.
 import { agendaWhen } from "../../../packages/common/src/thread-agenda";
+import { meetingLabel } from "../../../packages/common/src/meeting-link";
 import type { Attendee, AttendeeResponse, EventAttachment } from "../../../packages/common/src/outlook-graph";
 
 export type CopyableEvent = {
@@ -50,7 +51,7 @@ export function formatEventForCopy(e: CopyableEvent, opts: { notes?: string; cal
 			lines.push(`- ${person(a.name, a.address)}${opt} : ${RESPONSE[a.response ?? "none"] ?? RESPONSE.none}`);
 		}
 	}
-	if (e.joinUrl) lines.push(`Réunion Teams : ${e.joinUrl}`);
+	if (e.joinUrl) lines.push(`Réunion ${meetingLabel(e.joinUrl)} : ${e.joinUrl}`);
 	if (e.categories?.length) lines.push(`Catégories : ${e.categories.join(", ")}`);
 	if (e.isPrivate) lines.push("Privé : oui");
 	const files = (e.attachments ?? []).filter((a) => !a.isInline);

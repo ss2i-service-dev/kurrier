@@ -13,6 +13,7 @@
 // Dates en heure de Paris, sans decalage, comme le reste de l'agenda.
 import { AGENDA_TIMEZONE, AgendaError, type GraphConfig, REMINDERS_PROPERTY_ID, addDays, graphToken } from "./thread-agenda";
 import { type ReminderSource, parseReminderOffsets } from "./meeting-reminders";
+import { graphJoinUrl } from "./meeting-link";
 import { type BusyBlock, type CalendarEvent, checkRange, convertZone, fromGraphEvent, safeTimeZone } from "./outlook-calendar";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -453,7 +454,7 @@ export async function listCalendars(cfg: GraphConfig, mailbox: string): Promise<
 }
 
 const LIST_SELECT =
-	"id,subject,start,end,isAllDay,location,showAs,webLink,isCancelled,organizer,isOrganizer,responseStatus,isOnlineMeeting,onlineMeeting,type,seriesMasterId,sensitivity,categories,isReminderOn,reminderMinutesBeforeStart,hasAttachments,attendees";
+	"id,subject,start,end,isAllDay,location,showAs,webLink,isCancelled,organizer,isOrganizer,responseStatus,isOnlineMeeting,onlineMeeting,bodyPreview,type,seriesMasterId,sensitivity,categories,isReminderOn,reminderMinutesBeforeStart,hasAttachments,attendees";
 
 /** Horaires proposes par les participants d'une reunion que j'organise. */
 function proposalsOf(raw: any, tz: string): CalendarEvent["proposals"] {
@@ -476,7 +477,7 @@ function listExtras(raw: any, tz: string = AGENDA_TIMEZONE): Partial<CalendarEve
 		proposals: proposalsOf(raw, tz),
 		isOrganizer: raw?.isOrganizer !== false,
 		responseStatus: String(raw?.responseStatus?.response ?? "none") as CalendarEvent["responseStatus"],
-		joinUrl: raw?.onlineMeeting?.joinUrl ? String(raw.onlineMeeting.joinUrl) : undefined,
+		joinUrl: graphJoinUrl(raw),
 		recurring: raw?.type === "occurrence" || raw?.type === "exception" || raw?.type === "seriesMaster",
 		isPrivate: raw?.sensitivity === "private",
 		categories: Array.isArray(raw?.categories) ? raw.categories.map(String) : [],
@@ -570,7 +571,7 @@ export function toEventDetail(raw: any, calendarId?: string, tz: string = AGENDA
 		recurrenceUntil: rec.until,
 		recurrenceLabel: rec.label,
 		isOnlineMeeting: !!raw?.isOnlineMeeting,
-		joinUrl: raw?.onlineMeeting?.joinUrl ? String(raw.onlineMeeting.joinUrl) : undefined,
+		joinUrl: graphJoinUrl(raw),
 		isPrivate: raw?.sensitivity === "private",
 		reminderMinutes: raw?.isReminderOn ? Number(raw?.reminderMinutesBeforeStart ?? 15) : null,
 		categories: Array.isArray(raw?.categories) ? raw.categories.map(String) : [],
@@ -814,7 +815,7 @@ export async function listReminderSources(cfg: GraphConfig, mailbox: string, fro
 	const query = Object.entries({
 		startDateTime: `${from}:00`,
 		endDateTime: `${to}:00`,
-		$select: "id,subject,start,end,isAllDay,isCancelled,location,webLink,onlineMeeting,isReminderOn,reminderMinutesBeforeStart",
+		$select: "id,subject,start,end,isAllDay,isCancelled,location,webLink,onlineMeeting,bodyPreview,isReminderOn,reminderMinutesBeforeStart",
 		$expand: `singleValueExtendedProperties($filter=id eq '${REMINDERS_PROPERTY_ID}')`,
 		$top: "100",
 	})
@@ -836,7 +837,7 @@ export async function listReminderSources(cfg: GraphConfig, mailbox: string, fro
 			end: graphZoned(raw?.end, tz),
 			location: String(raw?.location?.displayName ?? "").trim() || undefined,
 			webLink: raw?.webLink ? String(raw.webLink) : undefined,
-			joinUrl: raw?.onlineMeeting?.joinUrl ? String(raw.onlineMeeting.joinUrl) : undefined,
+			joinUrl: graphJoinUrl(raw),
 			nativeMinutes: raw?.isReminderOn ? Number(raw?.reminderMinutesBeforeStart ?? 15) : null,
 			offsets,
 		});
@@ -854,10 +855,10 @@ export async function snoozeReminder(cfg: GraphConfig, mailbox: string, id: stri
 	await graph(cfg, mailbox, "POST", `/events/${ref(id)}/snoozeReminder`, { newReminderTime: { dateTime: `${at}:00`, timeZone: tz } }, "Rappel", tz);
 }
 
-/** Lien Teams d'un evenement (pour le bouton « Rejoindre » d'un rappel). */
+/** Lien de visio d'un evenement, Teams ou lu dans le lieu et le corps (bouton « Rejoindre » d'un rappel). */
 export async function eventJoinUrl(cfg: GraphConfig, mailbox: string, id: string): Promise<string | undefined> {
-	const raw = await graph(cfg, mailbox, "GET", `/events/${ref(id)}?$select=onlineMeeting`, undefined, "Événement").catch(() => null);
-	return raw?.onlineMeeting?.joinUrl ? String(raw.onlineMeeting.joinUrl) : undefined;
+	const raw = await graph(cfg, mailbox, "GET", `/events/${ref(id)}?$select=onlineMeeting,location,bodyPreview,body`, undefined, "Événement").catch(() => null);
+	return graphJoinUrl(raw);
 }
 
 // ---------------------------------------------------------------------------

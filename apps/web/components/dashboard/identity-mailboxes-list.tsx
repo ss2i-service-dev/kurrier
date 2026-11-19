@@ -15,6 +15,7 @@ import {
 	ChevronDown,
 	MoreVertical,
 	Clock4,
+	CalendarClock,
 	Building2,
 } from "lucide-react";
 import * as React from "react";
@@ -130,11 +131,14 @@ function buildTree(
 function IdentityExtraCounts({
 								 identity,
 								 snoozedThreadsPromise,
+								 expiringCountsPromise,
 								 workspacePublicId,
 								 currentSlug,
 							 }: {
 	identity: IdentityEntity;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
+	// ss2i : fils archives avec une duree de vie, comptes par identite cote serveur (fetchExpiringCounts).
+	expiringCountsPromise: Promise<Record<string, number>>;
 	workspacePublicId: string | undefined;
 	currentSlug: string;
 }) {
@@ -143,6 +147,7 @@ function IdentityExtraCounts({
 	const snoozedCount = snoozedThreads.filter(
 		(s) => s.identityId === identity.id,
 	).length;
+	const expiringCount = use(expiringCountsPromise)[identity.id] ?? 0;
 
 	return (
 		<>
@@ -158,6 +163,21 @@ function IdentityExtraCounts({
 					<Clock4 size={16} />
 					<span className="font-normal text-sm">
 						Snoozed ({snoozedCount})
+					</span>
+				</Link>
+			)}
+			{expiringCount > 0 && (
+				<Link
+					href={`/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/expiring`}
+					className={`mx-1.5 my-2 rounded hover:dark:bg-neutral-800 ${
+						currentSlug === "expiring"
+							? "dark:bg-neutral-800 dark:text-brand-foreground bg-brand-200 text-brand"
+							: ""
+					} flex justify-start gap-1 w-full p-1.5 items-center`}
+				>
+					<CalendarClock size={16} />
+					<span className="font-normal text-sm">
+						Expire bientôt ({expiringCount})
 					</span>
 				</Link>
 			)}
@@ -390,6 +410,7 @@ export default function IdentityMailboxesList({
 												  unreadCounts,
 												  outboxCounts,
 												  snoozedThreadsPromise,
+												  expiringCountsPromise,
 												  clientsPromise,
 												  workspacePublicId,
 												  initialCollapsed = [],
@@ -400,6 +421,7 @@ export default function IdentityMailboxesList({
 	// ss2i : Boite d'envoi, compteurs par identite (fetchOutboxCounts).
 	outboxCounts: OutboxCount[];
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
+	expiringCountsPromise: Promise<Record<string, number>>;
 	// ss2i : clients (CRM) des identites pro, section sous les dossiers.
 	clientsPromise?: Promise<IdentityClientsData[]>;
 	workspacePublicId: string | undefined;
@@ -622,6 +644,7 @@ export default function IdentityMailboxesList({
 							<IdentityExtraCounts
 								identity={identity}
 								snoozedThreadsPromise={snoozedThreadsPromise}
+								expiringCountsPromise={expiringCountsPromise}
 								workspacePublicId={workspacePublicId}
 								currentSlug={currentSlug}
 							/>

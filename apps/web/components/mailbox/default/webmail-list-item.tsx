@@ -17,6 +17,8 @@ import {
 	FetchMailboxThreadLabelsResult,
 } from "@/lib/actions/labels";
 import { IconStar, IconStarFilled } from "@tabler/icons-react";
+import KArchiveFor from "@/components/k/archive-for";
+import ExpiryMention from "@/components/mailbox/default/expiry-mention";
 
 type Props = {
 	mailboxThreadItem: FetchMailboxThreadsResult[number];
@@ -360,6 +362,8 @@ export default function WebmailListItem({
 					) : (
 						<MailOpen className="h-4 w-4 text-muted-foreground md:hidden" />
 					)}
+					{/* ss2i : archive avec une duree de vie, le fil part a la Corbeille a cette date. */}
+					<ExpiryMention expiresAt={mailboxThreadItem.expiresAt} />
 					{/*<time className="whitespace-nowrap text-sm text-foreground">*/}
 					{/*	{dateLabel}*/}
 					{/*</time>*/}
@@ -440,6 +444,18 @@ export default function WebmailListItem({
 						>
 							<Archive className="h-4 w-4" />
 						</button>
+					)}
+					{/* ss2i : « Archiver pour… » (ou « Durée de vie… » dans l'Archive), meme composant que la nouvelle interface. */}
+					{!sendPending && (
+						<KArchiveFor
+							mailboxId={activeMailbox.id}
+							mailboxKind={activeMailbox.kind}
+							smtp={!!mailboxSync}
+							threadIds={() => [String(mailboxThreadItem.threadId)]}
+							unread={() => (isUnread ? 1 : 0)}
+							starred={() => !!mailboxThreadItem.starred}
+							bulkClassName="rounded p-1 hover:bg-muted"
+						/>
 					)}
 					{!sendPending && (
 						<button

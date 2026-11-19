@@ -17,6 +17,7 @@ import { Temporal } from "@js-temporal/polyfill";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
 import { toast } from "sonner";
 import { moveWithUndo } from "@/lib/pending-moves";
+import ExpiryMention from "@/components/mailbox/default/expiry-mention";
 import { useShowSnippet } from "@/components/mailbox/default/list-preview-context";
 import LabelRowTag from "@/components/dashboard/labels/label-row-tag";
 
@@ -228,6 +229,7 @@ export default function WebmailListItemMobile({
 
 			{/* meta */}
 			<div className="ml-auto flex flex-col items-end justify-start gap-1 text-right">
+				<ExpiryMention expiresAt={mailboxThreadItem.expiresAt} />
 				<time className="whitespace-nowrap text-sm text-foreground">
 					{dateLabel}
 				</time>

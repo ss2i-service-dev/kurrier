@@ -1,4 +1,5 @@
 import {
+    fetchExpiringCounts,
     fetchIdentityMailboxList,
     fetchIdentitySnoozedThreads,
     fetchMailboxUnreadCounts,
@@ -53,6 +54,7 @@ async function IdentityMailboxesListWrapper() {
                 unreadCounts={unreadCounts}
                 outboxCounts={outboxCounts}
                 snoozedThreadsPromise={snoozedThreadsPromise}
+                expiringCountsPromise={fetchExpiringCounts()}
                 clientsPromise={clientsPromise}
                 workspacePublicId={workspacePublicId}
                 initialCollapsed={collapsed}

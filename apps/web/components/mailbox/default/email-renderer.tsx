@@ -20,6 +20,8 @@ import MessageAttachments from "@/components/mailbox/default/message-attachments
 import { PublicConfig } from "@schema";
 import {archiveThread, fetchMailbox, FetchIdentityMailboxListResult, FetchThreadMailSubsResult, markAsRead, markAsUnread, moveToFolder, moveToTrash} from "@/lib/actions/mailbox";
 import { inboxIdForSpam } from "@/lib/not-spam";
+import { mailboxKindOf } from "@/lib/archive-for";
+import KArchiveFor from "@/components/k/archive-for";
 import { replyRecipients } from "@/lib/reply-recipients";
 import { toast } from "sonner";
 import { moveWithUndo } from "@/lib/pending-moves";
@@ -119,6 +121,7 @@ function EmailRenderer({
 	activeMailboxId,
     mailSubscription,
 	identityMailboxes,
+	starred,
 	children,
 }: {
 	threadIndex: number;
@@ -134,6 +137,8 @@ function EmailRenderer({
 	activeMailboxId: string;
     mailSubscription: FetchThreadMailSubsResult["byMessageId"] | null;
 	identityMailboxes: FetchIdentityMailboxListResult;
+	// ss2i : le fil est etoile (il n'expire jamais : le toast de « Archiver pour… » le dit).
+	starred?: boolean;
 	children?: React.ReactNode;
 }) {
 	const formatted = Temporal.Instant.from(message.createdAt.toISOString())
@@ -528,6 +533,22 @@ function EmailRenderer({
 								<Archive size={18} />
 							</ActionIcon>
 						</Tooltip>
+						{/* ss2i : « Archiver pour… » (ou « Durée de vie… » dans l'Archive), meme composant que la nouvelle interface. */}
+						<KArchiveFor
+							mailboxId={activeMailboxId}
+							mailboxKind={mailboxKindOf(identityMailboxes, activeMailboxId)}
+							smtp={markSmtp}
+							threadIds={() => [String(threadId)]}
+							starred={() => !!starred}
+							before={leaveThread}
+							renderTrigger={({ label, disabled, icon }) => (
+								<Tooltip label={label} withArrow>
+									<ActionIcon variant={"subtle"} color={"gray"} aria-label={label} disabled={disabled}>
+										{icon(18)}
+									</ActionIcon>
+								</Tooltip>
+							)}
+						/>
 						<Tooltip label="Mark as unread and back to the list" withArrow>
 							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Mark as unread" onClick={unreadMessage}>
 								<Mail size={18} />

@@ -2,11 +2,12 @@ import { isNouvelleInterface } from "@/lib/actions/interface-pref";
 import MailboxPage from "../../page";
 import { fetchThreadMailbox } from "@/lib/thread-mailbox";
 import React, {Suspense} from "react";
-import {fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
+import {fetchThreadExpiry, fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
 import ThreadItem from "@/components/mailbox/default/thread-item";
 import ThreadAttachments from "@/components/mailbox/default/thread-attachments";
 import { Divider } from "@mantine/core";
 import {MessageEntity} from "@db";
+import KExpiryNotice from "@/components/k/expiry-notice";
 import ThreadClientsBar from "@/components/mailbox/default/thread-clients-bar";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
 import { threadOrder } from "@/lib/actions/thread-order";
@@ -41,6 +42,8 @@ async function ClassicPage({
 
 	// ss2i clients : pastille du ou des clients CRM du fil (identites pro).
 	const workspacePublicId = await getWorkspacePublicId();
+	// ss2i : archive avec une duree de vie (encart « Disparait le », « Garder ») et etoile du fil.
+	const expiry = await fetchThreadExpiry(threadId, activeMailbox.id).catch(() => ({ expiresAt: null, starred: false }));
 
 	// ss2i : ordre du fil au choix de l'utilisateur (thread-order.ts). Les
 	// messages arrivent du plus ancien au plus recent ; threadIndex garde
@@ -53,6 +56,9 @@ async function ClassicPage({
 
 	return (
 		<>
+			{expiry.expiresAt && (
+				<KExpiryNotice threadId={threadId} mailboxId={activeMailbox.id} expiresAt={expiry.expiresAt} className="mx-4 mt-3 lg:mx-7" />
+			)}
 			{activeThread?.messages.length ? (
 				<ThreadClientsBar threadId={threadId} identityPublicId={identityPublicId} workspacePublicId={workspacePublicId} />
 			) : null}
@@ -73,6 +79,7 @@ async function ClassicPage({
 							markSmtp={!!mailboxSync}
                             identityPublicId={identityPublicId}
                             mailSubscription={byMessageId.get(message.id) ?? null}
+								starred={expiry.starred}
 						/>
 						<Divider className={"opacity-50 mb-6"} ml={"xl"} mr={"xl"} />
 					</div>

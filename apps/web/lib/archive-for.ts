@@ -34,3 +34,16 @@ export function archivedMessage({ count, expiresAt, starred }: { count: number; 
 	if (starred) return `${base}. Les fils étoilés n'expirent pas.`;
 	return `${base}, ${many ? "disparaissent" : "disparaît"} le ${formatExpiry(expiresAt)}`;
 }
+
+// Genre (inbox, archive, trash...) du dossier actif parmi les dossiers des identites ; vide si
+// inconnu. L'interface classique n'a que l'id du dossier dans la barre du mail ouvert.
+export function mailboxKindOf(
+	identityMailboxes: readonly { mailboxes?: readonly { id: string; kind: string }[] | null }[] | null | undefined,
+	mailboxId: string,
+): string {
+	for (const im of identityMailboxes ?? []) {
+		const box = (im?.mailboxes ?? []).find((m) => m && String(m.id) === String(mailboxId));
+		if (box) return String(box.kind);
+	}
+	return "";
+}

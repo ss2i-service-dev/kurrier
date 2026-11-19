@@ -14,6 +14,7 @@ import { CalendarClock } from "lucide-react";
 import { toast } from "sonner";
 import KIconButton from "@/components/k/icon-button";
 import { mailActions, scheduleRefresh } from "@/components/k/mail-store";
+import { useNouvelle } from "@/components/k/ui-context";
 import { setThreadExpiry } from "@/lib/actions/mailbox";
 import { expiryMenuOptions, pickerDate } from "@/lib/archive-for";
 import { formatExpiry } from "@common/thread-expiry";
@@ -30,8 +31,10 @@ type Props = {
 	starred?: () => boolean;
 	/** Juste avant l'archivage : vider la selection, passer au fil suivant... */
 	before?: () => void;
-	/** Barre de selection : bouton nu de cette classe (icone seule, comme ses voisins) au lieu d'un KIconButton. */
+	/** Barre de selection, ligne de l'interface classique : bouton nu de cette classe (icone seule, comme ses voisins) au lieu d'un KIconButton. */
 	bulkClassName?: string;
+	/** Interface classique, barre du mail ouvert : declencheur du cote de l'appelant (ActionIcon Mantine), icone a la taille voulue. */
+	renderTrigger?: (t: { label: string; disabled: boolean; icon: (size: number) => React.ReactNode }) => React.ReactElement;
 	size?: "sm" | "md";
 };
 
@@ -44,8 +47,11 @@ export default function KArchiveFor({
 	starred,
 	before,
 	bulkClassName,
+	renderTrigger,
 	size = "md",
 }: Props) {
+	// Les jetons --k-* n'existent que dans la nouvelle interface : date du menu en gris Tailwind en classique.
+	const nouvelle = useNouvelle();
 	const inArchive = mailboxKind === "archive";
 	const [menuOpened, setMenuOpened] = useState(false);
 	const [pickerOpened, pickerDisclosure] = useDisclosure(false);
@@ -96,7 +102,13 @@ export default function KArchiveFor({
 	}
 
 	const icon = saving ? <Loader size={15} color="gray" /> : <CalendarClock className={bulkClassName ? "h-4 w-4" : undefined} />;
-	const trigger = bulkClassName ? (
+	const trigger = renderTrigger ? (
+		renderTrigger({
+			label,
+			disabled: saving,
+			icon: (px) => (saving ? <Loader size={px - 3} color="gray" /> : <CalendarClock size={px} />),
+		})
+	) : bulkClassName ? (
 		<button type="button" aria-label={label} title={label} disabled={saving} className={bulkClassName}>
 			{icon}
 		</button>
@@ -116,7 +128,7 @@ export default function KArchiveFor({
 						<Menu.Item
 							key={o.id}
 							onClick={() => apply(new Date(o.iso))}
-							rightSection={<span className="text-[12px] tabular-nums text-k-ink-3">{o.date}</span>}
+							rightSection={<span className={`text-[12px] tabular-nums ${nouvelle ? "text-k-ink-3" : "text-muted-foreground"}`}>{o.date}</span>}
 						>
 							{o.label}
 						</Menu.Item>

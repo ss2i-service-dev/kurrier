@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { archivedMessage, expiryMenuOptions, pickerDate } from "../lib/archive-for";
+import { archivedMessage, expiryMenuOptions, mailboxKindOf, pickerDate } from "../lib/archive-for";
 
 let failed = 0;
 function test(name: string, fn: () => void) {
@@ -223,6 +223,137 @@ test("note Nouveautes : premiere note libre du 19/11, durees, annulations, Expir
 	assert.ok(!/À vérifier/.test(s), "aucun « À vérifier » a l'utilisateur");
 	assert.match(s, /vide automatiquement/, "la Corbeille est videe automatiquement apres un delai");
 	assert.match(s, /Un fil étoilé n'expire jamais/);
+});
+
+// Interface CLASSIQUE (option par utilisateur, components/k/ui-context.tsx) : Samuel l'utilise, et
+// KArchiveFor n'etait rendu que par les composants k/. Memes composants, memes actions serveur.
+const PAGES = "app/[locale]/w/[wPublicId]/dashboard/(unified)/(mail)/mail/[identityPublicId]";
+const THREAD_PAGES = [
+	`${PAGES}/[mailboxSlug]/threads/[threadId]/page.tsx`,
+	`${PAGES}/[mailboxSlug]/@thread/(.)threads/[threadId]/page.tsx`,
+];
+
+test("classique, ligne de la liste : « Archiver pour… » au survol, entre Archive et Delete, Archive intact", () => {
+	const s = code("components/mailbox/default/webmail-list-item.tsx");
+	assert.match(s, /import KArchiveFor from "@\/components\/k\/archive-for"/);
+	const at = s.indexOf("<KArchiveFor");
+	assert.ok(at > 0, "<KArchiveFor rendu par la ligne classique");
+	assert.ok(s.indexOf('title="Archive"') < at && at < s.indexOf('title="Delete"'), "entre Archive et Delete");
+	const tag = s.slice(at, s.indexOf("/>", at));
+	assert.match(tag, /mailboxId=\{activeMailbox\.id\}/);
+	assert.match(tag, /mailboxKind=\{activeMailbox\.kind\}/);
+	assert.match(tag, /smtp=\{!!mailboxSync\}/);
+	assert.match(tag, /threadIds=\{\(\) => \[String\(mailboxThreadItem\.threadId\)\]\}/);
+	assert.match(tag, /starred=\{\(\) => !!mailboxThreadItem\.starred\}/);
+	assert.match(tag, /bulkClassName=/, "bouton nu, icone seule, comme ses voisins (aucun style k-)");
+	assert.match(s.slice(Math.max(0, at - 120), at), /!sendPending/, "jamais sur un envoi en attente");
+	assert.match(s, /archiveThread\(id, activeMailbox\.id, !!mailboxSync, true\)/, "Archive inchange");
+});
+
+test("classique, ligne : mention « Disparait le JJ/MM/AAAA » (orange) quand expiresAt est pose, desktop et mobile", () => {
+	for (const f of ["webmail-list-item.tsx", "webmail-list-item-mobile.tsx"]) {
+		const s = code(`components/mailbox/default/${f}`);
+		assert.match(s, /<ExpiryMention\b[^>]*expiresAt=\{mailboxThreadItem\.expiresAt\}/, f);
+		assert.match(s, /import ExpiryMention from "@\/components\/mailbox\/default\/expiry-mention"/, f);
+	}
+	const m = code("components/mailbox/default/expiry-mention.tsx");
+	assert.match(m, /formatExpiry\(/);
+	assert.match(m, /Disparaît le/);
+	assert.match(m, /text-orange-/, "couleur Tailwind standard : les jetons k- n'existent pas en classique");
+	assert.ok(!/\bk-[a-z]/.test(m.replace(/\bk-focus\b/g, "")), "aucun jeton k-");
+	assert.ok(!/!\s*expiresAt|expiresAt\s*\?/.test(m) || /return null/.test(m), "rien sans echeance");
+});
+
+test("classique, barre de selection : « Archiver pour… » apres Archive (data-ss2i-shortcut intact), selection videe avant", () => {
+	const s = code("components/mailbox/default/mail-list-header.tsx");
+	assert.match(s, /import KArchiveFor from "@\/components\/k\/archive-for"/);
+	const at = s.indexOf("<KArchiveFor");
+	assert.ok(at > 0, "<KArchiveFor rendu par l'en-tete classique");
+	assert.ok(s.indexOf('data-ss2i-shortcut="selection-archive"') < at, "apres le bouton Archive");
+	const tag = s.slice(at, s.indexOf("/>", at));
+	assert.match(tag, /mailboxId=\{String\(mailboxIdRef\.current\)\}/);
+	assert.match(tag, /mailboxKind=\{String\(mailboxKind\.current\)\}/);
+	assert.match(tag, /threadIds=\{\(\) => Array\.from\(state\?\.selectedThreadIds \?\? \[\]\)\.map\(String\)\}/);
+	assert.match(tag, /starred=\{/);
+	assert.match(tag, /before=\{clearSelection\}/);
+	assert.match(tag, /bulkClassName=/);
+	assert.match(s, /onClick=\{archiveThreads\}/, "Archive inchange");
+});
+
+test("classique, mail ouvert : « Archiver pour… » a cote d'Archive (a), icone seule, Archive et ses libelles intacts", () => {
+	const s = code("components/mailbox/default/email-renderer.tsx");
+	assert.match(s, /import KArchiveFor from "@\/components\/k\/archive-for"/);
+	const at = s.indexOf("<KArchiveFor");
+	assert.ok(at > 0, "<KArchiveFor rendu par la barre du mail classique");
+	assert.ok(s.indexOf('<Tooltip label="Archive (a)"') < at && at < s.indexOf('label="Mark as unread and back to the list"'), "apres Archive (a), avant Mark as unread");
+	const tag = s.slice(at, s.indexOf("/>", at));
+	assert.match(tag, /mailboxId=\{activeMailboxId\}/);
+	assert.match(tag, /mailboxKind=\{mailboxKindOf\(identityMailboxes, activeMailboxId\)\}/);
+	assert.match(tag, /smtp=\{markSmtp\}/);
+	assert.match(tag, /threadIds=\{\(\) => \[String\(threadId\)\]\}/);
+	assert.match(tag, /starred=\{\(\) => !!starred\}/);
+	assert.match(tag, /before=\{leaveThread\}/, "retour a la liste comme Archive");
+	assert.match(tag, /renderTrigger=/, "ActionIcon Mantine comme ses voisins");
+	assert.match(s, /aria-label="Archive" onClick=\{archiveMessage\}/, "Archive inchange");
+	assert.match(s, /\n\s*Archive\n\s*<\/Button>/, "bouton texte « Archive » du bas inchange (repli textContent de a)");
+});
+
+test("classique, vue du mail : encart « Disparait le » avec « Garder » (KExpiryNotice) dans les deux pages du fil, starred transmis", () => {
+	for (const f of THREAD_PAGES) {
+		const s = code(f);
+		assert.match(s, /fetchThreadExpiry\(threadId, activeMailbox\.id\)/, f);
+		assert.match(s, /<KExpiryNotice\b[^>]*threadId=\{threadId\}[^>]*mailboxId=\{activeMailbox\.id\}[^>]*expiresAt=\{expiry\.expiresAt\}/, f);
+		assert.match(s, /expiry\.expiresAt && /, "seulement avec une echeance");
+		assert.match(s, /starred=\{expiry\.starred\}/, `${f} : starred vers ThreadItem`);
+	}
+	assert.match(code("components/mailbox/default/thread-item.tsx"), /starred\??:\s*boolean/);
+	assert.match(code("components/mailbox/default/thread-item.tsx"), /starred=\{starred\}/);
+});
+
+test("KExpiryNotice et KArchiveFor : habillage classique sans jeton k- (--k-* n'existent que dans la nouvelle interface)", () => {
+	const n = code("components/k/expiry-notice.tsx");
+	assert.match(n, /useNouvelle\(\)/);
+	assert.match(n, /bg-orange-50/);
+	assert.match(n, /bg-k-warn-soft/, "nouvelle interface inchangee");
+	assert.match(n, /className\??:\s*string/, "marges du conteneur au choix de l'appelant");
+	const a = code("components/k/archive-for.tsx");
+	assert.match(a, /useNouvelle\(\)/);
+	assert.match(a, /text-muted-foreground/, "date du menu en classique");
+	assert.match(a, /renderTrigger\??:/);
+	// Aucun libelle commencant par « Archive » dans un bouton visible : le repli textContent de `a` reste sur Archive.
+	assert.ok(!/<ActionIcon[^>]*>\s*Archive/.test(a));
+});
+
+test("mailboxKindOf : genre du dossier actif parmi les dossiers des identites, vide si inconnu", () => {
+	const boxes = [
+		{ mailboxes: [{ id: "a1", kind: "inbox" }, { id: "a2", kind: "archive" }] },
+		{ mailboxes: [{ id: "b1", kind: "trash" }] },
+	] as any;
+	assert.equal(mailboxKindOf(boxes, "a2"), "archive");
+	assert.equal(mailboxKindOf(boxes, "b1"), "trash");
+	assert.equal(mailboxKindOf(boxes, "zz"), "");
+	assert.equal(mailboxKindOf(null, "a1"), "");
+});
+
+test("classique, barre laterale : « Expire bientot » sous Snoozed, compteur serveur, page expiring classique", () => {
+	const l = code("components/dashboard/identity-mailboxes-list.tsx");
+	assert.match(l, /expiringCountsPromise:\s*Promise<Record<string, number>>/);
+	assert.match(l, /use\(expiringCountsPromise\)\[identity\.id\] \?\? 0/);
+	assert.match(l, /\/expiring`/);
+	assert.match(l, /Expire bientôt/);
+	assert.match(l, /currentSlug === "expiring"/);
+	assert.ok(l.indexOf("Snoozed (") < l.indexOf("Expire bientôt"), "sous Snoozed");
+	assert.match(l, /expiringCountsPromise=\{expiringCountsPromise\}/, "passe au rendu par identite");
+	assert.match(code("components/dashboard/workspaces/identity-mailboxes-list-wrapper.tsx"), /expiringCountsPromise=\{fetchExpiringCounts\(\)\}/);
+	const p = code(`${PAGES}/expiring/page.tsx`);
+	assert.match(p, /async function ClassicExpiringPage/);
+	assert.match(p, /isNouvelleInterface\(\)\) \? <NouvelleExpiringPage[^:]*: <ClassicExpiringPage/);
+	assert.ok(/<WebmailListLabelSearch/.test(p.slice(p.indexOf("ClassicExpiringPage"), p.indexOf("NouvelleExpiringPage"))), "liste classique");
+});
+
+test("note Nouveautes : mentionne l'interface classique", () => {
+	const s = readFileSync(join(WEB, "changelogs", "2026-11-19-5.md"), "utf8");
+	assert.match(s, /interface classique/i);
 });
 
 if (failed) {

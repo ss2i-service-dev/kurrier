@@ -792,6 +792,10 @@ export const mailboxThreads = pgTable(
 			null,
 		),
 
+		// ss2i (ss2i_011) : echeance d'un fil archive, a l'echeance il part a la Corbeille. Posee
+		// seulement par mail:move (op archive), annulee par moveMail, le trigger etoile et l'upsert INBOX.
+		expiresAt: timestamp("expires_at", { withTimezone: true }),
+
 		workspaceId: uuid("workspace_id")
 			.references(() => workspaces.id)
 			.notNull()
@@ -835,6 +839,9 @@ export const mailboxThreads = pgTable(
 
 		index("ix_mbth_mailbox_snoozed_until").on(t.mailboxId, t.snoozedUntil),
 		index("ix_mbth_mailbox_unsnoozed_at").on(t.mailboxId, t.unsnoozedAt),
+		index("ix_mbth_expires_at")
+			.on(t.expiresAt)
+			.where(sql`${t.expiresAt} is not null`),
 		pgPolicy("mailbox_threads_select", {
 			for: "select",
 			to: "kurrier",

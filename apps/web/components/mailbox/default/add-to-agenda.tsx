@@ -6,7 +6,7 @@ import { IconCalendarPlus } from "@tabler/icons-react";
 import { toast } from "sonner";
 import { useNouvelle } from "@/components/k/ui-context";
 import { addThreadEventsToAgenda, agendaAvailable, analyzeThreadForAgenda } from "@/lib/actions/thread-agenda";
-import { type AgendaEvent, type AgendaReminder, normalizeAgendaEvent } from "@common/thread-agenda";
+import { type AgendaEvent, defaultReminders, normalizeAgendaEvent, proposalAsTimed } from "@common/thread-agenda";
 import { type AgendaRow, ConfirmStep, ProposalsStep } from "@/components/mailbox/default/add-to-agenda-steps";
 import { placeEvent } from "@common/outlook-calendar";
 import { agendaFromMailKey, removeFormBackup, restorableBackup, syncFormBackup } from "@/lib/form-backup";
@@ -15,7 +15,9 @@ import PlanningPanel from "@/components/outlook-calendar/planning-panel";
 // ss2i : « Ajouter a l'agenda » depuis un fil ouvert (OI 10280), meme fenetre dans les deux
 // interfaces, en francais dans les deux. Le fil est analyse a l'ouverture (propositions du
 // LLM) ; etape 1, chaque proposition se corrige ou se decoche ; etape 2, recapitulatif de ce
-// qui sera cree et rappel de chaque evenement (« Aucun rappel » par defaut). Seul « Confirmer »
+// qui sera cree et rappels de chaque evenement (trois rappels coches par defaut, Samuel,
+// 19/11). Jamais de journee entiere d'emblee : une proposition sans heure devient 09:00-10:00
+// (ou 09:00 a 18:00 sur plusieurs jours), signalee « Heure a verifier ». Seul « Confirmer »
 // ecrit dans Outlook, « Retour » rend les propositions telles quelles.
 // Verrou de saisie (ss2i-shortcuts.js) : la fenetre est un role="dialog", son clavier lui
 // appartient ; aucun focus n'est deplace a l'arrivee des propositions. Un bouton clique qui
@@ -23,8 +25,8 @@ import PlanningPanel from "@/components/outlook-calendar/planning-panel";
 // frappes vers l'editeur ouvert derriere : le focus est alors rendu au corps de la fenetre.
 // Rien de date dans le fil, ou un evenement de plus : la fenetre demande ce qu'il faut creer
 // (« rappel pour relancer le client jeudi ») et le LLM le met en forme a partir du fil, ou
-// l'utilisateur le saisit lui-meme (Samuel, 05/11). Un rappel horaire cree ainsi a son rappel
-// « 15 minutes avant » preselectionne : c'est ce qui a ete demande.
+// l'utilisateur le saisit lui-meme (Samuel, 05/11). Un rappel horaire cree ainsi a ses trois
+// rappels (1 h, 15 min, a l'heure) coches comme les autres : decochables a l'etape 2.
 // Planification (Hugo, 05/11) : a l'etape 1, la fenetre s'elargit et montre a droite deux
 // semaines de l'agenda Outlook (PlanningPanel) ; la proposition encadree se place d'un clic
 // sur un creneau, en gardant sa duree.
@@ -41,6 +43,13 @@ type BackupValues = { rows: AgendaRow[]; wish: string };
 
 const isBackupValues = (x: any): x is BackupValues =>
 	!!x && typeof x.wish === "string" && Array.isArray(x.rows) && x.rows.every((r: any) => r && typeof r.key === "number" && typeof r.title === "string" && typeof r.start === "string");
+
+// Ligne de l'etape 1 : proposition ramenee a un horaire (jamais de journee entiere d'emblee),
+// rappels par defaut coches.
+function newRow(e: AgendaEvent, key: number): AgendaRow {
+	const { event, timeToCheck } = proposalAsTimed(e);
+	return { ...event, reminders: defaultReminders(event.allDay), key, checked: true, timeToCheck };
+}
 
 const availability = new Map<string, Promise<boolean>>();
 
@@ -138,7 +147,7 @@ export function AddToAgenda({
 					setPhase("error");
 					return;
 				}
-				const fresh = res.events.map((e, i) => ({ ...e, key: i, checked: true }));
+				const fresh = res.events.map((e, i) => newRow(e, i));
 				const initial: BackupValues = { rows: fresh, wish: "" };
 				const key = agendaFromMailKey(threadId);
 				const copy = restorableBackup(key, initial);
@@ -233,17 +242,12 @@ export function AddToAgenda({
 		if (events.length) setActiveKey(nextKey.current);
 		setRows((list) => [
 			...list,
-			...events.map((e) => ({
-				...e,
-				key: nextKey.current++,
-				checked: true,
-				reminder: (e.allDay ? "none" : "15m") as AgendaReminder,
-			})),
+			...events.map((e) => newRow(e, nextKey.current++)),
 		]);
 	};
 
 	const place = (key: number, date: string, minutes: number | null) =>
-		setRows((list) => list.map((r) => (r.key === key ? { ...r, ...placeEvent(r, date, minutes), error: undefined } : r)));
+		setRows((list) => list.map((r) => (r.key === key ? { ...r, ...placeEvent(r, date, minutes), timeToCheck: false, error: undefined } : r)));
 
 	// Ce que l'utilisateur veut creer, mis en forme par le LLM a partir du fil.
 	const ask = () => {
@@ -320,7 +324,7 @@ export function AddToAgenda({
 		const res = await addThreadEventsToAgenda({
 			threadId,
 			identityPublicId,
-			events: chosen.map(({ key, checked, error, ...e }) => e),
+			events: chosen.map(({ key, checked, error, timeToCheck, ...e }) => e),
 		}).catch((e: any) => ({ ok: false as const, error: String(e?.message ?? e) }));
 		busy.current = false;
 		setSaving(false);
@@ -474,7 +478,7 @@ export function AddToAgenda({
 							rows={selected}
 							mailbox={mailbox}
 							nouvelle={nouvelle}
-							onReminder={(key, reminder: AgendaReminder) => update(key, { reminder })}
+							onReminders={(key, reminders) => update(key, { reminders })}
 						/>
 					)}
 

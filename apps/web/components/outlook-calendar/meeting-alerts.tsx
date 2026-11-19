@@ -1,9 +1,12 @@
 "use client";
 // ss2i : alerte de reunion partout dans courrier (messagerie, agenda, contacts...), a l'heure
-// du rappel defini sur l'evenement dans Outlook (10 min par defaut a la creation dans courrier,
-// aucun rappel = aucune alerte). Les rappels dus sont relus sur Microsoft Graph (reminderView :
-// un rappel ferme ou repousse dans Outlook ne revient pas) toutes les 2 minutes et au retour
-// sur l'onglet. Un bandeau fin occupe alors le haut de l'ecran, avec un son a l'apparition :
+// du rappel defini sur l'evenement dans Outlook (aucun rappel = aucune alerte). Les evenements
+// crees par « Ajouter a l'agenda » ont jusqu'a trois paliers (1 h avant, 15 min avant, a
+// l'heure ; Samuel, 19/11) : chacun sonne a son heure, un seul bandeau par evenement (le palier
+// le plus recent remplace le precedent), fermer un palier ne fait pas taire les suivants.
+// Les rappels dus sont relus sur Microsoft Graph (reminderView : un rappel ferme ou repousse
+// dans Outlook ne revient pas, plus les paliers supplementaires calcules cote serveur) toutes
+// les 2 minutes et au retour sur l'onglet. Un bandeau fin occupe alors le haut de l'ecran, avec un son a l'apparition :
 // titre, heure et lieu, compte a rebours (« dans 3 min », « a commence il y a 2 min »),
 // « Rejoindre » pour une reunion Teams, « Dans 5 min » et « Fermer » (repousse ou ferme aussi
 // dans Outlook). L'application est decalee d'autant (body et hauteurs plein ecran) : le
@@ -13,13 +16,12 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Video, X } from "lucide-react";
 import { safeTimeZone, utcToZoned } from "@common/outlook-calendar";
 import type { DueReminder } from "@common/outlook-graph";
+import { applySnoozes, bannerList, countdownLabel, minutesTo, reminderKey } from "@common/meeting-reminders";
 import { dismissOutlookReminder, outlookCalendarBoxes, snoozeOutlookReminder } from "@/lib/actions/outlook-calendar";
 import { agendaRead } from "@/components/outlook-calendar/agenda-api";
 
 const FETCH_MS = 2 * 60_000;
 const TICK_MS = 5_000;
-/** Le bandeau s'en va 10 minutes apres le debut. */
-export const ALERT_AFTER_MIN = 10;
 const BAR_H = 40;
 
 const read = (k: string) => {
@@ -31,22 +33,22 @@ const read = (k: string) => {
 };
 const tz = () => safeTimeZone(read("ss2i.agenda.tz"));
 const nowLocal = () => utcToZoned(Date.now(), tz());
-/** Minutes (decimales) de `a` a `b`, deux "YYYY-MM-DDTHH:mm" du meme fuseau. */
-const minutesTo = (a: string, b: string) => (Date.parse(`${b}:00Z`) - Date.parse(`${a}:00Z`)) / 60_000;
-
-/** Rappel a afficher maintenant : heure du rappel passee, reunion pas finie ni commencee depuis plus de 10 min. */
-export function alertDue(r: DueReminder, now: string): boolean {
-	return r.fireAt <= now && r.end > now && minutesTo(now, r.start) >= -ALERT_AFTER_MIN;
-}
-
-export function countdownLabel(start: string, now: string): string {
-	const m = Math.round(minutesTo(now, start));
-	if (m >= 60 * 24) return `Le ${start.slice(8, 10)}/${start.slice(5, 7)} à ${start.slice(11, 16)}`;
-	if (m >= 60) return `Commence dans ${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`;
-	if (m > 0) return `Commence dans ${m} min`;
-	if (m === 0) return "Commence maintenant";
-	return `A commencé il y a ${-m} min`;
-}
+const CLOSED_KEY = "ss2i.meeting.closed";
+const SNOOZED_KEY = "ss2i.meeting.snoozed";
+// Paliers fermes ou repousses de courrier : retenus au rechargement (Outlook ne les connait pas).
+const readJson = <T,>(k: string, fallback: T): T => {
+	try {
+		const v = JSON.parse(read(k) ?? "null");
+		return v && typeof v === typeof fallback ? v : fallback;
+	} catch {
+		return fallback;
+	}
+};
+const write = (k: string, v: unknown) => {
+	try {
+		localStorage.setItem(k, JSON.stringify(v));
+	} catch {}
+};
 
 // Le bandeau prend sa place en haut : tout ce qui est plein ecran (h-svh, barre laterale
 // fixe) descend d'autant tant qu'il est affiche.
@@ -85,16 +87,18 @@ export default function MeetingAlerts() {
 	const box = useRef<string | null>(null);
 	const due = useRef<DueReminder[]>([]);
 	const announced = useRef(new Set<string>());
-	const [closed, setClosed] = useState<Set<string>>(() => new Set());
+	const closed = useRef<Set<string>>(new Set(readJson<string[]>(CLOSED_KEY, [])));
+	const snoozed = useRef<Record<string, string>>(readJson<Record<string, string>>(SNOOZED_KEY, {}));
 	const [active, setActive] = useState<DueReminder[]>([]);
 	const [now, setNow] = useState(nowLocal);
 
-	const keyOf = (r: DueReminder) => `meet:${r.eventId}:${r.fireAt}`;
+	const keyOf = reminderKey;
 
 	const tick = useCallback(() => {
 		const n = nowLocal();
 		setNow(n);
-		const list = due.current.filter((r) => alertDue(r, n)).sort((a, b) => a.start.localeCompare(b.start));
+		// Un bandeau par evenement : son palier du moment, sauf s'il est ferme.
+		const list = bannerList(due.current, n, closed.current);
 		setActive(list);
 		let fresh = false;
 		for (const r of list) {
@@ -128,7 +132,7 @@ export default function MeetingAlerts() {
 		}
 		// Route en parallele (pas une action serveur : elle ne retarde pas le reste de la page).
 		const res = await agendaRead<{ reminders: DueReminder[] }>("reminders", { identityPublicId: box.current, tz: tz() });
-		if (res.ok) due.current = res.reminders;
+		if (res.ok) due.current = applySnoozes(res.reminders, snoozed.current);
 		else if (/introuvable|n'est pas une boîte/i.test(res.error)) box.current = null;
 		tick();
 		return true;
@@ -156,7 +160,7 @@ export default function MeetingAlerts() {
 		};
 	}, [fetchDue, tick]);
 
-	const shown = active.filter((r) => !closed.has(keyOf(r)));
+	const shown = active;
 	const visible = shown.length > 0;
 
 	useEffect(() => {
@@ -168,18 +172,30 @@ export default function MeetingAlerts() {
 	if (!visible) return null;
 	const r = shown[0];
 	const m = minutesTo(now, r.start);
-	const hide = () => setClosed((c) => new Set(c).add(keyOf(r)));
-	// Fermer et repousser valent aussi dans Outlook.
+	const hide = () => {
+		closed.current.add(keyOf(r));
+		write(CLOSED_KEY, [...closed.current].slice(-300));
+		tick();
+	};
+	// Fermer et repousser valent aussi dans Outlook, sauf pour un palier de courrier (extra) que
+	// seul courrier connait.
 	const dismiss = () => {
+		if (!r.extra) {
+			due.current = due.current.filter((x) => x !== r);
+			if (box.current) void dismissOutlookReminder({ identityPublicId: box.current, id: r.eventId }).catch(() => {});
+		}
 		hide();
-		due.current = due.current.filter((x) => x !== r);
-		if (box.current) void dismissOutlookReminder({ identityPublicId: box.current, id: r.eventId }).catch(() => {});
 	};
 	const snooze = () => {
-		hide();
 		const at = utcToZoned(Date.now() + 5 * 60_000, tz());
+		// Les paliers plus anciens du meme evenement ne reviennent pas pendant le report.
+		for (const x of due.current) if (x.eventId === r.eventId && x.fireAt <= r.fireAt) closed.current.add(keyOf(x));
+		if (r.extra) {
+			snoozed.current = { ...snoozed.current, [keyOf(r)]: at };
+			write(SNOOZED_KEY, Object.fromEntries(Object.entries(snoozed.current).slice(-300)));
+		} else if (box.current) void snoozeOutlookReminder({ identityPublicId: box.current, id: r.eventId, at, tz: tz() }).catch(() => {});
 		due.current = due.current.map((x) => (x === r ? { ...x, fireAt: at } : x));
-		if (box.current) void snoozeOutlookReminder({ identityPublicId: box.current, id: r.eventId, at, tz: tz() }).catch(() => {});
+		hide();
 	};
 
 	return (

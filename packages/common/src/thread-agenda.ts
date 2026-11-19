@@ -30,35 +30,57 @@ export type AgendaEvent = {
 	location?: string;
 	notes?: string;
 	sourceQuote: string;
-	/** Choisi a l'etape de confirmation ; absent = aucun rappel. */
-	reminder?: AgendaReminder;
+	/** Rappels coches a la confirmation, en minutes avant le debut ; absent = ceux par defaut. */
+	reminders?: number[];
 };
 
-// Rappel demande a la confirmation, « Aucun rappel » par defaut (Samuel, 04/11). Journee
-// entiere : minutes avant le debut a 00:00 heure de Paris (la veille a 8 h = 16 h avant = 960).
-// Un changement d'heure entre le rappel et l'evenement le decale d'une heure.
-export type AgendaReminder = "none" | "day-before-8h" | "2-days-8h" | "week-8h" | "15m" | "1h" | "day-before";
+// Rappels a la confirmation (Samuel, 19/11 : « quand on le met dans un planning, c'est qu'on a
+// envie d'etre au courant »). Evenement horaire : trois cases cochees par defaut, « 1 h avant »,
+// « 15 min avant » et « A l'heure », decochables (aucune cochee = aucun rappel). Journee entiere :
+// un seul choix, la veille a 8 h par defaut. Minutes avant le debut ; pour une journee entiere
+// depuis 00:00 heure de Paris (la veille a 8 h = 16 h avant = 960). Un changement d'heure entre
+// le rappel et l'evenement le decale d'une heure.
+/** Propriete etendue (MAPI, nommee) portant la liste des rappels d'un evenement cree par courrier. */
+export const REMINDERS_PROPERTY_ID = "String {00020329-0000-0000-C000-000000000046} Name ss2iReminders";
 
-export const ALL_DAY_REMINDERS: { value: AgendaReminder; label: string; minutes: number | null }[] = [
-	{ value: "none", label: "Aucun rappel", minutes: null },
-	{ value: "day-before-8h", label: "La veille à 8 h", minutes: 24 * 60 - 8 * 60 },
-	{ value: "2-days-8h", label: "2 jours avant à 8 h", minutes: 2 * 24 * 60 - 8 * 60 },
-	{ value: "week-8h", label: "Une semaine avant à 8 h", minutes: 7 * 24 * 60 - 8 * 60 },
+export const ALL_DAY_REMINDERS: { label: string; minutes: number | null }[] = [
+	{ label: "Aucun rappel", minutes: null },
+	{ label: "La veille à 8 h", minutes: 24 * 60 - 8 * 60 },
+	{ label: "2 jours avant à 8 h", minutes: 2 * 24 * 60 - 8 * 60 },
+	{ label: "Une semaine avant à 8 h", minutes: 7 * 24 * 60 - 8 * 60 },
 ];
 
-export const TIMED_REMINDERS: { value: AgendaReminder; label: string; minutes: number | null }[] = [
-	{ value: "none", label: "Aucun rappel", minutes: null },
-	{ value: "15m", label: "15 minutes avant", minutes: 15 },
-	{ value: "1h", label: "1 heure avant", minutes: 60 },
-	{ value: "day-before", label: "La veille", minutes: 24 * 60 },
+export const TIMED_REMINDERS: { label: string; minutes: number }[] = [
+	{ label: "1 h avant", minutes: 60 },
+	{ label: "15 min avant", minutes: 15 },
+	{ label: "À l'heure", minutes: 0 },
 ];
 
-export const remindersFor = (allDay: boolean) => (allDay ? ALL_DAY_REMINDERS : TIMED_REMINDERS);
+/** Rappels coches d'emblee : les trois pour un horaire, la veille a 8 h pour une journee entiere. */
+export const defaultReminders = (allDay: boolean): number[] => (allDay ? [ALL_DAY_REMINDERS[1].minutes!] : TIMED_REMINDERS.map((o) => o.minutes));
 
-/** Minutes avant le debut, null pour « aucun » ; undefined si le choix ne vaut pas pour ce type. */
-export function reminderMinutes(reminder: AgendaReminder | undefined, allDay: boolean): number | null | undefined {
-	const opt = remindersFor(allDay).find((o) => o.value === (reminder ?? "none"));
-	return opt ? opt.minutes : undefined;
+/**
+ * Rappels valides pour ce type, tries du plus lointain au plus proche, sans doublon ; undefined
+ * si un ecart n'est pas propose pour ce type ou si plus d'un est donne pour une journee entiere.
+ */
+export function checkReminders(list: number[], allDay: boolean): number[] | undefined {
+	const allowed = allDay ? ALL_DAY_REMINDERS.flatMap((o) => (o.minutes === null ? [] : [o.minutes])) : TIMED_REMINDERS.map((o) => o.minutes);
+	const uniq = [...new Set(list)];
+	if (uniq.some((m) => !allowed.includes(m)) || (allDay && uniq.length > 1)) return undefined;
+	return uniq.sort((x, y) => y - x);
+}
+
+/**
+ * Proposition en journee entiere (le LLM en rend quand le fil ne donne aucune heure) ramenee a
+ * un horaire : « journee entiere, c'est jamais » par defaut (Samuel, 19/11). Un jour : 09:00 a
+ * 10:00 ; plusieurs jours : 09:00 le premier, 18:00 le dernier. timeToCheck : l'heure est
+ * inventee, l'utilisateur doit la verifier. Un evenement deja horaire passe tel quel.
+ */
+export function proposalAsTimed<T extends AgendaEvent>(e: T): { event: T; timeToCheck: boolean } {
+	if (!e.allDay) return { event: e, timeToCheck: false };
+	const end = e.end && e.end > e.start ? e.end : e.start;
+	const lastHour = end === e.start ? "10:00" : "18:00";
+	return { event: { ...e, allDay: false, start: `${e.start}T09:00`, end: `${end}T${lastHour}`, reminders: undefined }, timeToCheck: true };
 }
 
 export type AgendaMessage = {
@@ -276,23 +298,28 @@ export function normalizeAgendaEvent(raw: unknown): { event: AgendaEvent } | { e
 	const location = clip(r.location, 255) || undefined;
 	const notes = clip(r.notes, 4000) || undefined;
 	const sourceQuote = clip(r.sourceQuote, 500);
-	const reminder = ((typeof r.reminder === "string" && r.reminder) || "none") as AgendaReminder;
 
 	const startDt = parseDateTime(startRaw);
 	const startD = parseDate(startRaw);
 	const allDay = r.allDay === true || (!startDt && !!startD);
-	if (reminderMinutes(reminder, allDay) === undefined) return { error: "Rappel invalide pour ce type d'événement" };
+	let reminders: number[];
+	if (r.reminders === undefined || r.reminders === null) reminders = defaultReminders(allDay);
+	else {
+		const checked = Array.isArray(r.reminders) && r.reminders.every((m) => typeof m === "number") ? checkReminders(r.reminders as number[], allDay) : undefined;
+		if (!checked) return { error: "Rappel invalide pour ce type d'événement" };
+		reminders = checked;
+	}
 	if (allDay) {
 		const s = startD ?? (startDt ? parseDate(fmtDate(startDt)) : null);
 		if (!s) return { error: `Date de début invalide : ${startRaw || "(vide)"}` };
 		const e = parseDate(endRaw) ?? (parseDateTime(endRaw) ? parseDate(endRaw.slice(0, 10)) : null) ?? s;
 		if (e < s) return { error: "La fin précède le début" };
-		return { event: { title, allDay: true, start: fmtDate(s), end: fmtDate(e), location, notes, sourceQuote, reminder } };
+		return { event: { title, allDay: true, start: fmtDate(s), end: fmtDate(e), location, notes, sourceQuote, reminders } };
 	}
 	if (!startDt) return { error: `Date ou heure de début invalide : ${startRaw || "(vide)"}` };
 	const e = parseDateTime(endRaw) ?? new Date(startDt.getTime() + 3_600_000);
 	if (e <= startDt) return { error: "La fin doit suivre le début" };
-	return { event: { title, allDay: false, start: fmtDateTime(startDt), end: fmtDateTime(e), location, notes, sourceQuote, reminder } };
+	return { event: { title, allDay: false, start: fmtDateTime(startDt), end: fmtDateTime(e), location, notes, sourceQuote, reminders } };
 }
 
 /** Propositions du LLM ({ events: [...] }) : les invalides sont ecartees. */
@@ -389,8 +416,10 @@ const escapeHtml = (s: string) =>
 
 /**
  * Corps de POST /users/{adresse}/events. Journee entiere : debut a 00:00, fin au lendemain du
- * dernier jour a 00:00 (convention Graph), disponibilite « libre ». Rappel : celui choisi a la
- * confirmation (isReminderOn false pour « aucun »). Corps : notes puis lien vers le fil.
+ * dernier jour a 00:00 (convention Graph), disponibilite « libre ». Rappels choisis a la
+ * confirmation : Graph n'en porte qu'un (reminderMinutesBeforeStart), le plus grand ecart ; la
+ * liste complete, des qu'elle en compte plusieurs, va dans une propriete etendue relue par
+ * courrier pour ses alertes (isReminderOn false si aucun). Corps : notes puis lien vers le fil.
  */
 export function graphEventBody(e: AgendaEvent, opts: { threadUrl?: string; threadSubject?: string | null } = {}) {
 	const html: string[] = [];
@@ -407,10 +436,11 @@ export function graphEventBody(e: AgendaEvent, opts: { threadUrl?: string; threa
 		body: { contentType: "HTML", content: html.join("\n") },
 	};
 	if (e.allDay) body.showAs = "free";
-	// Rappel choisi a la confirmation, « aucun » par defaut : jamais celui de Graph (15 min).
-	const minutes = reminderMinutes(e.reminder, e.allDay) ?? null;
-	body.isReminderOn = minutes !== null;
-	if (minutes !== null) body.reminderMinutesBeforeStart = minutes;
+	// Rappels choisis a la confirmation (defauts : Samuel, 19/11) : jamais celui de Graph (15 min).
+	const list = checkReminders(e.reminders ?? defaultReminders(e.allDay), e.allDay) ?? [];
+	body.isReminderOn = list.length > 0;
+	if (list.length) body.reminderMinutesBeforeStart = list[0];
+	if (list.length > 1) body.singleValueExtendedProperties = [{ id: REMINDERS_PROPERTY_ID, value: list.join(",") }];
 	if (e.location) body.location = { displayName: e.location };
 	return body;
 }

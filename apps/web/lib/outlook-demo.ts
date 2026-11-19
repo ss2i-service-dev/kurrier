@@ -24,6 +24,7 @@ import {
 	categoryColor,
 } from "@common/outlook-graph";
 import { AGENDA_TIMEZONE, AgendaError } from "@common/thread-agenda";
+import type { ReminderSource } from "@common/meeting-reminders";
 
 const on = () => process.env.NODE_ENV !== "production" && process.env.OUTLOOK_CALENDAR_DEMO === "1";
 
@@ -112,6 +113,8 @@ const categories: OutlookCategory[] = [
 const attachmentStore = new Map<string, (EventAttachment & { base64: string })[]>();
 const teams = new Map<string, TeamsOptions>();
 const reminderState = new Map<string, { dismissed?: boolean; snoozedTo?: string }>();
+// Rappels multiples des evenements crees depuis un fil (propriete ss2iReminders de Graph).
+const reminderOffsets = new Map<string, number[]>();
 
 const SHARED = [
 	{ address: "samuel@ss2i-digital.fr", name: "Samuel Legros" },
@@ -383,6 +386,16 @@ export const demo = {
 		}
 		return out;
 	},
+	/** Evenements de demo a rappels multiples (liste de la propriete ss2iReminders, comme Graph). */
+	reminderSources(owner: string, from: string, to: string, tz: string = AGENDA_TIMEZONE): ReminderSource[] {
+		const out: ReminderSource[] = [];
+		for (const e of demo.events("own:cal-main", owner, from.slice(0, 10), addDaysSafe(to.slice(0, 10), 1), tz)) {
+			const offsets = reminderOffsets.get(e.id);
+			if (!offsets || offsets.length < 2 || e.allDay || e.start < from || e.start > to) continue;
+			out.push({ eventId: e.id, title: e.title, start: e.start, end: e.end, location: e.location, webLink: e.webLink, joinUrl: e.joinUrl, nativeMinutes: e.reminderMinutes ?? null, offsets });
+		}
+		return out;
+	},
 	dismissReminder(id: string) {
 		reminderState.set(id, { dismissed: true });
 	},
@@ -411,7 +424,7 @@ export const demo = {
 	},
 	/** Creation depuis un fil (« Ajouter a l'agenda »). */
 	createSimple(owner: string, e: AgendaEvent) {
-		demo.create("own:cal-main", owner, {
+		const id = demo.create("own:cal-main", owner, {
 			title: e.title,
 			allDay: e.allDay,
 			start: e.start,
@@ -422,9 +435,10 @@ export const demo = {
 			online: false,
 			showAs: e.allDay ? "free" : "busy",
 			isPrivate: false,
-			reminderMinutes: null,
+			reminderMinutes: e.reminders?.[0] ?? null,
 			recurrence: "none",
 		});
+		if (e.reminders && e.reminders.length > 1) reminderOffsets.set(id, e.reminders);
 	},
 };
 

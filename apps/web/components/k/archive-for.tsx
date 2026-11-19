@@ -8,7 +8,9 @@
 // l'echeance des fils deja archives (setThreadExpiry), etat visible sur le bouton, toast a la fin.
 import React, { useMemo, useState } from "react";
 import { Button, Loader, Menu, Modal } from "@mantine/core";
-import { DatePickerInput } from "@mantine/dates";
+import { DatePicker } from "@mantine/dates";
+// Le DatesProvider du layout ne couvre que la nouvelle interface : la locale se donne ici, et dayjs doit la connaitre cote client.
+import "dayjs/locale/fr";
 import { useDisclosure } from "@mantine/hooks";
 import { CalendarClock } from "lucide-react";
 import { toast } from "sonner";
@@ -83,6 +85,7 @@ export default function KArchiveFor({
 		setMenuOpened(opened);
 	};
 
+	const pickedAt = pickerDate(picked);
 	const tomorrow = useMemo(() => {
 		const n = new Date();
 		return new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1);
@@ -172,23 +175,22 @@ export default function KArchiveFor({
 				size="sm"
 				zIndex={1003}
 			>
-				<DatePickerInput
-					label="Choisir le jour"
-					placeholder="JJ/MM/AAAA"
-					value={picked}
-					onChange={(v) => setPicked(typeof v === "string" ? v : v ? String(v) : null)}
-					valueFormat="DD/MM/YYYY"
-					minDate={tomorrow}
-					popoverProps={{ zIndex: 1004 }}
-					className="my-4"
-					clearable
-				/>
+				{/* Calendrier inline, pas un DatePickerInput : son popover garde Echap (la modale ne se fermait pas). */}
+				<div className="my-4 flex flex-col items-center gap-2">
+					<DatePicker
+						value={picked}
+						onChange={(v) => setPicked(typeof v === "string" ? v : v ? String(v) : null)}
+						locale="fr"
+						firstDayOfWeek={1}
+						minDate={tomorrow}
+					/>
+					<span className="text-[13px]">{pickedAt ? `${inArchive ? "Disparaît" : "Archiver, puis disparaît"} le ${formatExpiry(pickedAt)}` : "Choisir un jour dans le calendrier"}</span>
+				</div>
 				<Button
 					fullWidth
 					disabled={!picked}
 					onClick={() => {
-						const at = pickerDate(picked);
-						if (at) apply(at);
+						if (pickedAt) apply(pickedAt);
 					}}
 				>
 					{inArchive ? "Appliquer" : "Archiver"}

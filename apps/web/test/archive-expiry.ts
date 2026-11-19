@@ -151,8 +151,8 @@ test("archive-for.tsx : aucun selecteur 12 h, aucun AM/PM, date seule", () => {
 	assert.ok(!/hh:mm A/.test(s), "hh:mm A");
 	assert.ok(!/\b(AM|PM)\b/.test(s), "mot isole AM ou PM");
 	assert.ok(!/DateTimePicker|TimeInput|TimePicker/.test(s), "aucun selecteur d'heure");
-	assert.match(s, /DatePickerInput/);
-	assert.match(s, /valueFormat="DD\/MM\/YYYY"/);
+	assert.match(s, /<DatePicker\b/, "calendrier inline");
+	assert.match(s, /formatExpiry\(/, "date choisie affichee en JJ/MM/AAAA");
 	assert.match(s, /minDate=/);
 	assert.match(s, /EXPIRY_PRESETS|expiryMenuOptions/);
 });
@@ -418,7 +418,40 @@ test("note Nouveautes du jour : `A` ouvre « Archiver pour… »", () => {
 	assert.match(t, /^---\ntitle: ".+"\n---\n/);
 	assert.match(t, /## Nouveautés/);
 	assert.match(t, /\bA\b|Maj/);
+	assert.match(t, /en français/i, "puce : calendrier et page en francais");
 	assert.match(t, /raccourci `a`|`a` archive/i, "dit que `a` ne change pas");
+});
+
+test("modale « Choisir une date… » : calendrier en francais, semaine du lundi, inline (Echap ferme la modale)", () => {
+	const s = code("components/k/archive-for.tsx");
+	const raw = src("components/k/archive-for.tsx");
+	// Le DatesProvider du layout ne couvre que la nouvelle interface : la locale se donne ici, dayjs/locale/fr charge cote client.
+	assert.match(raw, /import "dayjs\/locale\/fr";/);
+	const at = s.indexOf("<DatePicker");
+	const tag = s.slice(at, s.indexOf("/>", at) + 2);
+	assert.match(tag, /locale="fr"/);
+	assert.match(tag, /firstDayOfWeek=\{1\}/);
+	assert.match(tag, /minDate=/);
+	// Un DatePickerInput met son calendrier dans un popover dont le focus garde Echap (data-mantine-stop-propagation) : la modale ne se fermait pas.
+	assert.ok(!/DatePickerInput/.test(s), "aucun popover de calendrier dans la modale");
+	const modal = s.slice(s.indexOf("<Modal"), s.indexOf("</Modal>"));
+	assert.ok(!/closeOnEscape=\{false\}/.test(modal), "Echap ferme la modale");
+});
+
+test("page /expiring classique : en-tete et libelles en francais", () => {
+	const p = code("app/[locale]/w/[wPublicId]/dashboard/(unified)/(mail)/mail/[identityPublicId]/expiring/page.tsx");
+	const classic = p.slice(p.indexOf("ClassicExpiringPage"), p.indexOf("NouvelleExpiringPage"));
+	assert.match(classic, /<h1[^>]*>Expire bientôt<\/h1>/);
+	assert.match(classic, /Fils : \{threads\.length\}/);
+	assert.match(classic, /Aucun fil n'expire/);
+	assert.ok(!/Expiring soon|Threads:|No expiring threads/.test(classic), "plus d'anglais");
+});
+
+test("barre de selection classique : passe a la ligne en largeur telephone (icones non coupees)", () => {
+	const s = code("components/mailbox/default/mail-list-header.tsx");
+	assert.match(s, /className="sticky top-\[var\(--ss2i-mail-header-h,0px\)\] z-10 flex flex-wrap items-center /, "barre : flex-wrap");
+	assert.match(s, /className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 ml-auto"/, "groupe d'actions : flex-wrap");
+	assert.match(s, /"inset-0 flex flex-wrap items-center gap-1 transition-opacity"/, "boutons de la selection : flex-wrap");
 });
 
 if (failed) {

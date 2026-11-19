@@ -262,7 +262,7 @@ function MailListHeader({
 		<>
 			{/* ss2i : collee sous la barre du haut (recherche, identite), elle-meme collante : en top-0
 			    elle passait dessous des le premier defilement et ses actions disparaissaient. */}
-			<div className="sticky top-[var(--ss2i-mail-header-h,0px)] z-10 flex items-center bg-background/95 px-3 py-2 backdrop-blur rounded-t-2xl">
+			<div className="sticky top-[var(--ss2i-mail-header-h,0px)] z-10 flex flex-wrap items-center bg-background/95 px-3 py-2 backdrop-blur rounded-t-2xl">
 				{!isOnSnoozedPage && (
 					<input
 						type="checkbox"
@@ -306,7 +306,7 @@ function MailListHeader({
 
 				<div className="flex-1" />
 
-				<div className="flex items-center gap-2 ml-auto">
+				<div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 ml-auto">
 					<Tooltip label="Sync" withArrow>
 						<ActionIcon
 							variant="subtle"
@@ -338,7 +338,7 @@ function MailListHeader({
 
 					<div
 						className={clsx(
-							"inset-0 flex items-center gap-1 transition-opacity",
+							"inset-0 flex flex-wrap items-center gap-1 transition-opacity",
 							hasSelected
 								? "opacity-100"
 								: "opacity-0 hidden pointer-events-none",

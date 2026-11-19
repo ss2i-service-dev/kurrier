@@ -37,14 +37,14 @@ async function ClassicExpiringPage({
 	return (
 		<div className="p-4 space-y-4">
 			<header className="flex items-center justify-between">
-				<h1 className="text-lg font-semibold">Expiring soon</h1>
+				<h1 className="text-lg font-semibold">Expire bientôt</h1>
 				<div className="text-sm text-muted-foreground">
-					Threads: {threads.length}
+					Fils : {threads.length}
 				</div>
 			</header>
 
 			{filteredThreads.length === 0 ? (
-				<div className="text-sm text-muted-foreground">No expiring threads.</div>
+				<div className="text-sm text-muted-foreground">Aucun fil n'expire.</div>
 			) : (
 				<WebmailListLabelSearch
 					mailboxThreads={filteredThreads}

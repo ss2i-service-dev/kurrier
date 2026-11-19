@@ -35,7 +35,7 @@ function whenLabel(iso: string | null) {
 		d.getFullYear() === now.getFullYear() &&
 		d.getMonth() === now.getMonth() &&
 		d.getDate() === now.getDate();
-	if (sameDay) return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+	if (sameDay) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 	if (d.getFullYear() === now.getFullYear()) {
 		return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 	}

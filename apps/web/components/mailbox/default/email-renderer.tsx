@@ -144,7 +144,7 @@ function EmailRenderer({
 			year: "numeric",
 			hour: "2-digit",
 			minute: "2-digit",
-			hour12: true,
+			hourCycle: "h23",
 		});
 
 	const [showEditor, setShowEditor] = useState<boolean>(false);

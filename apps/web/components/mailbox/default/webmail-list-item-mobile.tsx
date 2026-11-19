@@ -54,7 +54,8 @@ export default function WebmailListItemMobile({
 			const diff = today.since(d, { largestUnit: "day" }).days;
 			if (diff === 0)
 				return zdt.toLocaleString(undefined, {
-					hour: "numeric",
+					hour: "2-digit",
+					hourCycle: "h23",
 					minute: "2-digit",
 				});
 			if (d.year === today.year)

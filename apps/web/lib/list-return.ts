@@ -38,6 +38,23 @@ export function pickLastViewed(history: string[], visibleIds: string[]): string 
 	return null;
 }
 
+// Liste demontee a l'ouverture d'un fil (largeur mobile : la page du fil remplace la liste
+// au lieu de s'afficher par-dessus) : au remontage, le hook repart sans memoire de ce qui
+// precede. On retient la derniere liste quittee ; si c'est elle qui remonte, elle reprend
+// sa position. Une autre liste montee entre-temps efface la marque.
+let leftList: string | null = null;
+
+export function noteListLeft(listKey: string) {
+	leftList = listKey;
+}
+
+/** Vrai une seule fois si cette liste est celle qu'on vient de quitter. */
+export function takeListReturn(listKey: string): boolean {
+	const back = leftList === listKey;
+	leftList = null;
+	return back;
+}
+
 // Etat de la session de l'onglet : positions en memoire, historique aussi dans
 // sessionStorage (le repere survit a un F5, pas a la fermeture de l'onglet).
 const positions = new Map<string, number>();
@@ -90,7 +107,10 @@ export function useListReturn(pathname: string | null, visibleIds: string[]) {
 			positions.set(keyRef.current, window.scrollY);
 		};
 		window.addEventListener("scroll", onScroll, { passive: true });
-		return () => window.removeEventListener("scroll", onScroll);
+		return () => {
+			window.removeEventListener("scroll", onScroll);
+			noteListLeft(keyRef.current);
+		};
 	}, []);
 
 	const previous = useRef<string | null | undefined>(undefined);
@@ -106,7 +126,9 @@ export function useListReturn(pathname: string | null, visibleIds: string[]) {
 			return;
 		}
 		setHistory(loadHistories()[listKey] ?? []);
-		if (!before) return;
+		// Premier rendu : retour d'un fil seulement si la liste avait ete demontee en l'ouvrant.
+		const remounted = before === undefined && takeListReturn(listKey);
+		if (!before && !remounted) return;
 		// Retour d'un fil : la liste reprend sa position. Une seconde fois a l'image
 		// suivante, au cas ou la navigation de Next remonte la page apres nous.
 		const y = positions.get(listKey);

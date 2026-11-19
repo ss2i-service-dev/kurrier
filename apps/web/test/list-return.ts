@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { listPathOf, pickLastViewed, pushViewed, threadIdOf } from "../lib/list-return";
+import { listPathOf, noteListLeft, pickLastViewed, pushViewed, takeListReturn, threadIdOf } from "../lib/list-return";
 
 let failures = 0;
 const test = (label: string, fn: () => void) => {
@@ -53,6 +53,24 @@ test("repere : dernier fil consulte, sinon le precedent s'il a quitte la liste",
 	assert.equal(pickLastViewed(h, ["a", "b", "d"]), "b");
 	assert.equal(pickLastViewed(h, ["d"]), null);
 	assert.equal(pickLastViewed([], ["a"]), null);
+});
+
+// Samuel le 19/11/2026 : sur mobile, apres avoir defile dans un mail et l'avoir ferme, la
+// liste etait defilee. En largeur mobile la liste est demontee pendant le fil : au retour,
+// le hook remonte sans memoire et ne retablissait rien.
+test("liste demontee par le fil : sa position revient au remontage, une seule fois", () => {
+	noteListLeft(inbox);
+	assert.equal(takeListReturn(`${inbox}/search`), false, "une autre liste ne reprend rien");
+	assert.equal(takeListReturn(inbox), false, "la marque est effacee par l'autre liste");
+	noteListLeft(inbox);
+	assert.equal(takeListReturn(inbox), true);
+	assert.equal(takeListReturn(inbox), false, "une seule fois");
+});
+
+test("cablage lib/list-return.ts : marque au demontage, reprise au remontage", () => {
+	const src = readFileSync(join(__dirname, "../lib/list-return.ts"), "utf8");
+	assert.match(src, /noteListLeft\(keyRef\.current\)/);
+	assert.match(src, /before === undefined && takeListReturn\(listKey\)/);
 });
 
 const dir = join(__dirname, "../components/mailbox/default");

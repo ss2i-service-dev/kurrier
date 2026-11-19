@@ -170,6 +170,8 @@ export default function SchedulingAssistant({
 
 	// Glisser le cadre (deplacer) ou ses bords (debut, fin), au quart d'heure.
 	const area = useRef<HTMLDivElement>(null);
+	// Appui d'un doigt hors du cadre : le saut attend le click (voir down).
+	const tapJump = useRef(false);
 	const drag = useRef<{
 		mode: "move" | "start" | "end";
 		offset: number;
@@ -186,6 +188,7 @@ export default function SchedulingAssistant({
 	const apply = (s0: number, e0: number) =>
 		onRange ? onRange(date, s0, e0) : onPick(date, s0);
 	const down = (ev: React.PointerEvent<HTMLDivElement>) => {
+		tapJump.current = false;
 		if (allDay || ev.button !== 0) return;
 		const r = area.current?.getBoundingClientRect();
 		if (!r || ev.clientX - r.left < LABEL_W) return;
@@ -193,6 +196,12 @@ export default function SchedulingAssistant({
 		const handle = (ev.target as HTMLElement)
 			.closest("[data-handle]")
 			?.getAttribute("data-handle");
+		// Doigt hors du cadre : rien a l'appui, le geste peut etre un defilement de la page.
+		// Le creneau y saute au click, que le navigateur n'emet pas apres un defilement.
+		if (ev.pointerType !== "mouse" && !handle) {
+			tapJump.current = true;
+			return;
+		}
 		ev.preventDefault();
 		ev.currentTarget.setPointerCapture(ev.pointerId);
 		if (handle === "start" || handle === "end") {
@@ -225,6 +234,13 @@ export default function SchedulingAssistant({
 		} else if (d.mode === "start") s0 = Math.max(FROM, Math.min(m, d.e - 15));
 		else e0 = Math.min(TO, Math.max(m, d.s + 15));
 		if (s0 !== startMin || e0 !== endMin) apply(s0, e0);
+	};
+	const tap = (ev: React.MouseEvent<HTMLDivElement>) => {
+		if (!tapJump.current) return;
+		tapJump.current = false;
+		const m = minuteAt(ev.clientX);
+		const s0 = Math.max(FROM, Math.min(m, TO - duration));
+		apply(s0, s0 + duration);
 	};
 	const up = () => {
 		drag.current = null;
@@ -307,6 +323,7 @@ export default function SchedulingAssistant({
 					onPointerMove={move}
 					onPointerUp={up}
 					onPointerCancel={up}
+					onClick={tap}
 				>
 					{people.map((p) => {
 						const s = scheduleOf(p);
@@ -362,7 +379,7 @@ export default function SchedulingAssistant({
 						<div
 							data-handle="move"
 							title={`${hhmm(startMin)} – ${hhmm(endMin)}`}
-							className={`absolute inset-y-[-2px] z-10 cursor-grab rounded-sm border-2 ${dragging ? "cursor-grabbing" : ""} ${nouvelle ? "border-k-accent bg-k-accent/15" : "border-primary bg-primary/15"}`}
+							className={`absolute inset-y-[-2px] z-10 cursor-grab touch-none rounded-sm border-2 ${dragging ? "cursor-grabbing" : ""} ${nouvelle ? "border-k-accent bg-k-accent/15" : "border-primary bg-primary/15"}`}
 							style={{
 								left: `calc(${LABEL_W}px + (100% - ${LABEL_W}px) * ${(Math.max(FROM, startMin) - FROM) / SPAN})`,
 								width: `calc((100% - ${LABEL_W}px) * ${(Math.min(TO, endMin) - Math.max(FROM, startMin)) / SPAN})`,

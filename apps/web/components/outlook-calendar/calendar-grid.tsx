@@ -154,6 +154,8 @@ export default function CalendarGrid({
 	const dragRef = useRef<Drag | null>(null);
 	dragRef.current = drag;
 	const swallowClick = useRef(false);
+	// Appui d'un doigt sur une colonne : la creation attend le click (voir la colonne).
+	const tapSlot = useRef(false);
 	const many = days.length > 7;
 
 	// Position de defilement : a l'ouverture et quand l'heure demandee change (proposition deplacee hors champ).
@@ -346,12 +348,30 @@ export default function CalendarGrid({
 												if (ev.button !== 0) return;
 												const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
 												const m = slotFromOffset(ev.clientY - rect.top, hourHeight);
-												if (ev.pointerType !== "mouse" || !onRange) {
+												// Doigt ou stylet : rien a l'appui, le geste peut etre un defilement
+												// (Samuel le 19/11/2026 : defiler sa journee ouvrait un nouvel evenement).
+												// La creation attend le click, que le navigateur n'emet pas apres un defilement.
+												if (ev.pointerType !== "mouse") {
+													tapSlot.current = true;
+													return;
+												}
+												tapSlot.current = false;
+												if (!onRange) {
 													onSlot(d, m);
 													return;
 												}
 												ev.preventDefault();
 												setDrag({ kind: "create", day: d, y0: ev.clientY, from: m, to: m + 15, moved: false });
+											}
+										: undefined
+								}
+								onClick={
+									onSlot
+										? (ev) => {
+												if (!tapSlot.current) return;
+												tapSlot.current = false;
+												const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+												onSlot(d, slotFromOffset(ev.clientY - rect.top, hourHeight));
 											}
 										: undefined
 								}

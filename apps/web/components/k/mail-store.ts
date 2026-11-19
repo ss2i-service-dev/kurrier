@@ -25,6 +25,7 @@ import {
 	toggleStar,
 } from "@/lib/actions/mailbox";
 import { hideThreads, moveWithUndo } from "@/lib/pending-moves";
+import { archivedMessage } from "@/lib/archive-for";
 import { setThreadPinned } from "@/lib/actions/k-pins";
 import { refreshUnreadBadge } from "@/components/k/new-mail-notifier";
 import { createArrivalTracker, type ArrivalSnapshot } from "@/lib/arrival-tracker";
@@ -209,20 +210,24 @@ export function adjustCount(mailboxId: string, n: number) {
 }
 
 export const mailActions = {
-	/** unread : nombre de fils non lus parmi ceux deplaces (compteur du dossier). */
-	archive(threadIds: string | string[], mailboxId: string, smtp: boolean, unread = 0) {
+	/**
+	 * unread : nombre de fils non lus parmi ceux deplaces (compteur du dossier).
+	 * expiresAt (ISO) : archiver avec une duree de vie (« Archiver pour... ») ; starred : la
+	 * selection contient un fil etoile, qui n'expire jamais (le toast le dit).
+	 */
+	archive(threadIds: string | string[], mailboxId: string, smtp: boolean, unread = 0, expiresAt?: string | null, starred = false) {
 		const list = ids(threadIds);
 		adjustCount(mailboxId, -unread);
 		moveWithUndo({
 			onUndo: () => adjustCount(mailboxId, unread),
 			mailboxId,
 			threadIds: list,
-			message: list.length > 1 ? `${list.length} fils archivés` : "Archivé",
+			message: archivedMessage({ count: list.length, expiresAt: expiresAt ? new Date(expiresAt) : null, starred }),
 			// refresh=false : pas d'attente du worker ni de rendu complet de la page ;
 			// le fil est deja masque, un rafraichissement discret suit.
 			// archiver ne fait que sortir le fil de l'Inbox (patch 0081)
 			archive: true,
-			run: () => archiveThread(list, mailboxId, smtp, false),
+			run: () => archiveThread(list, mailboxId, smtp, false, expiresAt),
 			onDone: () => scheduleRefresh(),
 			failure: "L'archivage a échoué",
 		});

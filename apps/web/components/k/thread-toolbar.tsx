@@ -10,6 +10,7 @@ import { ReplyWithLore } from "@/components/mailbox/default/reply-with-lore";
 import { copyMailToClipboard } from "@/lib/mail-copy";
 import KIconButton from "@/components/k/icon-button";
 import SnoozeMail from "@/components/k/snooze";
+import KArchiveFor from "@/components/k/archive-for";
 import { IconPin, IconPinnedOff } from "@tabler/icons-react";
 import { useShortcutHint } from "@/components/k/shortcuts-config";
 import { isManuallyUnread, isMarkedRead, mailActions, setActiveThread, setClosingThread, useMailStore } from "@/components/k/mail-store";
@@ -28,6 +29,7 @@ export default function ThreadToolbar({
 	pinned: serverPinned = false,
 	identityPublicId,
 	inboxMailboxId,
+	starred,
 }: {
 	threadId: string;
 	activeMailboxId: string;
@@ -39,6 +41,8 @@ export default function ThreadToolbar({
 	identityPublicId?: string;
 	/** ss2i : boite de reception de l'identite quand le fil est ouvert dans le Spam. */
 	inboxMailboxId?: string | null;
+	/** ss2i : le fil est etoile (il n'expire jamais : le toast de « Archiver pour... » le dit). */
+	starred?: boolean;
 }) {
 	const pinOverride = useMailStore((s) => s.pinned.get(String(threadId)));
 	const pinned = pinOverride ?? serverPinned;
@@ -145,6 +149,14 @@ export default function ThreadToolbar({
 			<KIconButton label="Marquer comme non lu" shortcut={hint.unread} action="unread" onClick={unread}>
 				<Mail />
 			</KIconButton>
+			<KArchiveFor
+				mailboxId={activeMailboxId}
+				mailboxKind={activeMailboxKind}
+				smtp={markSmtp}
+				threadIds={() => [String(threadId)]}
+				starred={() => !!starred}
+				before={advance}
+			/>
 			<SnoozeMail mailboxThreadId={threadId} activeMailboxId={activeMailboxId} />
 			<KIconButton
 				label={pinned ? "Désépingler" : "Épingler en haut du dossier"}

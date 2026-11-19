@@ -14,6 +14,7 @@ import {
 	ChevronRight,
 	ChevronDown,
 	MoreVertical,
+	CalendarClock,
 	Clock4,
 } from "lucide-react";
 import * as React from "react";
@@ -129,15 +130,19 @@ function buildTree(
 function IdentityExtraCounts({
 								 identity,
 								 snoozedThreadsPromise,
+								 expiringThreadsPromise,
 								 workspacePublicId,
 								 currentSlug,
 							 }: {
 	identity: IdentityEntity;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
+	expiringThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
 	workspacePublicId: string | undefined;
 	currentSlug: string;
 }) {
 	const { threads: snoozedThreads } = use(snoozedThreadsPromise);
+	const { threads: expiringThreads } = use(expiringThreadsPromise);
+	const expiringCount = expiringThreads.filter((s) => s.identityId === identity.id).length;
 
 	const snoozedCount = snoozedThreads.filter(
 		(s) => s.identityId === identity.id,
@@ -158,6 +163,17 @@ function IdentityExtraCounts({
 					<Clock4 size={16} className="shrink-0 text-k-ink-3" />
 					<span className="flex-1 truncate">Reportés</span>
 					<span className="text-[12px] tabular-nums text-k-ink-3">{snoozedCount}</span>
+				</Link>
+			)}
+			{/* ss2i : fils archives avec une duree de vie (Archiver pour...), seulement s'il y en a. */}
+			{expiringCount > 0 && (
+				<Link
+					href={`/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/expiring`}
+					className={linkCls(currentSlug === "expiring")}
+				>
+					<CalendarClock size={16} className="shrink-0 text-k-ink-3" />
+					<span className="flex-1 truncate">Expire bientôt</span>
+					<span className="text-[12px] tabular-nums text-k-ink-3">{expiringCount}</span>
 				</Link>
 			)}
 		</>
@@ -215,6 +231,7 @@ export default function KSidebarNav({
 	unreadCounts,
 	outboxCounts,
 	snoozedThreadsPromise,
+	expiringThreadsPromise,
 	workspacePublicId,
 	onComplete,
 	clientsPromise,
@@ -224,6 +241,7 @@ export default function KSidebarNav({
 	// ss2i : Boite d'envoi, compteurs par identite (fetchOutboxCounts).
 	outboxCounts: OutboxCount[];
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
+	expiringThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
 	workspacePublicId: string | undefined;
 	onComplete?: () => void;
 	clientsPromise?: Promise<IdentityClientsData[]>;
@@ -387,6 +405,7 @@ export default function KSidebarNav({
 					<IdentityExtraCounts
 						identity={identity}
 						snoozedThreadsPromise={snoozedThreadsPromise}
+						expiringThreadsPromise={expiringThreadsPromise}
 						workspacePublicId={workspacePublicId}
 						currentSlug={currentSlug}
 					/>

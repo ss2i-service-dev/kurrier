@@ -35,7 +35,7 @@ import {
 import { htmlToText, messageBodyText, truncate } from "@common/html-text";
 import { stripSubjectPrefixes } from "@common/subject";
 import { pickSenderIdentity } from "./sender-identity";
-import { type QuoteScope, stripQuotedText, validateScheduledAt } from "@common";
+import { EXPIRY_PRESETS, type ExpiryPresetId, expiryFromPreset, type QuoteScope, parseExpiry, stripQuotedText, validateScheduledAt } from "@common";
 import { attachThreadsToCompany, crmSearchCompanies, detachThreadsFromCompany, searchKnownCrmCompanies, upsertCrmCompanies } from "@common/server-client-link";
 import { isProIdentityValue } from "../crm/link-thread";
 import { findByLegacyKey } from "../send/ledger-store";
@@ -174,6 +174,8 @@ const threadSummary = (t: MailboxThread) => ({
 	unread: t.unreadCount > 0,
 	starred: t.starred,
 	has_attachments: t.hasAttachments,
+	// ss2i : date (ISO) a laquelle l'archive part a la Corbeille, null sinon.
+	expires_at: t.expiresAt ? new Date(t.expiresAt).toISOString() : null,
 });
 
 // ss2i : nom du client (societe de la CRM) sur les fils rattaches, quand il est connu.
@@ -647,6 +649,26 @@ async function waitForThreadsToLeave(threadIds: string[], mailboxId: string, tim
 	return false;
 }
 
+// expires_in (1m, 3m, 6m, 1y, 2y : debut du jour, comme le menu du web) ou expires_at (ISO, apres
+// maintenant et a moins de dix ans) ; les deux ensemble ou une valeur invalide sont refuses.
+function archiveExpiry(args: Record<string, any>): Date | null {
+	const inRaw = str(args.expires_in, "expires_in", { optional: true });
+	const atRaw = str(args.expires_at, "expires_at", { optional: true });
+	if (inRaw && atRaw) throw new McpToolError("Give either 'expires_in' or 'expires_at', not both");
+	if (inRaw) {
+		if (!EXPIRY_PRESETS.some((p) => p.id === inRaw)) {
+			throw new McpToolError(`'expires_in' must be one of ${EXPIRY_PRESETS.map((p) => p.id).join(", ")}`);
+		}
+		return expiryFromPreset(inRaw as ExpiryPresetId, new Date());
+	}
+	if (atRaw) {
+		const at = parseExpiry(atRaw, new Date());
+		if (!at) throw new McpToolError("'expires_at' must be an ISO date after now and within ten years");
+		return at;
+	}
+	return null;
+}
+
 async function moveThreads(
 	ctx: ToolContext,
 	args: Record<string, any>,
@@ -654,6 +676,9 @@ async function moveThreads(
 ) {
 	const ids = threadIdList(args.thread_ids);
 	const folder = str(args.folder, "folder", { optional: true });
+	// ss2i : archive avec une duree de vie. Valide avant tout (redis, job) : une duree ou une
+	// date refusee ne laisse rien derriere elle.
+	const expiresAt = op === "archive" ? archiveExpiry(args) : null;
 	const groups = await resolveActionTargets({ userId: ctx.userId, threadIds: ids, folder });
 	const { smtpQueue, smtpEvents } = await redis();
 	const results: Array<Record<string, unknown>> = [];
@@ -683,6 +708,7 @@ async function moveThreads(
 			jobOpts = { ...jobOpts, jobId: `move:${g.threadIds[0]}+${g.threadIds.length - 1}:${src.id}->${dest.id}` };
 			results.push({ from: src.slug, to: dest.slug, threads: g.threadIds.length });
 		} else if (op === "archive") {
+			if (expiresAt) data.expiresAt = expiresAt.toISOString();
 			// Comme archiveThread (web) : le dossier Archive n'existe pas toujours, on le
 			// cree d'abord, cote IMAP quand la boite est synchronisee.
 			const boxes = await listMailboxes(ctx.userId, src.identityId);
@@ -708,7 +734,12 @@ async function moveThreads(
 					});
 				}
 			}
-			results.push({ from: src.slug, to: "archive", threads: g.threadIds.length });
+			results.push({
+				from: src.slug,
+				to: "archive",
+				threads: g.threadIds.length,
+				...(expiresAt ? { expires_at: expiresAt.toISOString() } : {}),
+			});
 		} else {
 			results.push({ from: src.slug, to: "trash", threads: g.threadIds.length });
 		}
@@ -1702,10 +1733,23 @@ export const TOOLS: ToolDefinition[] = [
 	{
 		name: "archive",
 		scope: "emails:receive",
-		description: "Archive threads (move them to the Archive folder, created if needed).",
+		description:
+			"Archive threads (move them to the Archive folder, created if needed). Optionally with a lifetime: at the date, the thread moves to Trash (starred threads and threads back in the Inbox never expire).",
 		inputSchema: {
 			type: "object",
-			properties: { thread_ids: threadIdsProp, folder: { ...folderProp, description: "Source folder, when ambiguous." } },
+			properties: {
+				thread_ids: threadIdsProp,
+				folder: { ...folderProp, description: "Source folder, when ambiguous." },
+				expires_in: {
+					type: "string",
+					enum: EXPIRY_PRESETS.map((p) => p.id),
+					description: "Archive with a lifetime: 1m, 3m, 6m (months), 1y, 2y (years). Excludes expires_at.",
+				},
+				expires_at: {
+					type: "string",
+					description: "Archive until this ISO date (after now, within ten years), then the thread moves to Trash. Excludes expires_in.",
+				},
+			},
 			required: ["thread_ids"],
 			additionalProperties: false,
 		},

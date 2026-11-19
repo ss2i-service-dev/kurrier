@@ -46,7 +46,7 @@ import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
 import { searchFilters, SEARCH_EXCLUDED_KINDS } from "@/lib/search-scope";
-import { cancelSend, enqueueSend, sendNowPlanOf, dismissRestoresDraft, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendLive, interruptedSendOf, deleteDraftRow, DRAFT_DELETE_JOB, draftDeleteJobOptions, type SettleAction, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
+import { cancelSend, enqueueSend, sendNowPlanOf, dismissRestoresDraft, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendLive, interruptedSendOf, deleteDraftRow, DRAFT_DELETE_JOB, draftDeleteJobOptions, type SettleAction, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, parseExpiry, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import { saveDraft } from "@/lib/actions/drafts";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
@@ -1395,11 +1395,16 @@ export const moveToTrash = async (
 // (mail:move, op=archive) le cherche par kind ; s'il n'existe pas encore pour
 // cette identite (Stalwart n'en cree pas), on le cree d'abord, cote IMAP quand
 // la boite est synchronisee.
+// ss2i : expiresAt (ISO, optionnel) = archiver avec une duree de vie. Jamais ecrit ici : il part
+// dans le job mail:move, dont moveMail le pose sur la ligne d'arrivee dans la transaction du move
+// (le move asynchrone et l'echeance ne peuvent pas diverger). Invalide, passe ou a plus de 10 ans :
+// archivage simple.
 export const archiveThread = async (
 	threadIds: string | string[],
 	mailboxId: string,
 	moveImap: boolean,
 	refresh: boolean,
+	expiresAt?: string | null,
 ) => {
 	const requestedIds = (Array.isArray(threadIds) ? threadIds : [threadIds])
 		.map(String)
@@ -1411,6 +1416,7 @@ export const archiveThread = async (
 	if (!ids.length) return;
 	if (src.kind === "archive") return;
 	moveImap = shouldMoveImap(moveImap, await imapSynced(src.id));
+	const expiry = parseExpiry(expiresAt, new Date());
 
 	const findArchive = async () => {
 		const [row] = await db
@@ -1463,7 +1469,14 @@ export const archiveThread = async (
 	// au compte-gouttes.
 	await smtpQueue.add(
 		"mail:move",
-		{ threadId: ids[0], threadIds: ids, mailboxId: src.id, op: "archive", moveImap },
+		{
+			threadId: ids[0],
+			threadIds: ids,
+			mailboxId: src.id,
+			op: "archive",
+			moveImap,
+			expiresAt: expiry ? expiry.toISOString() : null,
+		},
 		{
 			attempts: 3,
 			backoff: { type: "exponential", delay: 1500 },
@@ -2371,6 +2384,99 @@ export async function snoozeThread(input: {
 		return { success: true };
 	});
 }
+
+// ss2i : archiver avec une duree de vie, fil deja archive. expiresAt null annule l'echeance.
+// Refus (et non erreur) pour un fil etoile ou ayant une ligne dans l'Inbox de la meme identite :
+// le trigger ss2i_mbth_expiry_guard et upsertMailboxThreadItem les videraient aussitot, la date
+// affichee serait un mensonge.
+export async function setThreadExpiry(input: {
+	threadId: string;
+	mailboxId: string;
+	expiresAt: string | null;
+}): Promise<{ ok: true; expiresAt: string | null } | { ok: false; reason: string }> {
+	try {
+		const { mailbox, threadIds } = await assertThreadsInMailbox(input.mailboxId, [input.threadId]);
+		if (!threadIds.length) return { ok: false, reason: "Fil introuvable dans ce dossier" };
+		if (mailbox.kind !== "archive") {
+			return { ok: false, reason: "La durée de vie ne se règle que dans l'archive" };
+		}
+		const threadId = threadIds[0];
+		const expiry = input.expiresAt === null ? null : parseExpiry(input.expiresAt, new Date());
+		if (input.expiresAt !== null && !expiry) {
+			return { ok: false, reason: "Date invalide : choisir un jour à venir, dans les dix ans" };
+		}
+
+		const rls = await rlsClient();
+		if (expiry) {
+			const [row] = await rls((tx) =>
+				tx
+					.select({ starred: mailboxThreads.starred })
+					.from(mailboxThreads)
+					.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, mailbox.id)))
+					.limit(1),
+			);
+			if (!row) return { ok: false, reason: "Fil introuvable dans ce dossier" };
+			if (row.starred) return { ok: false, reason: "Un fil étoilé n'expire pas : retirer l'étoile d'abord" };
+			const [inbox] = await rls((tx) =>
+				tx
+					.select({ id: mailboxThreads.mailboxId })
+					.from(mailboxThreads)
+					.innerJoin(mailboxes, eq(mailboxes.id, mailboxThreads.mailboxId))
+					.where(
+						and(
+							eq(mailboxThreads.threadId, threadId),
+							eq(mailboxThreads.identityId, mailbox.identityId),
+							eq(mailboxes.kind, "inbox"),
+						),
+					)
+					.limit(1),
+			);
+			if (inbox) return { ok: false, reason: "Ce fil est aussi dans la boîte de réception : il n'expirera pas" };
+		}
+
+		await rls((tx) =>
+			tx
+				.update(mailboxThreads)
+				.set({ expiresAt: expiry, updatedAt: new Date() })
+				.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, mailbox.id))),
+		);
+		revalidatePath("/dashboard/mail");
+		return { ok: true, expiresAt: expiry ? expiry.toISOString() : null };
+	} catch (e: any) {
+		return { ok: false, reason: e?.message ?? "Échec de la mise à jour" };
+	}
+}
+
+// ss2i : fils dont l'echeance est posee, les plus proches d'abord (vue « Expire bientot »).
+export const fetchIdentityExpiringThreads = async (): Promise<{ threads: MailboxThreadEntity[] }> => {
+	const rls = await rlsClient();
+	const rows = await rls((tx) =>
+		tx
+			.select({ thread: mailboxThreads })
+			.from(mailboxThreads)
+			.where(isNotNull(mailboxThreads.expiresAt))
+			.orderBy(asc(mailboxThreads.expiresAt), desc(mailboxThreads.lastActivityAt))
+			.limit(200),
+	);
+	return { threads: rows.map((r) => r.thread) };
+};
+
+// ss2i : echeance et etoile du fil ouvert, dans le dossier ou il est (encart « Disparait le »
+// et message du toast d'archivage).
+export const fetchThreadExpiry = async (
+	threadId: string,
+	mailboxId: string,
+): Promise<{ expiresAt: string | null; starred: boolean }> => {
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({ expiresAt: mailboxThreads.expiresAt, starred: mailboxThreads.starred })
+			.from(mailboxThreads)
+			.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, mailboxId)))
+			.limit(1),
+	);
+	return { expiresAt: row?.expiresAt ? new Date(row.expiresAt).toISOString() : null, starred: !!row?.starred };
+};
 
 export const fetchIdentitySnoozedThreads = async (): Promise<{ threads: MailboxThreadEntity[] }> => {
 	const rls = await rlsClient();

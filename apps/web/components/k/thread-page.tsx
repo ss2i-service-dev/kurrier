@@ -3,6 +3,7 @@ import React, { Suspense } from "react";
 import {
 	fetchIdentityMailboxList,
 	fetchMailbox,
+	fetchThreadExpiry,
 	fetchThreadMailSubscriptions,
 	fetchWebMailThreadDetail,
 } from "@/lib/actions/mailbox";
@@ -15,6 +16,7 @@ import KThreadItem from "@/components/k/thread-item";
 import { MessageEntity } from "@db";
 import { getPublicEnv } from "@schema";
 import ThreadToolbar from "@/components/k/thread-toolbar";
+import KExpiryNotice from "@/components/k/expiry-notice";
 import KThreadClients from "@/components/k/thread-clients";
 import { ThreadProvider } from "@/components/k/thread-context";
 import ThreadMessages from "@/components/k/thread-messages";
@@ -48,10 +50,13 @@ export default async function KThreadPage({
 	const { activeMailbox, mailboxSync } = await fetchThreadMailbox(identityPublicId, mailboxSlug, allMessages);
 	// ss2i : un mail present dans deux dossiers (Sent et Inbox) ne s'affiche qu'une fois (thread-dedupe.ts).
 	const messages = dedupeThreadMessages(allMessages);
-	const { byMessageId } = await fetchThreadMailSubscriptions({
-		ownerId: activeMailbox.ownerId,
-		messages: messages.map((m) => ({ id: m.id, headersJson: m.headersJson, from: m.from })),
-	});
+	const [{ byMessageId }, expiry] = await Promise.all([
+		fetchThreadMailSubscriptions({
+			ownerId: activeMailbox.ownerId,
+			messages: messages.map((m) => ({ id: m.id, headersJson: m.headersJson, from: m.from })),
+		}),
+		fetchThreadExpiry(threadId, activeMailbox.id).catch(() => ({ expiresAt: null, starred: false })),
+	]);
 
 	if (!messages.length) {
 		return (
@@ -90,11 +95,13 @@ export default async function KThreadPage({
 					markSmtp={!!mailboxSync}
 					hasUnread={messages.some((m) => !m.seen)}
 					pinned={!!pins[threadId]}
+					starred={expiry.starred}
 					identityPublicId={identityPublicId}
 					inboxMailboxId={inboxIdForSpam(identityMailboxes, String(activeMailbox.id))}
 				/>
 				<div className="k-scroll min-h-0 flex-1 overflow-y-auto" data-k-thread-scroll>
 					<div className="w-full px-5 pb-10 pt-6 md:px-8">
+						{expiry.expiresAt && <KExpiryNotice threadId={threadId} mailboxId={activeMailbox.id} expiresAt={expiry.expiresAt} />}
 						<div className="mb-4">
 							{/* Objet, et a droite sur la meme ligne les societes rattachees au fil */}
 							<div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">

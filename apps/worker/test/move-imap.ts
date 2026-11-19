@@ -20,6 +20,7 @@ import { upsertMailboxThreadItem } from "@common";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { ImapFlow } from "imapflow";
 import { moveMail } from "../lib/imap/imap-move";
+import { dueExpiredThreads } from "../lib/mail-expiry";
 import { deltaFetch } from "../lib/imap/imap-delta-fetch";
 
 type Fixture = Awaited<ReturnType<typeof createUserFixture>>;
@@ -36,6 +37,7 @@ class FakeStalwart {
 	existsOverride: number | null = null; // dossier « trop gros » : resolveUids ne balaie pas
 	onLock?: (path: string) => Promise<void>;
 	onMove?: () => Promise<void>;
+	flagged = new Set<string>(); // Message-ID portant \Flagged (pose depuis un autre client)
 	moves = 0;
 	selected = "";
 	folders = new Map<string, Folder>();
@@ -89,7 +91,7 @@ class FakeStalwart {
 			yield {
 				uid,
 				envelope: { messageId: mid ?? undefined },
-				flags: new Set<string>(["\\Seen"]),
+				flags: new Set<string>(mid && this.flagged.has(mid) ? ["\\Seen", "\\Flagged"] : ["\\Seen"]),
 				internalDate: new Date(),
 				size: 10,
 				source: Buffer.from(`Message-ID: ${mid}\r\nSubject: x\r\n\r\ncorps`),
@@ -957,6 +959,71 @@ async function main() {
 		await mv;
 		const [rk] = await msgRows(tk.ids);
 		assert(rk.mailboxId === archive.id && !(await threadRow(tk.id, trash.id)), "k) etoile posee pendant le job : le fil reste en Archive");
+	}
+
+	// 15 l) etoile posee hors de courrier (telephone, Gmail web) sur un fil deja archive : IDLE ne
+	//     suit que l'INBOX, la base l'ignore. Le job du tick lit les drapeaux avant le MOVE : le fil
+	//     dont un message porte \Flagged reste en Archive, etoile, sans echeance, sans echec du job ;
+	//     les autres fils partent. Tous les fils etoiles : aucun MOVE.
+	{
+		const f = await createUserFixture("expiry-flagged");
+		const archive = await folderOf(f, "archive", "Archive");
+		const trash = await trashOf(f);
+		await syncRow(f, archive.id, 50);
+		await syncRow(f, trash.id, 0);
+		const m1 = `<exp-l1-${Date.now()}@x>`;
+		const m2 = `<exp-l2-${Date.now()}@x>`;
+		const m3 = `<exp-l3-${Date.now()}@x>`;
+		const m0 = `<exp-l0-${Date.now()}@x>`; // en base seulement : absent du serveur
+		const imap = new FakeStalwart({ Archive: { uidNext: 51, msgs: [[40, m1], [41, m2], [42, m3]] }, "Deleted Items": { uidNext: 1, msgs: [] } });
+		imap.flagged.add(m2);
+		const tl = await thread(f, archive.id, [{ mid: m1, uid: 40, path: "Archive" }, { mid: m2, uid: 41, path: "Archive" }, { mid: m0, uid: 39, path: "Archive" }]);
+		const tm = await thread(f, archive.id, [{ mid: m3, uid: 42, path: "Archive" }]);
+		await setExp(tl.id, archive.id, PAST);
+		await setExp(tm.id, archive.id, PAST);
+		await moveMail(expiryJob([tl.id, tm.id], archive.id, true), on(f, imap));
+		const rl = await msgRows(tl.ids);
+		assert(rl.length === 3 && rl.every((r) => r.mailboxId === archive.id), "l) fil etoile ailleurs : ses messages restent en Archive en base, celui absent du serveur aussi");
+		assert(rl.find((r) => r.messageId === m2)?.flagged === true && rl.find((r) => r.messageId === m1)?.flagged === false, "l) fil etoile ailleurs : le message \\Flagged est etoile en base, l'autre non");
+		const kept = await threadRow(tl.id, archive.id);
+		assert(!!kept && kept.starred === true && kept.expiresAt === null, `l) fil etoile ailleurs : ligne Archive etoilee, echeance NULL (${kept?.starred} ${kept?.expiresAt})`);
+		assert(!(await threadRow(tl.id, trash.id)), "l) fil etoile ailleurs : aucune ligne en Corbeille");
+		const sv = imap.folders.get("Archive")!.msgs;
+		assert(sv.get(40) === m1 && sv.get(41) === m2 && sv.size === 2, "l) fil etoile ailleurs : rien de ce fil deplace sur IMAP");
+		const [rm] = await msgRows(tm.ids);
+		assert(rm.mailboxId === trash.id && [...imap.folders.get("Deleted Items")!.msgs.values()].includes(m3), "l) l'autre fil du lot part en Corbeille, sur IMAP aussi");
+
+		// Tous les fils du lot etoiles ailleurs : aucun MOVE envoye, le job reussit.
+		const m4 = `<exp-l4-${Date.now()}@x>`;
+		imap.folders.get("Archive")!.msgs.set(43, m4);
+		imap.flagged.add(m4);
+		const tn = await thread(f, archive.id, [{ mid: m4, uid: 43, path: "Archive" }]);
+		await setExp(tn.id, archive.id, PAST);
+		const before = imap.moves;
+		await moveMail(expiryJob([tn.id], archive.id, true), on(f, imap));
+		assert(imap.moves === before, `l) tous les fils etoiles : aucun MOVE (${imap.moves - before})`);
+		const rn = await threadRow(tn.id, archive.id);
+		assert(!!rn && rn.starred === true && rn.expiresAt === null && !(await threadRow(tn.id, trash.id)), "l) tous les fils etoiles : fil en Archive, etoile, echeance NULL");
+		// Le tick suivant ne le reprend plus.
+		assert((await dueExpiredThreads(db, { now: new Date(), mailboxId: archive.id })).every((t) => t.threadId !== tn.id && t.threadId !== tl.id), "l) fils etoiles : plus dus pour le tick");
+
+		// Retour arriere : fil etoile ailleurs et fil non etoile, MOVE refuse. Seul le second compte
+		// dans l'echec du job et garde son echeance ; le premier est etoile, sans echeance.
+		const m5 = `<exp-l5-${Date.now()}@x>`;
+		const m6 = `<exp-l6-${Date.now()}@x>`;
+		imap.folders.get("Archive")!.msgs.set(44, m5);
+		imap.folders.get("Archive")!.msgs.set(45, m6);
+		imap.flagged.add(m5);
+		const tp = await thread(f, archive.id, [{ mid: m5, uid: 44, path: "Archive" }]);
+		const tq = await thread(f, archive.id, [{ mid: m6, uid: 45, path: "Archive" }]);
+		await setExp(tp.id, archive.id, PAST);
+		await setExp(tq.id, archive.id, PAST);
+		imap.refuseMove = true;
+		await expectThrow(() => moveMail(expiryJob([tp.id, tq.id], archive.id, true), on(f, imap)), /1 message\(s\) non deplaces sur IMAP/, "l) MOVE refuse : seul le fil non etoile fait echouer le job");
+		imap.refuseMove = false;
+		const rp = await threadRow(tp.id, archive.id);
+		assert(!!rp && rp.starred === true && rp.expiresAt === null && !(await threadRow(tp.id, trash.id)), "l) MOVE refuse : fil etoile ailleurs en Archive, etoile, echeance NULL");
+		assert(same(await expOf(tq.id, archive.id), PAST) && !(await threadRow(tq.id, trash.id)), `l) MOVE refuse : l'autre fil revient en Archive avec son echeance (${await expOf(tq.id, archive.id)})`);
 	}
 }
 

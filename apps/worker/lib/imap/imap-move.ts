@@ -360,6 +360,7 @@ export const moveMail = async (
 		dupIds,
 		threadOf: new Map(toMove.map((m) => [m.id, m.threadId])),
 		srcExpiry,
+		expiry: !!data.expiry,
 	};
 	let reverted = 0;
 	for (const g of byPath.values()) reverted += await moveGroupOnImap(client, g, ctx);
@@ -391,6 +392,7 @@ type MoveCtx = {
 	threadOf: Map<string, string>;
 	// ss2i (archive-duree-de-vie) : job du tick, echeance de chaque fil dans l'Archive source.
 	srcExpiry: Map<string, Date>;
+	expiry: boolean;
 };
 
 /**
@@ -415,7 +417,8 @@ async function moveGroupOnImap(
 	g: { path: string; rows: UidRow[] },
 	ctx: MoveCtx,
 ): Promise<number> {
-	const { path: srcPath, rows } = g;
+	const srcPath = g.path;
+	let rows = g.rows;
 	const tag = `${ctx.src.identityId} ${srcPath} -> ${ctx.destPath}`;
 	const rowById = new Map(rows.map((r) => [r.id, r]));
 	const isDup = (id: string) => ctx.dupIds.has(id);
@@ -442,6 +445,32 @@ async function moveGroupOnImap(
 		const absent = new Set<string>();
 		const wanted = await resolveUids(client, rows, absent);
 		for (const [uid, id] of wanted) if (!srcUid.has(id)) srcUid.set(id, uid);
+
+		// ss2i (archive-duree-de-vie) : job du tick, etoile posee hors de courrier (telephone, Gmail
+		// web) sur un fil deja archive. IDLE ne suit que l'INBOX et la synchronisation ne relit que
+		// les nouveaux UID : la base l'ignore. Drapeaux lus ici, sous le verrou, avant le MOVE : un
+		// fil dont un message porte \Flagged ne part pas, aucun de ses messages (trouves ou non) ; il
+		// est remis dans la source en base, etoile, sans echeance, et ne compte pas comme un echec
+		// du job. Lot vide ensuite : aucun MOVE. Lecture en erreur : catch, tout est remis.
+		if (ctx.expiry && wanted.size) {
+			const starIds = [...(await flaggedAt(client, [...wanted.keys()]))].map((u) => wanted.get(u)!);
+			const keep = new Set(starIds.map((id) => ctx.threadOf.get(id)));
+			if (keep.size) {
+				const kept = rows.filter((r) => keep.has(ctx.threadOf.get(r.id)));
+				await revertToSource(
+					kept.filter((r) => !isDup(r.id)).map((r) => ({ id: r.id, uid: srcUid.get(r.id) ?? (absent.has(r.id) ? 0 : r.uid) })),
+					srcPath,
+					ctx,
+					starIds,
+				);
+				for (const [uid, id] of wanted) if (keep.has(ctx.threadOf.get(id))) wanted.delete(uid);
+				rows = rows.filter((r) => !keep.has(ctx.threadOf.get(r.id)));
+				console.warn(
+					`[mail:move] ${keep.size} fil(s) etoile(s) sur le serveur (\\Flagged) dans ${srcPath} (${tag}) : echeance annulee, laisses dans la source, etoiles en base`,
+					[...keep].slice(0, 20),
+				);
+			}
+		}
 
 		// ss2i (12/11, Spam Gmail de sam.legros@) : absence de la source PROUVEE (dossier lu en
 		// entier) : le message n'est plus sur le serveur (supprime depuis un autre client, Gmail
@@ -637,6 +666,18 @@ async function readArrived(
 }
 
 // UID -> Message-ID normalise, pour des UID du dossier ouvert (absents : pas dans la Map).
+// ss2i (archive-duree-de-vie) : UID du dossier selectionne qui portent \Flagged.
+async function flaggedAt(client: ImapFlow, uids: number[]) {
+	const out = new Set<number>();
+	const list = [...new Set(uids.map(Number))].filter((u) => u > 0);
+	for (const part of chunks(list, 500)) {
+		for await (const m of client.fetch(part.join(","), { uid: true, flags: true }, { uid: true })) {
+			if (m.flags?.has("\\Flagged")) out.add(Number(m.uid));
+		}
+	}
+	return out;
+}
+
 async function envelopesAt(client: ImapFlow, uids: number[]) {
 	const out = new Map<number, string>();
 	const list = [...new Set(uids.map(Number))].filter((u) => u > 0);
@@ -713,10 +754,13 @@ async function setUids(pairs: Array<[string, number]>, mailboxId: string) {
 
 // Remet dans le dossier source, en base, des messages que le serveur n'a pas deplaces
 // (chemin et UID de la source), puis recalcule les lignes de fil des deux dossiers.
+// starIds (job du tick) : messages \Flagged sur le serveur, etoiles en base dans la meme
+// transaction, puis leur fil (le trigger vide l'echeance), sans echeance reprise.
 async function revertToSource(
 	items: Array<{ id: string; uid: number }>,
 	srcPath: string,
 	ctx: MoveCtx,
+	starIds: string[] = [],
 ): Promise<number> {
 	if (!items.length) return 0;
 	let n = 0;
@@ -742,8 +786,21 @@ async function revertToSource(
 			`);
 			n += (res as unknown as unknown[]).length;
 		}
+		// Messages avant la ligne de fil : meme ordre de verrous que l'etoile web.
+		if (starIds.length) {
+			await tx.update(messages).set({ flagged: true, updatedAt: new Date() }).where(inArray(messages.id, starIds));
+		}
+		const starred = [...new Set(starIds.map((id) => ctx.threadOf.get(id)))].filter(Boolean) as string[];
 		const threadIds = [...new Set(items.map((it) => ctx.threadOf.get(it.id)))].filter(Boolean) as string[];
-		for (const t of threadIds) await resettleThread(tx, t, ctx.dest, ctx.src, ctx.srcExpiry.get(t) ?? null);
+		for (const t of threadIds) {
+			await resettleThread(tx, t, ctx.dest, ctx.src, starred.includes(t) ? null : (ctx.srcExpiry.get(t) ?? null));
+		}
+		if (starred.length) {
+			await tx
+				.update(mailboxThreads)
+				.set({ starred: true, updatedAt: new Date() })
+				.where(and(inArray(mailboxThreads.threadId, starred), eq(mailboxThreads.mailboxId, ctx.src.id)));
+		}
 	});
 	return n;
 }

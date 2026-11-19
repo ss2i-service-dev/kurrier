@@ -6,6 +6,7 @@ import type { CalendarEventEntity, CalendarEventAttendeeEntity, IdentityEntity }
 import { ReusableFormButton } from "@/components/common/reusable-form-button";
 import { maybeCalendarInvite, noCalendarInvite, yesCalendarInvite } from "@/lib/actions/calendar";
 import { useK, useNouvelle } from "@/components/k/ui-context";
+import InviteDayPreview from "@/components/outlook-calendar/invite-day-preview";
 
 type Props = {
     calendarEvent: CalendarEventEntity;
@@ -82,6 +83,8 @@ export default function RenderInvite({ calendarEvent, attendees, identity }: Pro
         <div className={nouvelle
             ? "my-4 overflow-hidden rounded-k border border-k-line bg-k-surface-2 text-k-ink"
             : "my-4 overflow-hidden rounded-2xl border border-neutral-200/70 bg-brand-100 dark:border-neutral-800 dark:bg-neutral-800"}>
+            {/* ss2i : le jour de l'invitation dans l'agenda Outlook, avec ses conflits (rien si pas d'Outlook) */}
+            <InviteDayPreview calendarEvent={calendarEvent} identityPublicId={identity.publicId} nouvelle={nouvelle} />
             <div className={nouvelle
                 ? "flex items-start justify-between gap-4 bg-k-surface px-4 py-3"
                 : "flex items-start justify-between gap-4 bg-neutral-50 px-4 py-3 dark:bg-neutral-900/40"}>

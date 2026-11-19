@@ -6,7 +6,7 @@
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/thread-links.ts
 import { assert } from "./mcp-test-env";
 import { createUserFixture } from "./mcp-fixtures";
-import { crmCompanies, db, mailboxThreads, messages, threadClients, threads } from "@db";
+import { crmCompanies, db, mailboxes, mailboxThreads, messages, threadClients, threads } from "@db";
 import { and, eq, inArray } from "drizzle-orm";
 import { simpleParser } from "mailparser";
 import { storeMessageInThread } from "../lib/message-payload-parser";
@@ -142,6 +142,21 @@ async function main() {
 		refused = true;
 	}
 	assert(refused, "ss2i_merge_threads refuse deux proprietaires");
+
+	// 7. Archiver avec une duree de vie (docs/plans/archive-duree-de-vie.md) : une fusion annule
+	//    l'echeance du fil fusionne (sens sur : le fil est conserve, rien ne part a la Corbeille).
+	const [arch] = await db
+		.insert(mailboxes)
+		.values({ ownerId: a.user.id, workspaceId: a.workspace.id, identityId: a.identity.id, kind: "archive", name: "Archive", slug: "archive", isDefault: false })
+		.returning();
+	const [P, R] = [id("exp-p"), id("exp-r")];
+	await ingest(a, arch.id, raw({ id: R, subject: "Re: echeance", inReplyTo: P, refs: [P], date: "Tue, 03 Nov 2026 11:00:00 +0000" }), true);
+	const [rRow] = await db.select().from(messages).where(and(eq(messages.ownerId, a.user.id), eq(messages.messageId, R)));
+	await db.update(mailboxThreads).set({ expiresAt: new Date(Date.now() + 30 * 86_400_000) }).where(eq(mailboxThreads.threadId, rRow.threadId));
+	const placedP = await ingest(a, arch.id, raw({ id: P, subject: "echeance", date: "Tue, 03 Nov 2026 10:00:00 +0000" }), true);
+	assert(placedP?.merged === true, "echeance : le parent arrive apres la reponse, les deux fils fusionnent");
+	const expRows = await db.select().from(mailboxThreads).where(eq(mailboxThreads.threadId, placedP!.threadId));
+	assert(expRows.length === 1 && expRows[0].messageCount === 2 && expRows[0].expiresAt === null, `echeance : ligne Archive du fil fusionne sans echeance (${expRows.map((r) => r.expiresAt)})`);
 }
 
 main()

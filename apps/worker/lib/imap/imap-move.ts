@@ -1,6 +1,6 @@
 import { db, mailboxes, mailboxSync, messages, mailboxThreads } from "@db";
 import { upsertMailboxThreadItem } from "@common";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { ImapFlow } from "imapflow";
 import { initSmtpClient } from "./imap-client";
 import {
@@ -12,9 +12,11 @@ import {
 	matchMovedUids,
 	normMessageId,
 	shouldMoveImap,
+	parseExpiry,
 	type DestEnvelope,
 } from "@common";
 import { resolveUids, type UidRow } from "./imap-resolve-uids";
+import { dueExpiredThreads } from "../mail-expiry";
 
 type MoveJob = {
 	threadId: string;
@@ -31,12 +33,21 @@ type MoveJob = {
 	// qui n'a plus aucun autre message dans le dossier source part en entier. Sans lui (tous
 	// les appels existants), c'est le fil entier, comme avant. `messageId` reste ignore.
 	messageIds?: string[];
+	// ss2i (archive-duree-de-vie) : echeance ISO d'un archivage avec duree de vie (op archive,
+	// ecrite sur la ligne d'arrivee seulement si le dossier d'arrivee est l'archive et la date
+	// valide, cf. parseExpiry) ; `expiry` marque le job de Corbeille poste par mail:expire-tick.
+	expiresAt?: string | null;
+	expiry?: boolean;
 };
+
+// Job du tick : l'echeance a change entre la verification du debut et la transaction.
+class ExpiryChanged extends Error {}
 
 export const moveMail = async (
 	data: MoveJob,
 	imapInstances: Map<string, ImapFlow>,
-) => {
+	expiryRetry = 0,
+): Promise<void> => {
 	const {
 		threadId,
 		threadIds: batchIds,
@@ -45,7 +56,7 @@ export const moveMail = async (
 		toMailboxId,
 	} = data;
 
-	const ids = (batchIds?.length ? batchIds : [threadId]).map(String).filter(Boolean);
+	let ids = (batchIds?.length ? batchIds : [threadId]).map(String).filter(Boolean);
 	if (!ids.length) return;
 
 	// Source mailbox
@@ -54,6 +65,16 @@ export const moveMail = async (
 		.from(mailboxes)
 		.where(eq(mailboxes.id, fromMailboxId));
 	if (!srcMailbox) return;
+
+	// ss2i (archive-duree-de-vie) : job du tick, seuls les fils encore dus partent (etoile, retour
+	// dans l'Inbox, echeance videe ou repoussee depuis le tick : rien), en entier (messageIds
+	// ignore). Revérifie sous verrou dans la transaction.
+	const now = new Date();
+	if (data.expiry) {
+		if (srcMailbox.kind !== "archive" || op !== "trash") return;
+		ids = (await dueExpiredThreads(db, { now, mailboxId: fromMailboxId, threadIds: ids })).map((t) => t.threadId);
+		if (!ids.length) return;
+	}
 
 	// Destination mailbox
 	let destMailboxRow: typeof mailboxes.$inferSelect | undefined;
@@ -98,6 +119,10 @@ export const moveMail = async (
 	// ss2i : « corbeille -> corbeille » (Delete clique depuis la corbeille) n'a rien a deplacer.
 	if (destMailboxRow.id === fromMailboxId) return;
 
+	// ss2i (archive-duree-de-vie) : echeance de la ligne d'arrivee, ecrite dans la transaction du
+	// deplacement ; tout autre deplacement (ou une date invalide, passee) ecrit NULL.
+	const exp = destMailboxRow.kind === "archive" ? parseExpiry(data.expiresAt, new Date()) : null;
+
 	const destPath: string =
 		(destMailboxRow.metaData as any)?.imap?.path ?? destMailboxRow.name;
 
@@ -119,7 +144,7 @@ export const moveMail = async (
 	if (threadMsgs.length === 0) return;
 
 	// Grain du message : seuls les messages demandes sont deplaces.
-	const plan = data.messageIds?.length
+	const plan = data.messageIds?.length && !data.expiry
 		? planMessageMove(threadMsgs, data.messageIds)
 		: null;
 	if (plan && !plan.messageIds.length) return;
@@ -179,7 +204,8 @@ export const moveMail = async (
 	// soit deplacee. OI 10286 : ce que le serveur n'a pas deplace est remis dans le dossier
 	// source en base (moveGroupOnImap), au lieu de laisser la base mentir.
 	const dupIds = new Set<string>();
-	await db.transaction(async (tx) => {
+	const srcExpiry = new Map<string, Date>();
+	const expiryChanged = await db.transaction(async (tx) => {
 		// ss2i (OI 10286) : copie deja presente a l'arrivee (meme Message-ID : envoi a soi-meme,
 		// copie des Envoyes deja rangee la) : l'index unique (mailbox_id, message_id) faisait
 		// echouer tout le job. La ligne source est supprimee en base, la copie d'arrivee la
@@ -238,13 +264,26 @@ export const moveMail = async (
 						),
 			);
 
+		// ss2i (archive-duree-de-vie) : job du tick, echeance revérifiee sous verrou, apres les
+		// messages (meme ordre de verrous que l'etoile cote web : messages, puis fils). Etoile,
+		// message arrive dans l'Inbox ou echeance changee depuis le debut du job : tout est annule
+		// et le job recommence, son debut ne garde que ce qui est encore du. L'echeance relue sert
+		// a la remettre sur la ligne Archive si le serveur refuse le MOVE (resettleThread).
+		if (data.expiry) {
+			const still = await dueExpiredThreads(tx, { now, mailboxId: fromMailboxId, threadIds: ids, forUpdate: true });
+			if (still.length !== ids.length) throw new ExpiryChanged();
+			for (const t of still) srcExpiry.set(t.threadId, t.expiresAt);
+		}
+
 		if (plan) {
 			// Les recapitulatifs de fil sont par dossier : ceux de la destination sont recalcules,
 			// ceux de la source aussi (fil partiel) ou supprimes (fil parti en entier).
-			for (const threadId of [...plan.fullThreadIds, ...plan.partialThreadIds]) {
+			const touched = [...plan.fullThreadIds, ...plan.partialThreadIds];
+			for (const threadId of touched) {
 				await refreshThreadIn(tx, threadId, destMailboxRow.id);
 				await refreshThreadIn(tx, threadId, fromMailboxId);
 			}
+			await setArrivalExpiry(tx, touched, destMailboxRow.id, exp);
 			return;
 		}
 
@@ -272,6 +311,7 @@ export const moveMail = async (
 				.set({
 					mailboxId: destMailboxRow.id,
 					mailboxSlug: op === "move" ? (destMailboxRow.slug ?? "custom") : op,
+					expiresAt: exp,
 					updatedAt: new Date(),
 				})
 				.where(
@@ -291,7 +331,18 @@ export const moveMail = async (
 		for (const t of new Set([...clash, ...dupThreads])) {
 			await refreshThreadIn(tx, t, destMailboxRow.id);
 		}
-	});
+		await setArrivalExpiry(tx, [...clash], destMailboxRow.id, exp);
+	}).then(
+		() => false,
+		(err) => {
+			if (err instanceof ExpiryChanged) return true;
+			throw err;
+		},
+	);
+	if (expiryChanged) {
+		if (expiryRetry >= 3) throw new Error(`[mail:move] echeances changees pendant le job (${fromMailboxId}) : rien deplace, rejoue plus tard`);
+		return moveMail(data, imapInstances, expiryRetry + 1);
+	}
 
 	if (!moveImap) return;
 	if (!byPath.size || !client) {
@@ -308,6 +359,7 @@ export const moveMail = async (
 		movingIds: new Set(toMove.map((m) => m.id)),
 		dupIds,
 		threadOf: new Map(toMove.map((m) => [m.id, m.threadId])),
+		srcExpiry,
 	};
 	let reverted = 0;
 	for (const g of byPath.values()) reverted += await moveGroupOnImap(client, g, ctx);
@@ -337,6 +389,8 @@ type MoveCtx = {
 	// dans la transaction, rien a remettre dans la source.
 	dupIds: Set<string>;
 	threadOf: Map<string, string>;
+	// ss2i (archive-duree-de-vie) : job du tick, echeance de chaque fil dans l'Archive source.
+	srcExpiry: Map<string, Date>;
 };
 
 /**
@@ -689,7 +743,7 @@ async function revertToSource(
 			n += (res as unknown as unknown[]).length;
 		}
 		const threadIds = [...new Set(items.map((it) => ctx.threadOf.get(it.id)))].filter(Boolean) as string[];
-		for (const t of threadIds) await resettleThread(tx, t, ctx.dest, ctx.src);
+		for (const t of threadIds) await resettleThread(tx, t, ctx.dest, ctx.src, ctx.srcExpiry.get(t) ?? null);
 	});
 	return n;
 }
@@ -719,6 +773,7 @@ async function resettleThread(
 	threadId: string,
 	from: typeof mailboxes.$inferSelect,
 	to: typeof mailboxes.$inferSelect,
+	expiresAt: Date | null = null,
 ) {
 	const has = async (mailboxId: string) =>
 		(
@@ -737,11 +792,36 @@ async function resettleThread(
 	if (!toRow && !(await has(from.id))) {
 		await tx
 			.update(mailboxThreads)
-			.set({ mailboxId: to.id, mailboxSlug: to.slug ?? null, updatedAt: new Date() })
+			.set({ mailboxId: to.id, mailboxSlug: to.slug ?? null, expiresAt: null, updatedAt: new Date() })
 			.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, from.id)));
 	}
 	await refreshThreadIn(tx, threadId, to.id);
 	await refreshThreadIn(tx, threadId, from.id);
+	// ss2i (archive-duree-de-vie) : job du tick refuse ou partiel, la ligne revenue (ou recreee)
+	// dans l'Archive reprend son echeance, sinon le job rejoue ne trouverait plus rien a faire et
+	// le fil resterait en Archive sans echeance. Tout autre retour : sans echeance.
+	if (expiresAt) {
+		await tx
+			.update(mailboxThreads)
+			.set({ expiresAt })
+			.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, to.id)));
+	}
+}
+
+// ss2i (archive-duree-de-vie) : echeance des lignes d'arrivee recalculees (collision, grain du
+// message) : celle du job, sinon aucune.
+async function setArrivalExpiry(tx: any, threadIds: string[], mailboxId: string, exp: Date | null) {
+	if (!threadIds.length) return;
+	await tx
+		.update(mailboxThreads)
+		.set({ expiresAt: exp })
+		.where(
+			and(
+				inArray(mailboxThreads.threadId, threadIds),
+				eq(mailboxThreads.mailboxId, mailboxId),
+				exp ? undefined : isNotNull(mailboxThreads.expiresAt),
+			),
+		);
 }
 
 // Curseur deltaFetch du dossier d'arrivee (cf. cursorAtTop / destCursorAfterMove) : lu avant le

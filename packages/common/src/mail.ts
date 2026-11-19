@@ -224,6 +224,15 @@ export async function upsertMailboxThreadItem(
 			},
 		});
 
+	// ss2i (archive-duree-de-vie) : un message du fil dans la boite de reception (reponse recue,
+	// desarchivage) annule l'echeance de ses lignes pour cette identite : le fil est revenu.
+	if (mbx.kind === "inbox") {
+		await dbh.execute(sql`
+			update mailbox_threads set expires_at = null
+			where thread_id = ${msg.threadId}::uuid and identity_id = ${mbx.identityId}::uuid and expires_at is not null
+		`);
+	}
+
 	// ss2i : une reponse envoyee fait remonter le fil dans les autres dossiers ou il
 	// se trouve (Boite de reception, dossiers personnels), comme dans Gmail ou
 	// Outlook. Sans cela, le message ne compte que pour Envoyes et le fil reste a sa

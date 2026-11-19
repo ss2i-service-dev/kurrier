@@ -136,7 +136,7 @@ async function trashOf(f: Fixture) {
 	return row;
 }
 
-async function folderOf(f: Fixture, kind: "archive" | "spam", name: string) {
+async function folderOf(f: Fixture, kind: "archive" | "spam" | "custom", name: string) {
 	const [row] = await db
 		.insert(mailboxes)
 		.values({
@@ -145,7 +145,7 @@ async function folderOf(f: Fixture, kind: "archive" | "spam", name: string) {
 			identityId: f.identity.id,
 			kind,
 			name,
-			slug: kind,
+			slug: kind === "custom" ? name.toLowerCase() : kind,
 			isDefault: false,
 			metaData: { imap: { path: name } },
 		})
@@ -244,6 +244,38 @@ const job = (threadIds: string[], mailboxId: string, moveImap: boolean) => ({
 	op: "trash" as const,
 	moveImap,
 });
+
+// Archiver avec une duree de vie : job de Corbeille poste par mail:expire-tick.
+const expiryJob = (threadIds: string[], mailboxId: string, moveImap: boolean) => ({ ...job(threadIds, mailboxId, moveImap), expiry: true });
+
+const expOf = async (threadId: string, mailboxId: string) => (await threadRow(threadId, mailboxId))?.expiresAt ?? null;
+
+const setExp = (threadId: string, mailboxId: string, at: Date | null) =>
+	db
+		.update(mailboxThreads)
+		.set({ expiresAt: at })
+		.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, mailboxId)));
+
+// Un message de plus dans un fil existant, ligne de fil du dossier recalculee.
+async function addMsg(f: Fixture, mailboxId: string, threadId: string, mid: string, uid: number | null = null, path = "INBOX") {
+	const [m] = await db
+		.insert(messages)
+		.values({
+			ownerId: f.user.id,
+			workspaceId: f.workspace.id,
+			mailboxId,
+			threadId,
+			messageId: mid,
+			subject: `fil ${mid}`,
+			text: "corps",
+			date: new Date(),
+			seen: false,
+			metaData: uid === null ? {} : { imap: { uid, mailboxPath: path } },
+		} as any)
+		.returning();
+	await upsertMailboxThreadItem(m.id);
+	return m.id;
+}
 
 async function main() {
 	// 1. Corbeille demandee en « base seule » par une page sans etat de synchro, dossier
@@ -728,6 +760,203 @@ async function main() {
 			rb.mailboxId === f.inbox.id && (await typeOf(tb.ids[0])) === "object" && (rb.metaData as any)?.imap?.mailboxPath === "INBOX" && imap.folders.get("INBOX")!.msgs.has(211),
 			`meta a null, non deplace par le serveur : remis dans l'INBOX, meta objet (${JSON.stringify(rb.metaData)})`,
 		);
+	}
+
+	// 15. Archiver avec une duree de vie (docs/plans/archive-duree-de-vie.md, bloc 2) : l'echeance
+	//     voyage dans le job (op archive, expiresAt) et moveMail l'ecrit sur la ligne d'arrivee,
+	//     dans la transaction du deplacement ; tout autre deplacement ecrit NULL. Le job de
+	//     Corbeille du tick (expiry: true) revérifie l'echeance au moment d'executer.
+	const X = new Date(Date.now() + 30 * 86_400_000);
+	const PAST = new Date(Date.now() - 3_600_000);
+	const same = (a: Date | null, b: Date) => !!a && a.getTime() === b.getTime();
+	{
+		const f = await createUserFixture("expiry-archive");
+		const archive = await folderOf(f, "archive", "Archive");
+		const custom = await folderOf(f, "custom", "Projets");
+		const tag = Date.now();
+
+		// a) chemin simple
+		const ta = await thread(f, f.inbox.id, [{ mid: `<exp-a-${tag}@x>`, uid: null }]);
+		await moveMail({ ...job([ta.id], f.inbox.id, false), op: "archive", expiresAt: X.toISOString() }, new Map());
+		assert(same(await expOf(ta.id, archive.id), X), `a) archive avec echeance, chemin simple : ligne Archive a l'echeance (${await expOf(ta.id, archive.id)})`);
+
+		// b) archive simple d'un fil dont la ligne source portait une echeance
+		const tb = await thread(f, f.inbox.id, [{ mid: `<exp-b-${tag}@x>`, uid: null }]);
+		await setExp(tb.id, f.inbox.id, X);
+		await moveMail({ ...job([tb.id], f.inbox.id, false), op: "archive" }, new Map());
+		assert(!!(await threadRow(tb.id, archive.id)) && (await expOf(tb.id, archive.id)) === null, "b) archive sans echeance : ligne Archive sans echeance, meme si la source en portait une");
+
+		// c) collision : le fil a deja sa ligne en Archive (cas Gmail « Tous les messages »)
+		const tc = await thread(f, archive.id, [{ mid: `<exp-c0-${tag}@x>`, uid: null }]);
+		await addMsg(f, f.inbox.id, tc.id, `<exp-c1-${tag}@x>`);
+		await moveMail({ ...job([tc.id], f.inbox.id, false), op: "archive", expiresAt: X.toISOString() }, new Map());
+		const rc = await threadRow(tc.id, archive.id);
+		assert(rc?.messageCount === 2 && same(rc.expiresAt, X) && !(await threadRow(tc.id, f.inbox.id)), `c) collision : ligne d'arrivee fusionnee, a l'echeance (${rc?.messageCount}, ${rc?.expiresAt})`);
+
+		// c bis) date invalide ou passee : archivage simple
+		const tc2 = await thread(f, f.inbox.id, [{ mid: `<exp-c2-${tag}@x>`, uid: null }]);
+		await moveMail({ ...job([tc2.id], f.inbox.id, false), op: "archive", expiresAt: PAST.toISOString() }, new Map());
+		assert(!!(await threadRow(tc2.id, archive.id)) && (await expOf(tc2.id, archive.id)) === null, "c bis) echeance passee : archive sans echeance");
+
+		// d) move hors Archive (dossier perso, puis retour dans la boite de reception)
+		const td = await thread(f, archive.id, [{ mid: `<exp-d-${tag}@x>`, uid: null }]);
+		await setExp(td.id, archive.id, X);
+		await moveMail({ threadId: td.id, threadIds: [td.id], mailboxId: archive.id, op: "move", toMailboxId: custom.id, moveImap: false, expiresAt: X.toISOString() }, new Map());
+		assert(!!(await threadRow(td.id, custom.id)) && (await expOf(td.id, custom.id)) === null, "d) move vers un dossier perso : echeance NULL (expiresAt ignore hors Archive)");
+		const td2 = await thread(f, archive.id, [{ mid: `<exp-d2-${tag}@x>`, uid: null }]);
+		await setExp(td2.id, archive.id, X);
+		await moveMail({ threadId: td2.id, threadIds: [td2.id], mailboxId: archive.id, op: "move", toMailboxId: f.inbox.id, moveImap: false }, new Map());
+		assert(!!(await threadRow(td2.id, f.inbox.id)) && (await expOf(td2.id, f.inbox.id)) === null, "d) desarchivage : ligne Inbox sans echeance");
+
+		// f) trigger : etoile sur une ligne a echeance, echeance ecrite sur une ligne etoilee
+		const tf = await thread(f, archive.id, [{ mid: `<exp-f-${tag}@x>`, uid: null }]);
+		await setExp(tf.id, archive.id, X);
+		await db.update(mailboxThreads).set({ starred: true }).where(and(eq(mailboxThreads.threadId, tf.id), eq(mailboxThreads.mailboxId, archive.id)));
+		assert((await expOf(tf.id, archive.id)) === null, "f) etoile posee : echeance NULL");
+		await setExp(tf.id, archive.id, X);
+		assert((await expOf(tf.id, archive.id)) === null, "f) echeance ecrite sur une ligne etoilee : reste NULL");
+
+		// g) message du meme fil dans la boite de reception : echeance de la ligne Archive annulee ;
+		//    un message du fil dans les Envoyes ne l'annule pas
+		const tg = await thread(f, archive.id, [{ mid: `<exp-g-${tag}@x>`, uid: null }]);
+		await setExp(tg.id, archive.id, X);
+		await addMsg(f, f.sent.id, tg.id, `<exp-g-sent-${tag}@x>`);
+		assert(same(await expOf(tg.id, archive.id), X), "g) message du fil dans les Envoyes : echeance gardee");
+		await addMsg(f, f.inbox.id, tg.id, `<exp-g-inbox-${tag}@x>`);
+		assert((await expOf(tg.id, archive.id)) === null, "g) message du fil dans la boite de reception : echeance de la ligne Archive NULL");
+	}
+
+	// 15 e) MOVE refuse par le serveur pendant un archivage avec echeance : ligne revenue dans la
+	//     source, sans echeance (source Inbox, et source dossier perso, ou l'Inbox ne la vide pas).
+	for (const src of ["Inbox", "Projets"] as const) {
+		const f = await createUserFixture(`expiry-refuse-${src}`);
+		const archive = await folderOf(f, "archive", "Archive");
+		const from = src === "Inbox" ? f.inbox : await folderOf(f, "custom", "Projets");
+		const path = src === "Inbox" ? "INBOX" : "Projets";
+		await syncRow(f, from.id, 20);
+		await syncRow(f, archive.id, 9);
+		const mid = `<exp-e-${src}-${Date.now()}@x>`;
+		const imap = new FakeStalwart({ [path]: { uidNext: 21, msgs: [[11, mid]] }, Archive: { uidNext: 10, msgs: [] } });
+		imap.refuseMove = true;
+		const te = await thread(f, from.id, [{ mid, uid: 11, path }]);
+		await expectThrow(
+			() => moveMail({ ...job([te.id], from.id, true), op: "archive", expiresAt: X.toISOString() }, on(f, imap)),
+			/non deplaces sur IMAP/,
+			`e) ${src} : MOVE refuse, le job echoue`,
+		);
+		const back = await threadRow(te.id, from.id);
+		assert(!!back && back.expiresAt === null && !(await threadRow(te.id, archive.id)), `e) ${src} : ligne revenue dans la source, echeance NULL (${back?.expiresAt})`);
+	}
+
+	// 15 h) job du tick (expiry: true) sur un fil du : en Corbeille, sur IMAP aussi, echeance NULL ;
+	//     messageIds ignore (le fil entier part).
+	{
+		const f = await createUserFixture("expiry-due");
+		const archive = await folderOf(f, "archive", "Archive");
+		const trash = await trashOf(f);
+		await syncRow(f, archive.id, 50);
+		await syncRow(f, trash.id, 0);
+		const m1 = `<exp-h1-${Date.now()}@x>`;
+		const m2 = `<exp-h2-${Date.now()}@x>`;
+		const imap = new FakeStalwart({ Archive: { uidNext: 51, msgs: [[40, m1], [41, m2]] }, "Deleted Items": { uidNext: 1, msgs: [] } });
+		const th = await thread(f, archive.id, [{ mid: m1, uid: 40, path: "Archive" }, { mid: m2, uid: 41, path: "Archive" }]);
+		await setExp(th.id, archive.id, PAST);
+		await moveMail({ ...expiryJob([th.id], archive.id, true), messageIds: [th.ids[0]] }, on(f, imap));
+		const rows = await msgRows(th.ids);
+		assert(rows.length === 2 && rows.every((r) => r.mailboxId === trash.id), "h) fil du : tous ses messages en Corbeille (messageIds ignore)");
+		assert(imap.folders.get("Archive")!.msgs.size === 0 && imap.folders.get("Deleted Items")!.msgs.size === 2, "h) fil du : deplace sur IMAP");
+		const tr = await threadRow(th.id, trash.id);
+		assert(!!tr && tr.expiresAt === null && !(await threadRow(th.id, archive.id)), `h) fil du : ligne en Corbeille, echeance NULL (${tr?.expiresAt})`);
+	}
+
+	// 15 i) job du tick sur un fil dont l'echeance a ete videe, future, avec une ligne Inbox soeur,
+	//     ou dont la source n'est pas l'Archive : rien ne bouge.
+	{
+		const f = await createUserFixture("expiry-not-due");
+		const archive = await folderOf(f, "archive", "Archive");
+		const trash = await trashOf(f);
+		const tag = Date.now();
+		const cleared = await thread(f, archive.id, [{ mid: `<exp-i1-${tag}@x>`, uid: null }]);
+		const future = await thread(f, archive.id, [{ mid: `<exp-i2-${tag}@x>`, uid: null }]);
+		await setExp(future.id, archive.id, X);
+		const sister = await thread(f, archive.id, [{ mid: `<exp-i3-${tag}@x>`, uid: null }]);
+		const sisterInbox = await addMsg(f, f.inbox.id, sister.id, `<exp-i3-inbox-${tag}@x>`);
+		await setExp(sister.id, archive.id, PAST);
+		await moveMail(expiryJob([cleared.id, future.id, sister.id], archive.id, false), new Map());
+		const rows = await msgRows([...cleared.ids, ...future.ids, ...sister.ids]);
+		assert(rows.every((r) => r.mailboxId === archive.id), "i) echeance videe, future, ou ligne Inbox soeur : rien ne part");
+		const [si] = await msgRows([sisterInbox]);
+		assert(si.mailboxId === f.inbox.id, "i) le message Inbox du fil reste dans l'Inbox");
+		assert(
+			!(await threadRow(cleared.id, trash.id)) && !(await threadRow(future.id, trash.id)) && !(await threadRow(sister.id, trash.id)),
+			"i) aucune ligne en Corbeille",
+		);
+		const inboxDue = await thread(f, f.inbox.id, [{ mid: `<exp-i4-${tag}@x>`, uid: null }]);
+		await setExp(inboxDue.id, f.inbox.id, PAST);
+		await moveMail(expiryJob([inboxDue.id], f.inbox.id, false), new Map());
+		const [ri] = await msgRows(inboxDue.ids);
+		assert(ri.mailboxId === f.inbox.id, "i) source hors Archive : rien ne part");
+	}
+
+	// 15 j) job du tick, MOVE refuse puis partiel : la ligne Archive garde son echeance (sinon le
+	//     job rejoue ne trouverait plus rien et le fil resterait en Archive sans echeance, sans
+	//     trace), et le job rejoue finit le travail.
+	{
+		const f = await createUserFixture("expiry-retry");
+		const archive = await folderOf(f, "archive", "Archive");
+		const trash = await trashOf(f);
+		await syncRow(f, archive.id, 50);
+		await syncRow(f, trash.id, 0);
+		const m1 = `<exp-j1-${Date.now()}@x>`;
+		const m2 = `<exp-j2-${Date.now()}@x>`;
+		const imap = new FakeStalwart({ Archive: { uidNext: 51, msgs: [[40, m1], [41, m2]] }, "Deleted Items": { uidNext: 1, msgs: [] } });
+		const tj = await thread(f, archive.id, [{ mid: m1, uid: 40, path: "Archive" }, { mid: m2, uid: 41, path: "Archive" }]);
+		await setExp(tj.id, archive.id, PAST);
+		imap.refuseMove = true;
+		await expectThrow(() => moveMail(expiryJob([tj.id], archive.id, true), on(f, imap)), /2 message\(s\) non deplaces sur IMAP/, "j) MOVE refuse : le job echoue");
+		assert(same(await expOf(tj.id, archive.id), PAST), `j) MOVE refuse : la ligne Archive garde son echeance (${await expOf(tj.id, archive.id)})`);
+		imap.refuseMove = false;
+		imap.skipOnMove.add(41);
+		await expectThrow(() => moveMail(expiryJob([tj.id], archive.id, true), on(f, imap)), /1 message\(s\) non deplaces sur IMAP/, "j) MOVE partiel : le job echoue");
+		assert(same(await expOf(tj.id, archive.id), PAST), `j) MOVE partiel : la ligne Archive recalculee garde son echeance (${await expOf(tj.id, archive.id)})`);
+		assert((await expOf(tj.id, trash.id)) === null, "j) MOVE partiel : la ligne Corbeille n'a pas d'echeance");
+		imap.skipOnMove.clear();
+		await moveMail(expiryJob([tj.id], archive.id, true), on(f, imap));
+		const rows = await msgRows(tj.ids);
+		assert(rows.every((r) => r.mailboxId === trash.id) && !(await threadRow(tj.id, archive.id)), "j) job rejoue : le fil est en Corbeille");
+	}
+
+	// 15 k) etoile posee pendant le job du tick (entre la verification et la transaction, ou le
+	//     worker attend la connexion IMAP) : la transaction revérifie sous verrou, rien ne part.
+	{
+		const f = await createUserFixture("expiry-race");
+		const archive = await folderOf(f, "archive", "Archive");
+		const trash = await trashOf(f);
+		const tk = await thread(f, archive.id, [{ mid: `<exp-k-${Date.now()}@x>`, uid: null }]);
+		await setExp(tk.id, archive.id, PAST);
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		let held!: () => void;
+		const holding = new Promise<void>((r) => (held = r));
+		const star = db.transaction(async (tx) => {
+			await tx.update(mailboxThreads).set({ starred: true }).where(and(eq(mailboxThreads.threadId, tk.id), eq(mailboxThreads.mailboxId, archive.id)));
+			held();
+			await gate;
+		});
+		await holding;
+		const mv = moveMail(expiryJob([tk.id], archive.id, false), new Map());
+		let waited = false;
+		for (let i = 0; i < 100 && !waited; i++) {
+			const [w] = await db.execute(sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`);
+			waited = Number((w as any)?.n) > 0;
+			if (!waited) await new Promise((r) => setTimeout(r, 50));
+		}
+		assert(waited, "k) le job attend le verrou de la ligne etoilee");
+		release();
+		await star;
+		await mv;
+		const [rk] = await msgRows(tk.ids);
+		assert(rk.mailboxId === archive.id && !(await threadRow(tk.id, trash.id)), "k) etoile posee pendant le job : le fil reste en Archive");
 	}
 }
 

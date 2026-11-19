@@ -13,6 +13,8 @@ export function useOutlookEvents(identityPublicId: string | undefined, from: str
 	const key = identityPublicId ? eventsKey(identityPublicId, from, days, sources, tz) : "";
 	const [events, setEvents] = useState<CalendarEvent[]>(() => (key ? (cachedEvents(key)?.events ?? []) : []));
 	const [loading, setLoading] = useState(false);
+	// Une lecture (ou une copie en cache) est arrivee pour cette periode : avant, « aucun evenement » ne veut rien dire.
+	const [loaded, setLoaded] = useState(() => !!key && !!cachedEvents(key));
 	const [error, setError] = useState<string | null>(null);
 	const req = useRef(0);
 	const sourcesRef = useRef(sources);
@@ -37,6 +39,7 @@ export function useOutlookEvents(identityPublicId: string | undefined, from: str
 			void loadEvents(identityPublicId, from, days, sourcesRef.current, tz).then((res) => {
 				if (id !== req.current) return;
 				setLoading(false);
+				setLoaded(true);
 				if (!res.ok) {
 					setError(res.error);
 					return;
@@ -49,7 +52,10 @@ export function useOutlookEvents(identityPublicId: string | undefined, from: str
 	);
 
 	useEffect(() => {
-		if (!cachedEvents(key)) setEvents([]);
+		if (!cachedEvents(key)) {
+			setEvents([]);
+			setLoaded(false);
+		}
 		load(false);
 	}, [key, load]);
 
@@ -87,5 +93,5 @@ export function useOutlookEvents(identityPublicId: string | undefined, from: str
 		setEvents((list) => (patch ? list.map((e) => (e.id === id ? { ...e, ...patch } : e)) : list.filter((e) => e.id !== id)));
 	}, []);
 
-	return { events, loading, error, reload, patchLocal };
+	return { events, loading, loaded, error, reload, patchLocal };
 }

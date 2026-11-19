@@ -8,6 +8,7 @@
 // laterale, chacun a sa couleur. Clic ou trace sur un creneau : nouvel evenement ; glisser un
 // evenement : deplacement, sa poignee : duree ; clic : detail (repondre, modifier, supprimer).
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { NativeSelect } from "@mantine/core";
 import { toast } from "sonner";
 import {
@@ -30,6 +31,7 @@ import { agendaStore, useAgendaState } from "@/components/outlook-calendar/agend
 import EventEditor, { type EditorTarget, blankInput } from "@/components/outlook-calendar/event-editor";
 import EventPopover from "@/components/outlook-calendar/event-popover";
 import { purgeFormBackups, recentFormBackup } from "@/lib/form-backup";
+import { agendaDateParam } from "@/lib/invite-preview";
 
 // Reouverture de l'editeur apres un rechargement : une fois par chargement de la page web (pas a
 // chaque retour sur l'Agenda dans la meme session).
@@ -54,6 +56,20 @@ export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookC
 	useEffect(() => {
 		agendaStore.init(boxes.map((b) => b.identityPublicId));
 	}, [boxes]);
+
+	// Ouverture sur un jour donne (?date=YYYY-MM-DD, et ?box=<identite> : lien « Ouvrir dans
+	// l'agenda » de l'encart d'une invitation). Seule la date affichee change : la vue (1, 3, 7,
+	// 14 jours, mois) memorisee sur le poste reste celle de l'utilisateur. Apres init, qui pose
+	// aujourd'hui.
+	const search = useSearchParams();
+	const wantedDate = agendaDateParam(search?.toString() ?? "");
+	const wantedBox = search?.get("box") ?? null;
+	useEffect(() => {
+		if (!wantedDate) return;
+		if (wantedBox && boxes.some((b) => b.identityPublicId === wantedBox)) agendaStore.setBox(wantedBox);
+		agendaStore.setAnchor(wantedDate);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [wantedDate, wantedBox]);
 
 	// Copie locale d'un evenement en cours de saisie (lib/form-backup.ts) : les copies de plus de
 	// 7 jours sont purgees ; apres un rechargement (deploiement, F5, plantage) une copie de moins

@@ -22,13 +22,17 @@ function fmtRange(startsAt: string, endsAt: string, locale?: string) {
         weekday: "short",
         month: "short",
         day: "numeric",
-        hour: "numeric",
+        hour: "2-digit",
         minute: "2-digit",
+        // ss2i : heures en 24 h, jamais AM/PM, quelle que soit la langue de l'interface.
+        hourCycle: "h23",
     });
 
     const fmtTime = new Intl.DateTimeFormat(locale, {
-        hour: "numeric",
+        hour: "2-digit",
         minute: "2-digit",
+        // ss2i : heures en 24 h, jamais AM/PM, quelle que soit la langue de l'interface.
+        hourCycle: "h23",
     });
 
     const sameDay =

@@ -229,6 +229,15 @@ test("cablage : la page agenda s'ouvre sur le jour de ?date= sans toucher a la m
 	assert.doesNotMatch(s, /agendaStore\.setView\(date/);
 });
 
+// Regle des 24 h (Samuel) : la carte d'invitation affichait « 11:30 AM - 12:00 PM ».
+test("carte d'invitation : heures en 24 h, jamais AM/PM", () => {
+	const card = src("components/mailbox/default/render-invite.tsx");
+	const formats = card.match(/new Intl\.DateTimeFormat\([^)]*\{[\s\S]*?\}\)/g) ?? [];
+	const withHour = formats.filter((f) => /hour:/.test(f));
+	assert.ok(withHour.length >= 2, "formats d'heure introuvables");
+	for (const f of withHour) assert.match(f, /hourCycle: "h23"/, `format sans 24 h : ${f.slice(0, 80)}`);
+});
+
 if (failures) {
 	console.log(`\n${failures} test(s) en echec`);
 	process.exit(1);

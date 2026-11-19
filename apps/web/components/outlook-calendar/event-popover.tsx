@@ -29,6 +29,8 @@ import { type EditorTarget, inputFromDetail } from "@/components/outlook-calenda
 import TeamsOptionsModal from "@/components/outlook-calendar/teams-options";
 import { formatEventForCopy } from "@/lib/event-copy";
 import { eventModalBox } from "@/lib/event-modal";
+import { openMeeting } from "@/lib/open-meeting";
+import { locationIsJustLink, meetingLabel, meetingProvider } from "@common/meeting-link";
 import { htmlToText } from "@/lib/mail-copy";
 
 const toMin = (v: string) => Number(v.slice(0, 2)) * 60 + Number(v.slice(3, 5));
@@ -135,6 +137,7 @@ export default function EventPopover({
 	const line = nouvelle ? "border-k-line" : "border-border";
 
 	const meeting = !!detail && detail.attendees.some((a) => a.address !== detail.organizerAddress);
+	const joinUrl = detail?.joinUrl ?? e.joinUrl;
 	const recurring = !!detail?.seriesMasterId;
 	const invitation = perm.canRespond;
 
@@ -333,17 +336,18 @@ export default function EventPopover({
 					</div>
 				)}
 
-				{(detail?.joinUrl ?? e.joinUrl) && (
+				{joinUrl && (
 					<a
-						href={detail?.joinUrl ?? e.joinUrl}
+						href={joinUrl}
 						target="_blank"
 						rel="noopener noreferrer"
-						className="inline-flex items-center gap-1.5 rounded-md bg-[#5b5fc7] px-2.5 py-1 text-[12.5px] font-medium text-white hover:opacity-90"
+						onClick={(ev) => openMeeting(ev, joinUrl)}
+						className={`inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-[13px] font-medium text-white hover:opacity-90 sm:px-2.5 sm:py-1 sm:text-[12.5px] ${meetingProvider(joinUrl) === "meet" ? "bg-[#1a73e8]" : "bg-[#5b5fc7]"}`}
 					>
-						<Video className="h-3.5 w-3.5" /> Rejoindre la réunion Teams
+						<Video className="h-3.5 w-3.5" /> Rejoindre {meetingProvider(joinUrl) ? `la réunion ${meetingLabel(joinUrl)}` : "la visio"}
 					</a>
 				)}
-				{e.location && (
+				{e.location && !locationIsJustLink(e.location, joinUrl) && (
 					<div className={`flex items-center gap-1 text-[13px] ${muted}`}>
 						<MapPin className="h-3.5 w-3.5 shrink-0" />
 						<span className="truncate">{e.location}</span>
@@ -580,7 +584,7 @@ export default function EventPopover({
 							<Forward className="h-3 w-3" /> Transférer
 						</button>
 					)}
-					{detail && source?.kind === "own" && detail.isOrganizer && detail.joinUrl && (
+					{detail && source?.kind === "own" && detail.isOrganizer && meetingProvider(detail.joinUrl) === "teams" && (
 						<button type="button" onClick={() => setTeamsOpen(true)} className={`inline-flex items-center gap-1 text-[12.5px] ${muted} hover:underline`}>
 							<Settings2 className="h-3 w-3" /> Options Teams
 						</button>

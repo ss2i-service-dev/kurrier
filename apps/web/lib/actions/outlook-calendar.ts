@@ -22,6 +22,7 @@ import {
 } from "@common/thread-agenda";
 import { type CalendarEvent, checkRange, safeTimeZone, utcToZoned } from "@common/outlook-calendar";
 import { extraReminders, mergeReminders } from "@common/meeting-reminders";
+import { meetingProvider } from "@common/meeting-link";
 import {
 	ATTACHMENT_MAX_BYTES,
 	type CalendarRole,
@@ -636,7 +637,7 @@ export async function outlookTeamsOptions(input: { identityPublicId: string; id:
 		const cfg = graphConfig();
 		const ev = await getEvent(cfg, me, String(input.id));
 		if (!ev.isOrganizer) throw new AgendaError("Seul l'organisateur règle les options de la réunion Teams.");
-		if (!ev.joinUrl) throw new AgendaError("Cet événement n'est pas une réunion Teams.");
+		if (!ev.joinUrl || meetingProvider(ev.joinUrl) !== "teams") throw new AgendaError("Cet événement n'est pas une réunion Teams.");
 		return { ok: true, options: await getTeamsOptions(cfg, me, ev.joinUrl) };
 	} catch (err) {
 		return failure("teams", err);
@@ -650,7 +651,7 @@ export async function saveOutlookTeamsOptions(input: { identityPublicId: string;
 		const cfg = graphConfig();
 		// L'identifiant de la reunion est relu depuis l'evenement, jamais pris du navigateur.
 		const ev = await getEvent(cfg, me, String(input.id));
-		if (!ev.isOrganizer || !ev.joinUrl) throw new AgendaError("Seul l'organisateur règle les options de la réunion Teams.");
+		if (!ev.isOrganizer || !ev.joinUrl || meetingProvider(ev.joinUrl) !== "teams") throw new AgendaError("Seul l'organisateur règle les options de la réunion Teams.");
 		const current = await getTeamsOptions(cfg, me, ev.joinUrl);
 		return { ok: true, options: await updateTeamsOptions(cfg, me, { ...input.options, meetingId: current.meetingId }) };
 	} catch (err) {

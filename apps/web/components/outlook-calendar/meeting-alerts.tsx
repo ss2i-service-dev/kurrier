@@ -19,6 +19,7 @@ import type { DueReminder } from "@common/outlook-graph";
 import { applySnoozes, bannerList, countdownLabel, minutesTo, reminderKey } from "@common/meeting-reminders";
 import { dismissOutlookReminder, outlookCalendarBoxes, snoozeOutlookReminder } from "@/lib/actions/outlook-calendar";
 import { agendaRead } from "@/components/outlook-calendar/agenda-api";
+import { openMeeting } from "@/lib/open-meeting";
 
 const FETCH_MS = 2 * 60_000;
 const TICK_MS = 5_000;
@@ -224,7 +225,10 @@ export default function MeetingAlerts() {
 							href={r.joinUrl}
 							target="_blank"
 							rel="noopener noreferrer"
-							onClick={dismiss}
+							onClick={(ev) => {
+								dismiss();
+								openMeeting(ev, r.joinUrl!);
+							}}
 							className="inline-flex items-center gap-1.5 rounded-md bg-[#5b5fc7] px-3 py-1 text-[12.5px] font-semibold text-white hover:bg-[#4f52b2]"
 						>
 							<Video className="h-3.5 w-3.5" /> Rejoindre

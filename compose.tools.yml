@@ -1,0 +1,75 @@
+# Outillage de dev du fork ss2i : installer, typer et tester sans rien installer sur le poste hors Docker.
+# Fichier a part (et non un override de db/docker-compose.dev.yml) : celui-ci est celui de l'amont, il demarre
+# la pile complete (redis, typesense, garage, dav) et exige db/local/.env ; ici rien de tout cela, et un
+# fichier propre au fork ne cree aucun conflit lors d'un merge de l'amont.
+# Le service node reste lance (sleep infinity) et on y entre par `exec -T` : un `compose run` creerait un
+# conteneur et un veth a chaque commande, ce qui coupe les pages Chrome du poste (ERR_NETWORK_CHANGED).
+# Usage : section « Dev outille » du README, ou scripts/test.sh.
+name: kurrier-tools
+
+services:
+  node:
+    # Node 22 comme les Dockerfiles de apps/web et apps/worker, mais au moins 22.23 : de 22.13 a 22.22, TextDecoder("windows-1252")
+    # decode comme du latin1 (0x80 donne U+0080 au lieu de l'euro, nodejs/node#60888), ce que text-preview.ts et son test exigent.
+    # .nvmrc (22.18.0) est donc trop ancien pour les tests.
+    image: node:22.23-bookworm-slim
+    user: "1000:1000"
+    working_dir: /repo
+    entrypoint: [ "/repo/scripts/tools-entrypoint.sh" ]
+    command: [ "sleep", "infinity" ]
+    init: true
+    depends_on:
+      migrate-test:
+        condition: service_completed_successfully
+    environment:
+      HOME: /home/node
+      PATH: /home/node/.local/bin:/repo/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Tests du worker (apps/worker/test/mcp-test-env.ts) : la base jetable ci-dessous, migrations appliquees
+      MCP_TEST_DATABASE_URL: postgres://postgres:test@postgres-test:5432/kurrier_test
+    volumes:
+      - .:/repo
+      # HOME de l'utilisateur node : store pnpm (~/.local/share/pnpm/store) et cache corepack, conserves d'un `down` a l'autre
+      - node-home:/home/node
+
+  # Base jetable, en RAM : rien ne survit a `down`.
+  postgres-test:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: kurrier_test
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d kurrier_test" ]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql
+    command: >
+      postgres
+      -c fsync=off
+      -c synchronous_commit=off
+      -c full_page_writes=off
+      -c max_connections=200
+
+  # Memes migrations et meme script que le service migrate de db/docker-compose.yml (db/init/db-bootstrap.sh).
+  migrate-test:
+    image: postgres:18
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres-test
+      PGUSER: postgres
+      PGPASSWORD: test
+      PGDATABASE: kurrier_test
+    volumes:
+      - ./db/init:/scripts:ro
+    entrypoint: [ "/bin/bash", "/scripts/db-bootstrap.sh" ]
+    restart: "no"
+
+volumes:
+  node-home:

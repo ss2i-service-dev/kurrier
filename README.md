@@ -107,6 +107,27 @@ Guides include installation, provider setup, instructions, and more.
 
 ---
 
+## Dev outille (fork ss2i)
+
+Rien à installer sur le poste hors Docker : ni node, ni pnpm, ni tsx, ni tsc, ni Postgres. Tout passe par `compose.tools.yml` (service `node`, Node 22 avec corepack et le pnpm du champ `packageManager`, utilisateur 1000:1000, le dépôt monté dans `/repo`, un volume `node-home` qui garde le store pnpm et le cache corepack ; service `postgres-test`, un Postgres 18 jetable en RAM dont `migrate-test` applique `db/init/migrations` avec le même `db-bootstrap.sh` que la stack).
+
+Le service `node` reste lancé et on y entre par `exec -T` : un `docker compose run` crée un conteneur et un veth à chaque commande, ce qui coupe les pages Chrome du poste.
+
+```bash
+docker compose -f compose.tools.yml up -d                                # node + base de test migrée
+dt() { docker compose -f compose.tools.yml exec -T node scripts/test.sh "$@"; }
+dt install                                                               # pnpm install --frozen-lockfile
+dt web                                                                   # tous les tests de apps/web/test (ou : dt web apps/web/test/x.ts)
+dt worker                                                                # tous les tests de apps/worker/test, sur la base de test (ou : dt worker apps/worker/test/x.ts)
+dt tsc-web                                                               # tsc apps/web --incremental false
+dt tsc-worker                                                            # tsc apps/worker (6 erreurs connues, sans lien avec les tests)
+docker compose -f compose.tools.yml down                                 # arrête tout, la base disparaît, le store pnpm reste (down -v pour l'effacer)
+```
+
+Une commande libre passe par `docker compose -f compose.tools.yml exec -T node <commande>` (par exemple `pnpm why zod`, ou `node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/move-imap.ts`). La base de test s'atteint par `MCP_TEST_DATABASE_URL`, déjà posée dans le service (`postgres://postgres:test@postgres-test:5432/kurrier_test`). Node 22.23 au moins : de 22.13 à 22.22, `TextDecoder("windows-1252")` décode comme du latin1 (nodejs/node#60888) et `apps/web/test/text-preview.ts` échoue, alors que `.nvmrc` indique 22.18.0.
+
+---
+
 ## 🖥 Screenshots
 
 ### 📨 Webmail View

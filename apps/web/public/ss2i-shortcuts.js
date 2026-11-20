@@ -71,7 +71,9 @@
   // L'interface classique n'a pas ces attributs : rien ne change pour elle.
   const nouvelle = () => document.documentElement.dataset.ui === "ss2i";
   const ACTIONS_K = { Compose: "compose", Reply: "reply", Forward: "forward", Archive: "archive", Delete: "delete", Send: "send" };
-  const visible = (el) => el && el.offsetParent !== null;
+  // ss2i (20/11) : la liste reste montee sous le panneau du fil, invisible et inert ;
+  // ses boutons ne doivent jamais etre vises.
+  const visible = (el) => el && el.offsetParent !== null && !el.closest("[inert]");
   const cliquerK = (action) => {
     const cible = Array.from(document.querySelectorAll(`[data-k-action="${action}"]`)).filter(visible).pop();
     if (cible) cible.click();
@@ -91,7 +93,7 @@
 
   const cliquer = (libelle) => {
     if (nouvelle() && ACTIONS_K[libelle] && cliquerK(ACTIONS_K[libelle])) return true;
-    const boutons = Array.from(document.querySelectorAll("button, a[role=button]"));
+    const boutons = Array.from(document.querySelectorAll("button, a[role=button]")).filter((b) => !b.closest("[inert]"));
     const cible =
       boutons.find((b) => b.textContent.trim() === libelle) ||
       boutons.find((b) => b.textContent.trim().startsWith(libelle));
@@ -110,7 +112,7 @@
     const marque = libelle === "Delete" ? "selection-delete" : "selection-archive";
     const cible = Array.from(
       document.querySelectorAll(`button[data-ss2i-shortcut="${marque}"]`)
-    ).find((b) => b.offsetParent !== null);
+    ).find(visible);
     if (cible) cible.click();
     return Boolean(cible);
   };
@@ -156,7 +158,7 @@
   const marquerNonLu = () => {
     if (!dansUnMail()) return false;
     if (nouvelle() && cliquerK("unread")) return true;
-    const cible = document.querySelector('button[aria-label="Mark as unread"]');
+    const cible = Array.from(document.querySelectorAll('button[aria-label="Mark as unread"]')).find(visible);
     if (cible) cible.click();
     return Boolean(cible);
   };

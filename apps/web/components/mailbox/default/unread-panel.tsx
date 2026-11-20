@@ -9,6 +9,7 @@ import { useShowSnippet } from "@/components/mailbox/default/list-preview-contex
 import { fetchUnreadPanelThreads } from "@/lib/actions/unread-panel";
 import type { UnreadPanelThread } from "@/lib/actions/unread-panel";
 import { useHiddenThreads } from "@/lib/pending-moves";
+import { useListMounted, useListUnderThread } from "@/components/mailbox/default/list-under-thread-context";
 
 // ss2i : panneau lateral des fils non lus du dossier courant, a cote du fil
 // ouvert (option par utilisateur, voir thread-slot.tsx). Le fil ouvert reste
@@ -55,6 +56,9 @@ export default function UnreadPanel({
 	const isWide = useMediaQuery("(min-width: 1280px)");
 	const isHidden = useHiddenThreads();
 	const showSnippet = useShowSnippet();
+	// ss2i (20/11) : dans le panneau du fil (defilement propre), colle en haut de ce panneau.
+	const listMounted = useListMounted();
+	const inPane = useListUnderThread() === "hidden" && listMounted;
 
 	const [threads, setThreads] = useState<UnreadPanelThread[] | null>(null);
 	const currentRef = useRef<HTMLLIElement>(null);
@@ -98,7 +102,7 @@ export default function UnreadPanel({
 	return (
 		<aside
 			aria-label="Unread messages"
-			className="sticky top-[4.5rem] mr-4 mt-4 hidden max-h-[calc(100vh-5.5rem)] w-[320px] shrink-0 flex-col overflow-hidden rounded-xl border bg-background/50 xl:flex lg:mr-8"
+			className={`sticky ${inPane ? "top-4 max-h-[calc(100dvh-var(--ss2i-mail-header-h,0px)-2rem)]" : "top-[4.5rem] max-h-[calc(100vh-5.5rem)]"} mr-4 mt-4 hidden w-[320px] shrink-0 flex-col overflow-hidden rounded-xl border bg-background/50 xl:flex lg:mr-8`}
 		>
 			<div className="flex items-center justify-between border-b px-4 py-3">
 				<span className="text-sm font-semibold">Unread</span>

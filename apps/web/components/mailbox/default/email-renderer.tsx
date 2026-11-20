@@ -57,6 +57,10 @@ export type MessageAttachmentWithUrl = MessageAttachmentEntity & {
 };
 
 function getScrollParent(el: HTMLElement): HTMLElement {
+	// ss2i (20/11) : dans le panneau du fil (thread-pane.tsx), toujours lui, meme quand un mail
+	// court ne deborde pas encore : sinon le document defilerait et la liste cachee avec.
+	const pane = el.closest("[data-ss2i-thread-pane]") as HTMLElement | null;
+	if (pane) return pane;
 	let p: HTMLElement | null = el.parentElement;
 	while (p) {
 		const s = getComputedStyle(p);

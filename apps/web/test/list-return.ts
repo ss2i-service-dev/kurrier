@@ -4,7 +4,7 @@
 // Ce test est lance par Dockerfile.web avant le build : rouge = pas d'image.
 //   1) logique (lib/list-return.ts) : chemin de la liste, historique, dernier fil encore affiche ;
 //   2) cablage : toute liste classique masquee quand un fil est ouvert (className
-//      onThread ? "hidden") pose la ref de useListReturn et passe lastViewed a ses lignes.
+//      onThread ? (pane ? "invisible" : "hidden"), 20/11) pose la ref de useListReturn et passe lastViewed a ses lignes.
 // Lancement (depuis la racine) :
 //   node_modules/.bin/tsx apps/web/test/list-return.ts
 import assert from "node:assert/strict";
@@ -76,10 +76,10 @@ test("cablage lib/list-return.ts : marque au demontage, reprise au remontage", (
 const dir = join(__dirname, "../components/mailbox/default");
 for (const f of readdirSync(dir).filter((n) => n.endsWith(".tsx"))) {
 	const src = readFileSync(join(dir, f), "utf8");
-	if (!/className=\{onThread \? "hidden"/.test(src) || !/<WebmailListItem/.test(src)) continue;
+	if (!/className=\{onThread \? \(pane \? "invisible" : "hidden"\)/.test(src) || !/<WebmailListItem/.test(src)) continue;
 	test(`cablage ${f} : useListReturn, ref sur la liste, lastViewed sur les lignes`, () => {
 		assert.match(src, /useListReturn\(/);
-		assert.match(src, /ref=\{listRef\} className=\{onThread \? "hidden"/);
+		assert.match(src, /ref=\{listRef\} className=\{onThread \? \(pane \? "invisible" : "hidden"\)/);
 		const rows = (src.match(/<WebmailListItem(Mobile)?\b/g) ?? []).length;
 		const marked = (src.match(/lastViewed=\{/g) ?? []).length;
 		assert.ok(rows > 0, "aucune ligne de fil trouvee");

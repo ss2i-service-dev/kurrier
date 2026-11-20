@@ -39,9 +39,10 @@ test("la barre d'actions de la liste se colle sous la barre du haut, pas en top-
 	assert.ok(list.includes(`sticky top-[var(${VAR},0px)]`));
 	assert.doesNotMatch(list, /className="sticky top-0/);
 });
-test("la barre de retour d'un fil (mobile) se colle sous la barre du haut", () => {
+test("la barre de retour d'un fil (mobile) se colle sous la barre du haut (ou en haut du panneau du fil, 20/11)", () => {
 	const slot = src("components/mailbox/default/thread-slot.tsx");
-	assert.ok(slot.includes(`sticky top-[var(${VAR},0px)]`));
+	assert.ok(slot.includes(`"top-[var(${VAR},0px)]"`));
+	assert.ok(slot.includes(`pane ? "top-0"`));
 	assert.match(slot, /md:hidden/);
 	assert.match(slot, /leaveThreadToList\(router/);
 });

@@ -88,7 +88,10 @@ function saveHistory(listKey: string, history: string[]) {
  * l'element de la liste (celui qui est masque quand un fil est ouvert) et l'identifiant
  * du fil a marquer.
  */
-export function useListReturn(pathname: string | null, visibleIds: string[]) {
+// ss2i (20/11) : pane = le fil s'ouvre dans le panneau a defilement propre (thread-pane.tsx)
+// et la liste reste montee dessous sans bouger : rien a remonter ni a retablir, seul le
+// repere du dernier fil consulte sert encore.
+export function useListReturn(pathname: string | null, visibleIds: string[], pane = false) {
 	const path = pathname ?? "";
 	const threadId = threadIdOf(path);
 	const listKey = listPathOf(path);
@@ -121,11 +124,13 @@ export function useListReturn(pathname: string | null, visibleIds: string[]) {
 			const next = pushViewed(loadHistories()[listKey] ?? [], threadId);
 			saveHistory(listKey, next);
 			setHistory(next);
+			if (pane) return;
 			// Ouvert depuis la liste : le fil commence en haut de la page.
 			if (before === null) window.scrollTo(0, 0);
 			return;
 		}
 		setHistory(loadHistories()[listKey] ?? []);
+		if (pane) return;
 		// Premier rendu : retour d'un fil seulement si la liste avait ete demontee en l'ouvrant.
 		const remounted = before === undefined && takeListReturn(listKey);
 		if (!before && !remounted) return;
@@ -136,7 +141,7 @@ export function useListReturn(pathname: string | null, visibleIds: string[]) {
 		window.scrollTo(0, y);
 		const raf = requestAnimationFrame(() => window.scrollTo(0, y));
 		return () => cancelAnimationFrame(raf);
-	}, [threadId, listKey]);
+	}, [threadId, listKey, pane]);
 
 	return { ref, lastViewedId: pickLastViewed(history, visibleIds) };
 }

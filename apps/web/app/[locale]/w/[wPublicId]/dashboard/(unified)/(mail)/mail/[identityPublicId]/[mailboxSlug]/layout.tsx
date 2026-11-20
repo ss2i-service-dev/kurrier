@@ -5,6 +5,8 @@ import { unreadPanelEnabled } from "@/lib/actions/unread-panel";
 import { isNouvelleInterface } from "@/lib/actions/interface-pref";
 import MailPanes from "@/components/k/mail-panes";
 import KSearchHeader from "@/components/k/search-header";
+import { listUnderThread } from "@/lib/actions/list-under-thread";
+import { ListUnderThreadProvider } from "@/components/mailbox/default/list-under-thread-context";
 
 type LayoutProps = {
 	children: ReactNode;
@@ -27,13 +29,16 @@ export default async function DashboardLayout({
 	// ss2i : panneau des non-lus a cote du fil ouvert, option par utilisateur.
 	const { identityPublicId, mailboxSlug } = await params;
 	const unreadPanel = (await unreadPanelEnabled()) ? { identityPublicId, mailboxSlug } : null;
+	// ss2i (20/11) : liste masquee sous le fil (defaut) -> fil dans un panneau a defilement
+	// propre, liste montee dessous sans bouger (thread-slot.tsx, list-slot.tsx).
+	const listMode = await listUnderThread();
 
 	return (
-		<>
-            <MailboxSearchHeader params={params} />
+		<ListUnderThreadProvider mode={listMode}>
+			<MailboxSearchHeader params={params} />
 
 			<ThreadSlot unreadPanel={unreadPanel}>{thread}</ThreadSlot>
 			{children}
-		</>
+		</ListUnderThreadProvider>
 	);
 }

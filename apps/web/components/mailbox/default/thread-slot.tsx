@@ -4,6 +4,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { leaveThreadToList } from "@/lib/leave-thread";
 import UnreadPanel from "@/components/mailbox/default/unread-panel";
+import ThreadPane from "@/components/mailbox/default/thread-pane";
+import { useListMounted, useListUnderThread } from "@/components/mailbox/default/list-under-thread-context";
 
 // Le fil ouvert est rendu dans la route parallele « @thread ». En navigation
 // douce (clic sur Inbox dans la barre laterale), Next conserve le contenu de
@@ -16,6 +18,9 @@ import UnreadPanel from "@/components/mailbox/default/unread-panel";
 // ss2i : avec l'option « Unread messages panel » (unreadPanel renseigne), le
 // fil est place dans une colonne souple et le panneau des non-lus a sa droite ;
 // sans l'option, rien ne change.
+//
+// ss2i (20/11) : option « liste masquee sous le fil » (defaut) : le fil s'ouvre dans
+// un panneau a defilement propre (thread-pane.tsx), la liste reste dessous sans bouger.
 export default function ThreadSlot({
 	children,
 	unreadPanel,
@@ -25,11 +30,14 @@ export default function ThreadSlot({
 }) {
 	const pathname = usePathname();
 	const router = useRouter();
+	// Panneau seulement par-dessus une liste montee (pas en chargement direct d'un fil).
+	const listMounted = useListMounted();
+	const pane = useListUnderThread() === "hidden" && listMounted;
 	if (!/\/threads\/[^/]+/.test(pathname ?? "")) return null;
 	// ss2i : sur mobile, aucun moyen de revenir a la liste depuis un fil hormis le bouton
 	// Precedent du telephone : barre de retour collee sous la barre du haut.
 	const back = (
-		<div className="sticky top-[var(--ss2i-mail-header-h,0px)] z-40 border-b bg-background/95 px-2 py-1 backdrop-blur md:hidden" data-ss2i-thread-back="">
+		<div className={`sticky ${pane ? "top-0" : "top-[var(--ss2i-mail-header-h,0px)]"} z-40 border-b bg-background/95 px-2 py-1 backdrop-blur md:hidden`} data-ss2i-thread-back="">
 			<button
 				type="button"
 				onClick={() => leaveThreadToList(router, pathname ?? "")}
@@ -40,16 +48,21 @@ export default function ThreadSlot({
 			</button>
 		</div>
 	);
-	if (!unreadPanel) return <>{back}{children}</>;
-	return (
-		<>
-		{back}
+	const content = !unreadPanel ? (
+		children
+	) : (
 		<div className="flex items-start">
 			<div className="min-w-0 flex-1" data-ss2i-thread-column="">
 				{children}
 			</div>
 			<UnreadPanel identityPublicId={unreadPanel.identityPublicId} mailboxSlug={unreadPanel.mailboxSlug} />
 		</div>
-		</>
+	);
+	if (!pane) return <>{back}{content}</>;
+	return (
+		<ThreadPane threadKey={pathname ?? ""}>
+			{back}
+			{content}
+		</ThreadPane>
 	);
 }

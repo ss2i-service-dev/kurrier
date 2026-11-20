@@ -64,14 +64,15 @@ test("action : rangee dans workspaces.meta.ss2iListUnderThread[userId], sans tab
 	assert.ok(/revalidatePath\(/.test(src), "pas de revalidation");
 	assert.ok(!/pgTable|create table/i.test(src), "ne doit pas creer de table");
 });
-test("composant : chemin par usePathname (pas useParams), rend null quand masquee", () => {
+test("composant : chemin par usePathname (pas useParams), liste montee mais invisible et inert quand masquee (20/11)", () => {
 	const p = "components/mailbox/default/list-slot.tsx";
 	assert.ok(existsSync(join(__dirname, "..", p)), "list-slot.tsx absent");
 	const src = read(p);
 	assert.ok(/"use client"/.test(src));
 	assert.ok(/usePathname\(/.test(src), "usePathname attendu");
 	assert.ok(!/useParams\(/.test(src), "useParams interdit (ancien threadId dans le slot conserve)");
-	assert.ok(/listIsHidden\(/.test(src) && /return null/.test(src), "la liste n'est pas masquee");
+	assert.ok(/listIsHidden\(/.test(src) && /invisible/.test(src) && /inert=\{hidden\}/.test(src), "la liste n'est pas masquee");
+	assert.ok(!/return null/.test(src), "la liste ne doit plus etre demontee (thread-pane.ts)");
 });
 test("page du dossier : seule la liste classique est enveloppee, la nouvelle interface intacte", () => {
 	const src = read(`${dir}/[mailboxSlug]/page.tsx`);

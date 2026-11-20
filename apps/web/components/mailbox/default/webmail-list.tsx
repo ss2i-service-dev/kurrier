@@ -19,6 +19,7 @@ import { usePathname } from "next/navigation";
 import {use} from "react";
 import { useHiddenThreads } from "@/lib/pending-moves";
 import { useListReturn } from "@/lib/list-return";
+import { useListUnderThread } from "@/components/mailbox/default/list-under-thread-context";
 import { useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
 import { inOutbox } from "@/lib/outbox-view";
 
@@ -53,6 +54,9 @@ export default function WebmailList({
 	// a la liste depuis un fil ouvert (route parallele conservee).
 	const pathname = usePathname();
 	const onThread = /\/threads\/[^/]+/.test(pathname ?? "");
+	// ss2i (20/11) : fil dans le panneau a defilement propre -> liste invisible et inert, jamais
+	// display:none (la hauteur du document et son scrollY seraient perdus).
+	const pane = useListUnderThread() === "hidden";
 	// ss2i : les fils en cours de depart (corbeille, archive...) disparaissent des le clic.
 	const isHidden = useHiddenThreads();
 	const shownThreads = serverThreads.filter(
@@ -68,6 +72,7 @@ export default function WebmailList({
 	const { ref: listRef, lastViewedId } = useListReturn(
 		pathname,
 		mailboxThreads.map((t) => String(t.threadId)),
+		pane,
 	);
 
 	const renderItem = (mailboxThreadItem: (typeof mailboxThreads)[number]) =>
@@ -105,7 +110,7 @@ export default function WebmailList({
 	useSendListRefresh(shownThreads.map((t) => t.draftSend));
 
 	return (
-		<div ref={listRef} className={onThread ? "hidden" : ""} data-ss2i-mail-list="">
+		<div ref={listRef} className={onThread ? (pane ? "invisible" : "hidden") : ""} inert={onThread && pane} data-ss2i-mail-list="">
 			<DynamicContextProvider
 				initialState={{
 					selectedThreadIds: new Set(),

@@ -21,6 +21,7 @@ import { useLinkedThreads } from "@/lib/client-link";
 import type { SelectAllScope } from "@/lib/actions/select-all";
 import { useNouvelle } from "@/components/k/ui-context";
 import { useListReturn } from "@/lib/list-return";
+import { useListUnderThread } from "@/components/mailbox/default/list-under-thread-context";
 import KThreadListStatic, { type KStaticListProps } from "@/components/k/thread-list-static";
 
 type WebListProps = {
@@ -83,15 +84,18 @@ function ClassicWebmailListLabelSearch({
     // le slot @thread conserve garde l'ancien threadId et la liste des resultats restait masquee.
     const pathname = usePathname();
     const onThread = /\/threads\/[^/]+/.test(pathname ?? "");
+    // ss2i (20/11) : fil dans le panneau a defilement propre -> liste invisible et inert, jamais
+    // display:none (la hauteur du document et son scrollY seraient perdus).
+    const pane = useListUnderThread() === "hidden";
 
     // ss2i : ordre affiche des fils, pour la selection par plage (Maj+clic).
     // Test apps/web/test/thread-selection.ts (regression du 05/11/2026).
     const orderedThreadIds = mailboxThreads.map((t) => String(t.threadId));
     // ss2i : position de la liste et repere du dernier fil consulte au retour d'un fil.
-    const { ref: listRef, lastViewedId } = useListReturn(pathname, orderedThreadIds);
+    const { ref: listRef, lastViewedId } = useListReturn(pathname, orderedThreadIds, pane);
 
     return (
-        <div ref={listRef} className={onThread ? "hidden" : ""}>
+        <div ref={listRef} className={onThread ? (pane ? "invisible" : "hidden") : ""} inert={onThread && pane}>
             <DynamicContextProvider
                 initialState={{
                     selectedThreadIds: new Set(),

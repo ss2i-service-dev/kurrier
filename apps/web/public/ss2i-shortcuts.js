@@ -25,6 +25,7 @@
     ["forward", ["f"], "Transferer", () => cliquer("Forward")],
     ["archive", ["a"], "Archiver (le mail ouvert ou les mails coches)", () => surMailOuSelection("Archive")],
     ["archiveFor", ["Shift+a"], "Archiver pour... (ouvre le menu des durees : le mail ouvert ou les mails coches)", () => archiverPour()],
+    ["selectAll", ["Ctrl+a"], "Tout selectionner (les mails de la liste affichee)", () => toutSelectionner()],
     ["delete", ["e", "#"], "Supprimer (le mail ouvert ou les mails coches)", () => surMailOuSelection("Delete")],
     ["unread", ["u"], "Marquer non lu et revenir a la liste", () => marquerNonLu()],
     ["search", ["/"], "Rechercher", () => focaliserRecherche()],
@@ -125,6 +126,19 @@
     if (!cible || cible.disabled) return false;
     cible.click();
     rendreLeFocusAuMenu(8);
+    return true;
+  };
+  // Ctrl+A sur une liste de mails : coche la case « tout selectionner » de l'en-tete
+  // (data-ss2i-shortcut="select-all", mail-list-header.tsx et k/list-header.tsx), qui
+  // coche les fils de la page. Ailleurs, Ctrl+A garde son effet natif : dans un champ,
+  // pendant la redaction d'un mail, dans un menu ou une fenetre, ou sans liste visible
+  // (mail ouvert en plein ecran) ou l'on peut vouloir selectionner le texte du mail.
+  const toutSelectionner = () => {
+    if (dansUneSaisie(document.activeElement) || composeurOuvert()) return false;
+    if (document.querySelector('[role="menu"], [role="dialog"]')) return false;
+    const cible = Array.from(document.querySelectorAll('input[data-ss2i-shortcut="select-all"]')).find(visible);
+    if (!cible || cible.disabled) return false;
+    if (!cible.checked) cible.click();
     return true;
   };
   // Mantine Menu piege le focus a l'ouverture ; sinon (declencheur remonte, rendu tardif) on le

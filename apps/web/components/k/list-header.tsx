@@ -303,6 +303,7 @@ function KListHeader({
 							}}
 							checked={isChecked}
 							aria-label="Tout sélectionner"
+							data-ss2i-shortcut="select-all"
 							className="h-4 w-4 cursor-pointer accent-[var(--k-accent)]"
 						/>
 					</label>

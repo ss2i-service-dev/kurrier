@@ -14,6 +14,7 @@ export type ShortcutId =
 	| "forward"
 	| "archive"
 	| "archiveFor"
+	| "selectAll"
 	| "delete"
 	| "unread"
 	| "search"
@@ -44,6 +45,7 @@ export const SHORTCUTS: ShortcutDef[] = [
 	{ id: "unread", group: "read", en: "Mark as unread", fr: "Marquer comme non lu", defaults: ["u"] },
 	{ id: "archive", group: "organize", en: "Archive (open or selected mail)", fr: "Archiver (le mail ouvert ou les mails cochés)", defaults: ["a"] },
 	{ id: "archiveFor", group: "organize", en: "Archive for… (open or selected mail)", fr: "Archiver pour… (le mail ouvert ou les mails cochés)", defaults: ["Shift+a"] },
+	{ id: "selectAll", group: "organize", en: "Select all mail in the list", fr: "Tout sélectionner (les mails de la liste affichée)", defaults: ["Ctrl+a"] },
 	{ id: "delete", group: "organize", en: "Delete (open or selected mail)", fr: "Supprimer (le mail ouvert ou les mails cochés)", defaults: ["e", "#"] },
 	{ id: "compose", group: "compose", en: "New message", fr: "Nouveau message", defaults: ["c"] },
 	{ id: "send", group: "compose", en: "Send the message", fr: "Envoyer le message en cours", defaults: ["Ctrl+Enter"] },

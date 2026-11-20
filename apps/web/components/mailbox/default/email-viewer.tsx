@@ -11,6 +11,7 @@ import { setRemoteImagesForContact } from "@/lib/actions/contact-images";
 import { toast } from "sonner";
 import { useK } from "@/components/k/ui-context";
 import { joinSurrogateEntities } from "@common/html-entities";
+import { hideQuotesByDefault } from "@/lib/quote-visibility";
 
 // ss2i : partage avec la citation modifiable (reply-quote-editor), meme rendu que le lecteur.
 export const BASE_CSS = `
@@ -156,8 +157,11 @@ export default function EmailViewer({
 	remoteImagesAllowed = false,
 	cidUrls,
 	adaptTheme = false,
+	threadIndex,
 }: {
 	message: MessageEntity;
+	// ss2i : index chronologique dans le fil (0 = plus ancien), voir lib/quote-visibility.ts.
+	threadIndex?: number;
 	remoteImagesAllowed?: boolean;
 	// ss2i : Content-ID (sans chevrons, en minuscules) -> URL signee de la piece jointe.
 	// Resout les images inline restees en cid: dans le HTML stocke.
@@ -177,7 +181,10 @@ export default function EmailViewer({
 		obs.observe(html, { attributes: true, attributeFilter: ["class"] });
 		return () => obs.disconnect();
 	}, [adaptTheme]);
-	const [hideQuotes, setHideQuotes] = useState(true);
+	// ss2i : transfert ou premier message du fil -> citations dépliées (Samuel le 20/11/2026).
+	const [hideQuotes, setHideQuotes] = useState(() =>
+		hideQuotesByDefault({ threadIndex, subject: message.subject, html: message.html, text: message.text }),
+	);
 
 	const [showRemoteImages, setShowRemoteImages] = useState(remoteImagesAllowed);
 	const [hasBlockedImages, setHasBlockedImages] = useState(false);

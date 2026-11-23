@@ -1,6 +1,7 @@
 // @ts-nocheck
 import "@mantine/tiptap/styles.css";
-import { RichTextEditor, Link } from "@mantine/tiptap";
+import { RichTextEditor } from "@mantine/tiptap";
+import { MailLink } from "@/lib/mail-link";
 import { useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
@@ -131,7 +132,7 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 				? [
 						// le lien de StarterKit ferait doublon avec celui de Mantine (Link)
 						StarterKit.configure({ link: false }),
-						Link,
+						MailLink,
 						MailImage,
 						TextStyle,
 						Color,
@@ -139,7 +140,7 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 						Highlight.configure({ multicolor: true }),
 						TextAlign.configure({ types: ["heading", "paragraph"] }),
 					]
-				: [StarterKit, Link, MailImage],
+				: [StarterKit.configure({ link: false }), MailLink, MailImage],
 			editorProps: {
 				handlePaste: (view, event) => {
 					const files = pastedImageFiles(event.clipboardData, { ignoreIfText: true });

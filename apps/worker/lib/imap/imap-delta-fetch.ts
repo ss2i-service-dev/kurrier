@@ -143,6 +143,16 @@ export const deltaFetch = async (
 					// elsewhere there is not a move: without this guard, every new message would leave the INBOX
 					// for the archive.
 					if (isAllMail(row)) return;
+					// A message already known in another folder does not reach Drafts through a move:
+					// drafts written in the mail client have their own Message-ID (<draft-...>).
+					// Taking it for a move filed whole Inbox threads in Drafts (FETCH sent to the
+					// wrong folder). It is ignored, like \All.
+					if (existing.mailboxId !== row.id && row.kind === "drafts") {
+						console.warn(
+							`[deltaFetch] ${messageId} seen in Drafts but already in another folder: ignored (uid=${uid})`,
+						);
+						return;
+					}
 					if (existing.mailboxId !== row.id) {
 						console.log(
 							`[deltaFetch] Move detected for ${messageId}: ${existing.mailboxId} → ${row.id}`,

@@ -1695,6 +1695,8 @@ export const moveToFolder = async (
 	const { mailbox: from, threadIds: ids } = await assertThreadsInMailbox(fromMailboxId, requestedIds);
 	const to = await assertMailboxAccess(toMailboxId);
 	if (!ids.length || to.identityId !== from.identityId) return;
+	// No mail moved into Drafts (the worker refuses it too).
+	if ((to as any).kind === "drafts") return;
 	if (messageId && !(await messageInMailbox(messageId, from.id))) return;
 	fromMailboxId = from.id;
 	toMailboxId = to.id;

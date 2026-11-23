@@ -1,3 +1,4 @@
+import { openMailboxLocked } from "./imap-open-locked";
 import { ImapFlow } from "imapflow";
 import { db, identities, mailboxes, mailboxSync } from "@db";
 import { eq } from "drizzle-orm";
@@ -74,7 +75,7 @@ export async function addNewFolder(
 		await client.mailboxSubscribe(newPath);
 	} catch (_) {}
 
-	const box = await client.mailboxOpen(newPath, { readOnly: true });
+	const box = await openMailboxLocked(client, newPath);
 
 	const [row] = await db
 		.insert(mailboxes)

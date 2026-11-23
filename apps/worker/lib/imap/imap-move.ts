@@ -81,6 +81,12 @@ export const moveMail = async (
 			);
 	}
 
+	// Mail is not filed in Drafts; only the drafts service writes there.
+	if (destMailboxRow?.kind === "drafts") {
+		console.warn(`[mail:move] Drafts destination refused (identity=${srcMailbox.identityId})`);
+		return;
+	}
+
 	if (!destMailboxRow) {
 		console.warn(
 			`[mail:move] No destination for op=${op} identity=${srcMailbox.identityId}`,

@@ -84,7 +84,19 @@ const DEFAULT_WINDOW = 300;
 // ever moving on to the next folders. To replay a folder, reset its cursor to 0 (or to a UID).
 const BACKFILL_DONE = -1;
 
+// The whole backfill of a folder (opening, SEARCH, FETCH) runs under the folder lock, like the
+// current sync: without it, another opening on the same connection could make another folder
+// be read (see imap-open-locked.ts).
 async function backfillMailboxFull(opts: BackfillMailboxOpts): Promise<boolean> {
+	const lock = await opts.client.getMailboxLock(opts.path, { readOnly: true });
+	try {
+		return await backfillMailboxFullLocked(opts);
+	} finally {
+		lock.release();
+	}
+}
+
+async function backfillMailboxFullLocked(opts: BackfillMailboxOpts): Promise<boolean> {
 	const {
 		client,
 		identityId,

@@ -1,6 +1,7 @@
 import { FetchMessageObject, ImapFlow } from "imapflow";
 import { db, mailboxSync } from "@db";
 import { and, eq } from "drizzle-orm";
+import { selectedIs } from "./imap-open-locked";
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export async function syncMailbox(opts: {
@@ -47,6 +48,19 @@ export async function syncMailbox(opts: {
 		let lastSeen = Number(sync.lastSeenUid || 0);
 
 		const box = await client.mailboxOpen(path, { readOnly: true });
+		// The connection is shared; if another process switched folder without the lock, the FETCH
+		// below would go to that folder and its messages would be filed here (Inbox taken for
+		// Drafts). We stop, without advancing the cursor.
+		const wrongFolder = () => {
+			if (selectedIs(client, path)) return false;
+			console.error("[imap:sync] unexpected selected folder, pass abandoned", {
+				identityId,
+				expected: path,
+				selected: (client.mailbox as any)?.path ?? null,
+			});
+			return true;
+		};
+		if (wrongFolder()) return;
 		const currentTop = Math.max(0, (box.uidNext ?? 1) - 1);
 		if (currentTop <= lastSeen) return; // nothing new
 
@@ -56,7 +70,9 @@ export async function syncMailbox(opts: {
 			const range = `${start}:${end}`;
 
 			let maxUid = lastSeen;
+			let aborted = false;
 
+			if (wrongFolder()) return;
 			for await (const msg of client.fetch(
 				{ uid: range },
 				{
@@ -68,6 +84,11 @@ export async function syncMailbox(opts: {
 					source: true,
 				},
 			)) {
+				// Selection changed during the FETCH: nothing in this batch can be trusted.
+				if (aborted || wrongFolder()) {
+					aborted = true;
+					continue;
+				}
 				// A message the database refuses used to fail the whole pass, on every pass, and the
 				// following folders were never synced again.
 				try {
@@ -83,6 +104,7 @@ export async function syncMailbox(opts: {
 				if (msg.uid && msg.uid > maxUid) maxUid = msg.uid;
 			}
 
+			if (aborted) return;
 			if (maxUid > lastSeen) {
 				lastSeen = maxUid;
 				await db

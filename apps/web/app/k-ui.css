@@ -173,20 +173,22 @@
 	border-radius: var(--k-radius-sm);
 }
 
-/* List row: actions fade in on hover */
+/* List row: actions fade in on hover. The hovered row is marked data-hot by
+   components/k/row-hover.ts (pointer position) rather than by :hover, which does not follow
+   a row that moved up under a motionless pointer after a deletion. */
 .k-row .k-row-actions {
 	opacity: 0;
 	transform: translateX(4px);
 	transition: opacity 120ms ease, transform 120ms ease;
 	pointer-events: none;
 }
-.k-row:hover .k-row-actions,
+.k-row[data-hot="true"] .k-row-actions,
 .k-row:focus-within .k-row-actions {
 	opacity: 1;
 	transform: none;
 	pointer-events: auto;
 }
-.k-row:hover .k-row-meta,
+.k-row[data-hot="true"] .k-row-meta,
 .k-row:focus-within .k-row-meta {
 	opacity: 0;
 }

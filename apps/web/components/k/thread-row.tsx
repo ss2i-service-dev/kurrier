@@ -28,6 +28,7 @@ import KIconButton from "@/components/k/icon-button";
 import { correspondents, listDate } from "@/components/k/format";
 import { kHref } from "@/components/k/href";
 import { arrivedSinceRead, closeCompose, mailActions, setActiveThread, useMailStore } from "@/components/k/mail-store";
+import { refreshRowHover, useRowHot } from "@/components/k/row-hover";
 
 type Props = {
 	item: FetchMailboxThreadsResult[number];
@@ -81,6 +82,9 @@ export default function KThreadRow({
 	const smtp = !!mailboxSync;
 	// Hover actions mounted only for the hovered or focused row.
 	const [armed, setArmed] = React.useState(false);
+	// Row under the pointer, tracked by its position (see row-hover.ts): stays right when the
+	// row moves up under a motionless pointer after a deletion.
+	const hot = useRowHot(String(item.threadId));
 
 	const { state, setState } = useDynamicContext<{
 		selectedThreadIds: Set<string>;
@@ -142,6 +146,13 @@ export default function KThreadRow({
 		router.prefetch(threadUrl);
 	};
 
+	React.useEffect(() => {
+		if (hot) arm();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [hot]);
+	// Row removed (deleted, archived, moved): the next one moves up under the pointer.
+	React.useEffect(() => () => refreshRowHover(), []);
+
 	const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 	const starButton = (
 			<button
@@ -166,6 +177,7 @@ export default function KThreadRow({
 			data-thread-id={item.threadId}
 			aria-current={isActive ? "true" : undefined}
 			data-selected={isSelected ? "true" : undefined}
+			data-hot={hot ? "true" : undefined}
 			onClick={openThread}
 			onMouseEnter={arm}
 			onFocus={arm}
@@ -252,9 +264,18 @@ export default function KThreadRow({
 				)}
 			</div>
 
-			{armed && (
+			{(armed || hot) && (
 				<div
-					onClick={stop}
+					onClick={(e) => {
+						stop(e);
+						// Mouse click: the button does not keep the focus, otherwise :focus-within
+						// would leave the actions displayed on this row once the pointer is gone.
+						// (Except a button that opens a menu: snooze, labels.)
+						const button = e.target instanceof HTMLElement ? e.target.closest("button") : null;
+						if (e.detail > 0 && button && !button.hasAttribute("aria-haspopup")) button.blur();
+						// Pin, unpin, snooze: the list reorders under the pointer.
+						refreshRowHover();
+					}}
 					data-k-small
 					className={`k-row-actions absolute right-2 top-1.5 flex items-center gap-0.5 rounded-k-sm p-0.5 shadow-k-pop ${isActive ? "bg-k-selected" : "bg-k-surface"}`}
 				>

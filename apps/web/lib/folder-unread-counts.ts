@@ -7,10 +7,11 @@ export function showsUnreadCount(kind: string | null | undefined): boolean {
 	return !(NO_UNREAD_COUNT_KINDS as readonly string[]).includes(String(kind ?? ""));
 }
 
-// Counter of the sidebars fed by fetchDraftCounts (Classic and Three-column). Drafts shows its
-// number of drafts there, pending sends excluded, not a number of unread messages.
-export function showsSidebarCount(kind: string | null | undefined): boolean {
-	return kind === "drafts" || showsUnreadCount(kind);
+// Counter of the sidebars fed by fetchDraftCounts (Classic and Three-column). With the "number of
+// drafts" option (prefShowDraftsCount, off by default), Drafts shows its number of drafts there,
+// pending sends excluded, not a number of unread messages.
+export function showsSidebarCount(kind: string | null | undefined, showDraftsCount = false): boolean {
+	return (kind === "drafts" && showDraftsCount) || showsUnreadCount(kind);
 }
 
 // Outbox: the number of visible sends (waiting, in progress, failed), never unread counts;

@@ -13,6 +13,7 @@ import { setListUnderThread } from "@/lib/actions/list-under-thread";
 import { setStripSubjectPrefixesEnabled } from "@/lib/actions/subject-prefixes";
 import { setHour24Enabled } from "@/lib/actions/hour-format";
 import { setAutoReloadEnabled } from "@/lib/actions/auto-reload";
+import { setShowDraftsCountEnabled } from "@/lib/actions/drafts-count";
 import type { ListUnderThread } from "@/lib/list-under-thread";
 
 
@@ -26,6 +27,7 @@ function SettingsUnreadPanel({
 	stripPrefixes: initialStrip = false,
 	hour24: initialHour24 = false,
 	autoReload: initialAutoReload = false,
+	showDraftsCount: initialShowDraftsCount = false,
 }: {
 	enabled: boolean;
 	listPreview: ListPreviewMode;
@@ -34,6 +36,7 @@ function SettingsUnreadPanel({
 	stripPrefixes?: boolean;
 	hour24?: boolean;
 	autoReload?: boolean;
+	showDraftsCount?: boolean;
 }) {
 	const [enabled, setEnabled] = useState(initial);
 	const [pending, startTransition] = useTransition();
@@ -46,6 +49,23 @@ function SettingsUnreadPanel({
 	const [hour24Pending, startHour24Transition] = useTransition();
 	const [autoReload, setAutoReload] = useState(initialAutoReload);
 	const [autoReloadPending, startAutoReloadTransition] = useTransition();
+	const [showDraftsCount, setShowDraftsCount] = useState(initialShowDraftsCount);
+	const [showDraftsCountPending, startShowDraftsCountTransition] = useTransition();
+
+	// Number of drafts next to Drafts in the sidebars.
+	const onShowDraftsCountChange = (next: boolean) => {
+		setShowDraftsCount(next);
+		startShowDraftsCountTransition(async () => {
+			const r = await setShowDraftsCountEnabled(next);
+			if (r?.success === false) {
+				setShowDraftsCount(!next);
+				toast.error(r.error ?? "Could not save the preference");
+				return;
+			}
+			toast.success(next ? "Drafts shows its number of drafts." : "Drafts is shown without a number.");
+			router.refresh();
+		});
+	};
 
 	// Page reloaded by itself after an update of Kurrier.
 	const onAutoReloadChange = (next: boolean) => {
@@ -170,6 +190,14 @@ function SettingsUnreadPanel({
 				checked={autoReload}
 				disabled={autoReloadPending}
 				onChange={(e) => onAutoReloadChange(e.currentTarget.checked)}
+				mt="md"
+			/>
+			<Switch
+				label={"Number of drafts"}
+				description={"Off by default: Drafts is shown without a number. On: the sidebar shows how many drafts are waiting next to Drafts, in both interfaces (drafts waiting to be sent are not counted)."}
+				checked={showDraftsCount}
+				disabled={showDraftsCountPending}
+				onChange={(e) => onShowDraftsCountChange(e.currentTarget.checked)}
 				mt="md"
 			/>
 			<Switch

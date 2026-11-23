@@ -28,6 +28,7 @@ import { MailboxKind } from "@schema";
 import { outboxSidebarCount, showsSidebarCount } from "@/lib/folder-unread-counts";
 import { outboxSlot } from "@/lib/outbox-view";
 import { useOutboxRefresh } from "@/components/mailbox/default/outbox-list";
+import { useShowDraftsCount } from "@/components/k/ui-context";
 import {
 	IdentityEntity,
 	MailboxEntity,
@@ -277,6 +278,8 @@ export default function IdentityMailboxesList({
 	const router = useRouter()
 	// Refresh while a send is leaving (Outbox counter and list).
 	useOutboxRefresh(outboxCounts);
+	// Number of drafts next to Drafts: per-user option (Settings), off by default.
+	const showDraftsCount = useShowDraftsCount();
 
 	const Item = ({
 					  m,
@@ -340,8 +343,8 @@ export default function IdentityMailboxesList({
 							<Icon className="h-4 w-4 shrink-0" />
 							<span className="truncate">
 								{m.kind === "custom" ? (m.name ?? "Mailbox") : TITLE[m.kind]}
-								{/* No count on Sent, Outbox, Archive or Trash; Drafts shows its number of drafts (lib/folder-unread-counts.ts) */}
-								{m.unread > 0 && showsSidebarCount(m.kind) && <span> ({m.unread})</span>}
+								{/* No count on Sent, Outbox, Archive or Trash; Drafts shows its number of drafts when the option is on (lib/folder-unread-counts.ts) */}
+								{m.unread > 0 && showsSidebarCount(m.kind, showDraftsCount) &&<span> ({m.unread})</span>}
 							</span>
 						</Link>
 

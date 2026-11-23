@@ -12,14 +12,18 @@ import { KOpenPrefsConfig } from "@/components/k/reader-tabs-bar";
 const KUiContext = createContext(false);
 // Times in 24-hour format (Settings > General, pref24HourTime), read by the root layout.
 const KHour24Context = createContext(false);
+// Number of drafts next to Drafts in the sidebars (Settings > General, prefShowDraftsCount).
+const KDraftsCountContext = createContext(false);
 
 export function KUiProvider({
 	modern,
 	hour24 = false,
+	showDraftsCount = false,
 	children,
 }: {
 	modern: boolean;
 	hour24?: boolean;
+	showDraftsCount?: boolean;
 	children: React.ReactNode;
 }) {
 	// Signed-in pages (workspace) only.
@@ -27,6 +31,7 @@ export function KUiProvider({
 	return (
 		<KUiContext.Provider value={modern}>
 			<KHour24Context.Provider value={hour24}>
+			<KDraftsCountContext.Provider value={showDraftsCount}>
 			{/* New messages: checked every 20 s and the list refreshed (both
 			    interfaces); sound and tab badge in the modern interface. */}
 			{inApp && <KNewMailNotifier modern={modern} />}
@@ -35,6 +40,7 @@ export function KUiProvider({
 			{/* Thread opening: internal tabs (Settings > Opening mail). */}
 			{inApp && modern && <KOpenPrefsConfig />}
 			{children}
+			</KDraftsCountContext.Provider>
 			</KHour24Context.Provider>
 		</KUiContext.Provider>
 	);
@@ -48,4 +54,9 @@ export function useModernUi() {
 /** true when times are shown in 24-hour format (pref24HourTime), false for the locale default. */
 export function useHour24() {
 	return useContext(KHour24Context);
+}
+
+/** true when Drafts shows its number of drafts in the sidebars (prefShowDraftsCount), false by default. */
+export function useShowDraftsCount() {
+	return useContext(KDraftsCountContext);
 }

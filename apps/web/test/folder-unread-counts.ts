@@ -35,19 +35,41 @@ test("the server no longer computes the counter of these folders (all sidebars)"
 	assert.match(src("lib/actions/mailbox.ts"), /notInArray\(mailboxes\.kind, \[\.\.\.NO_UNREAD_COUNT_KINDS\]\)/);
 });
 
-// Drafts shows its number of drafts (fetchDraftCounts, pending sends excluded), not unread
-// messages: the other folders of the list stay without a counter.
-test("Drafts shows its number of drafts in the sidebar", () => {
-	assert.equal(showsSidebarCount("drafts"), true);
-	for (const k of ["sent", "outbox", "archive", "trash"]) assert.equal(showsSidebarCount(k), false, k);
-	for (const k of ["inbox", "spam", "custom"]) assert.equal(showsSidebarCount(k), true, k);
+// With the option "Number of drafts" (prefShowDraftsCount), Drafts shows its number of drafts
+// (fetchDraftCounts, pending sends excluded), not unread messages. Off by default: Drafts stays
+// without a counter. The other folders of the list never change.
+test("Drafts shows its number of drafts in the sidebar only with the option on", () => {
+	assert.equal(showsSidebarCount("drafts"), false);
+	assert.equal(showsSidebarCount("drafts", false), false);
+	assert.equal(showsSidebarCount("drafts", true), true);
+	for (const on of [false, true]) {
+		for (const k of ["sent", "outbox", "archive", "trash"]) assert.equal(showsSidebarCount(k, on), false, k);
+		for (const k of ["inbox", "spam", "custom"]) assert.equal(showsSidebarCount(k, on), true, k);
+	}
 });
 
-test("the sidebars fed by fetchDraftCounts apply showsSidebarCount", () => {
+test("the option is stored per user, off by default, read by the root layout and set in the settings", () => {
+	const action = src("lib/actions/drafts-count.ts");
+	assert.match(action, /prefShowDraftsCount/);
+	assert.match(action, /coalesce\(\([^)]*prefShowDraftsCount[^)]*\)::boolean, false\)/);
+	assert.match(src("app/layout.tsx"), /showDraftsCountEnabled\(\)/);
+	assert.match(src("app/layout.tsx"), /showDraftsCount=\{showDraftsCount\}/);
+	assert.match(src("components/k/ui-context.tsx"), /showDraftsCount = false/);
+	assert.match(src("components/mailbox/settings/settings-unread-panel.tsx"), /setShowDraftsCountEnabled/);
+	assert.match(
+		src("app/[locale]/w/[wPublicId]/dashboard/(unified)/(mail)/mail/[identityPublicId]/settings/page.tsx"),
+		/showDraftsCount=\{showDraftsCount\}/,
+	);
+});
+
+test("the sidebars fed by fetchDraftCounts apply showsSidebarCount with the option", () => {
 	for (const p of [
 		"components/dashboard/identity-mailboxes-list.tsx",
 		"components/k/sidebar-nav.tsx",
-	]) assert.match(src(p), /showsSidebarCount\(/, p);
+	]) {
+		assert.match(src(p), /showsSidebarCount\(m\.kind, showDraftsCount\)/, p);
+		assert.match(src(p), /useShowDraftsCount\(\)/, p);
+	}
 	// the older sidebar (mailbox-nav) only receives unread counts: Drafts stays without a counter
 	assert.match(src("components/mailbox/default/mailbox-nav.tsx"), /showsUnreadCount\(/);
 	for (const p of [

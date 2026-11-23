@@ -4,6 +4,7 @@ import { Inter, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import { interfaceMode } from "@/lib/actions/interface-pref";
 import { hour24Enabled } from "@/lib/actions/hour-format";
 import { autoReloadEnabled } from "@/lib/actions/auto-reload";
+import { showDraftsCountEnabled } from "@/lib/actions/drafts-count";
 import { VersionWatcher } from "@/components/common/version-watcher";
 import { KUiProvider } from "@/components/k/ui-context";
 import "dayjs/locale/fr";
@@ -81,6 +82,8 @@ export default async function RootLayout({
 	const hour24 = await hour24Enabled();
 	// Reload the page after an update (per-user option, off by default).
 	const autoReload = await autoReloadEnabled();
+	// Number of drafts next to Drafts in the sidebars (per-user option, off by default).
+	const showDraftsCount = await showDraftsCountEnabled();
 	const { theme: mantineTheme, colorScheme } = createMantineTheme({
 		theme,
 		mode,
@@ -110,7 +113,7 @@ export default async function RootLayout({
 							theme={mantineTheme}
 							defaultColorScheme={colorScheme}
 						>
-							<KUiProvider modern={modern} hour24={hour24}>
+							<KUiProvider modern={modern} hour24={hour24} showDraftsCount={showDraftsCount}>
 								<ModalsProvider>{children}</ModalsProvider>
 							</KUiProvider>
 						</MantineProvider>

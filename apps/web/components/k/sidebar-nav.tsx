@@ -29,6 +29,7 @@ import { MailboxKind } from "@schema";
 import { outboxSidebarCount, showsSidebarCount } from "@/lib/folder-unread-counts";
 import { outboxSlot } from "@/lib/outbox-view";
 import { useOutboxRefresh } from "@/components/mailbox/default/outbox-list";
+import { useShowDraftsCount } from "@/components/k/ui-context";
 import {
 	IdentityEntity,
 	MailboxEntity,
@@ -263,6 +264,8 @@ export default function KSidebarNav({
 
 	// Refresh while a send is leaving (Outbox counter and list).
 	useOutboxRefresh(outboxCounts);
+	// Number of drafts next to Drafts: per-user option (Settings), off by default.
+	const showDraftsCount = useShowDraftsCount();
 
 	// Counters: passed to the store (to anchor the adjustments), and adjustments read.
 	const countAdj = useMailStore((st) => st.countAdj);
@@ -291,8 +294,8 @@ export default function KSidebarNav({
 		const hasChildren = m.children.length > 0;
 		// server counter + immediate adjustment from pending actions (mail-store)
 		const unread = Math.max(0, m.unread + (countAdj.get(m.id)?.delta ?? 0));
-		// no counter on Sent, Outbox, Archive or Trash; Drafts shows its number of drafts
-		const showCount = unread > 0 && showsSidebarCount(m.kind);
+		// no counter on Sent, Outbox, Archive or Trash; Drafts shows its number of drafts when the option is on
+		const showCount = unread > 0 && showsSidebarCount(m.kind, showDraftsCount);
 
 		return (
 			<div>

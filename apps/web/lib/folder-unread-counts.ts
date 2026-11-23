@@ -6,3 +6,9 @@ export const NO_UNREAD_COUNT_KINDS = ["sent", "outbox", "drafts", "archive", "tr
 export function showsUnreadCount(kind: string | null | undefined): boolean {
 	return !(NO_UNREAD_COUNT_KINDS as readonly string[]).includes(String(kind ?? ""));
 }
+
+// Counter of the sidebars fed by fetchDraftCounts (Classic and Three-column). Drafts shows its
+// number of drafts there, pending sends excluded, not a number of unread messages.
+export function showsSidebarCount(kind: string | null | undefined): boolean {
+	return kind === "drafts" || showsUnreadCount(kind);
+}

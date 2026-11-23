@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { NO_UNREAD_COUNT_KINDS, showsUnreadCount } from "../lib/folder-unread-counts";
+import { NO_UNREAD_COUNT_KINDS, showsUnreadCount, showsSidebarCount } from "../lib/folder-unread-counts";
 
 let failed = 0;
 const test = (label: string, fn: () => void) => {
@@ -35,12 +35,36 @@ test("the server no longer computes the counter of these folders (all sidebars)"
 	assert.match(src("lib/actions/mailbox.ts"), /notInArray\(mailboxes\.kind, \[\.\.\.NO_UNREAD_COUNT_KINDS\]\)/);
 });
 
-test("the three sidebars apply the same rule", () => {
+// Drafts shows its number of drafts (fetchDraftCounts, pending sends excluded), not unread
+// messages: the other folders of the list stay without a counter.
+test("Drafts shows its number of drafts in the sidebar", () => {
+	assert.equal(showsSidebarCount("drafts"), true);
+	for (const k of ["sent", "outbox", "archive", "trash"]) assert.equal(showsSidebarCount(k), false, k);
+	for (const k of ["inbox", "spam", "custom"]) assert.equal(showsSidebarCount(k), true, k);
+});
+
+test("the sidebars fed by fetchDraftCounts apply showsSidebarCount", () => {
 	for (const p of [
 		"components/dashboard/identity-mailboxes-list.tsx",
 		"components/k/sidebar-nav.tsx",
-		"components/mailbox/default/mailbox-nav.tsx",
-	]) assert.match(src(p), /showsUnreadCount\(/, p);
+	]) assert.match(src(p), /showsSidebarCount\(/, p);
+	// the older sidebar (mailbox-nav) only receives unread counts: Drafts stays without a counter
+	assert.match(src("components/mailbox/default/mailbox-nav.tsx"), /showsUnreadCount\(/);
+	for (const p of [
+		"components/dashboard/workspaces/identity-mailboxes-list-wrapper.tsx",
+		"components/k/sidebar-nav-wrapper.tsx",
+	]) assert.match(src(p), /fetchDraftCounts\(\)/, p);
+});
+
+// Gmail does not set \Draft on its drafts over IMAP: the counter follows the folder list (one
+// row per thread, pending sends apart), not the flag.
+test("fetchDraftCounts counts the threads of the Drafts folder, without requiring the draft flag", () => {
+	const s = src("lib/actions/drafts.ts");
+	const body = s.slice(s.indexOf("export const fetchDraftCounts"), s.indexOf("export type FetchDraftCountsResult"));
+	assert.ok(body.length > 0);
+	assert.doesNotMatch(body, /eq\(messages\.draft, true\)/);
+	assert.match(body, /count\(distinct \$\{messages\.threadId\}\)/);
+	assert.match(body, /pendingSend/);
 });
 
 if (failed) {

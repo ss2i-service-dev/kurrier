@@ -184,18 +184,17 @@ export const fetchDraftCounts = cache(async () => {
 	const ids = draftBoxes.map((b) => b.id);
 	const counts = new Map<string, number>();
 	if (!ids.length) return counts;
+	// Same count as the folder list (one row per thread, pending sends apart in the Outbox
+	// section). The draft flag is not required: Gmail does not set \Draft on its drafts over IMAP.
+	const pending = sql`coalesce(jsonb_typeof(${messages.metaData}->'draft'->'pendingSend'), 'null') <> 'null'`;
 	const rows = await rls((tx) =>
 		tx
-			.select({ mailboxId: messages.mailboxId, n: sql<number>`count(*)` })
+			.select({
+				mailboxId: messages.mailboxId,
+				n: sql<number>`count(distinct ${messages.threadId}) - count(distinct ${messages.threadId}) filter (where ${pending})`,
+			})
 			.from(messages)
-			.where(
-				and(
-					inArray(messages.mailboxId, ids),
-					eq(messages.draft, true),
-					// A pending send (meta.draft.pendingSend) is no longer a draft.
-					sql`coalesce(jsonb_typeof(${messages.metaData}->'draft'->'pendingSend'), 'null') = 'null'`,
-				),
-			)
+			.where(inArray(messages.mailboxId, ids))
 			.groupBy(messages.mailboxId),
 	);
 	for (const r of rows) counts.set(r.mailboxId, Number(r.n ?? 0));

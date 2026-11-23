@@ -11,20 +11,23 @@ import {
 	composeMessage,
 	formatQuoteDate,
 	generateSnippet,
-	imapDraftIdOfJob,
 	quoteOverrideOf,
 	quoteScopeOf,
+	messageIdFor,
 	rehydrateActionOf,
+	SCHEDULED_JOB,
 	scheduledJobOf,
 	scheduledPendingSend,
 	setDraftSendState,
+	draftSendErrorOf,
 	upsertMailboxThreadItem,
 	type QuoteOverride,
 	type QuoteScope,
 } from "@common";
 const serverConfig = getServerEnv();
 import IORedis from "ioredis";
-import { Worker } from "bullmq";
+import { Worker, type Job } from "bullmq";
+import { randomUUID } from "node:crypto";
 import {
 	db,
 	decryptAdminSecrets,
@@ -44,9 +47,20 @@ import {
 	workspaces,
 } from "@db";
 import { createMailer } from "@providers";
-import { mailerFailureOf } from "../../lib/send-outcome";
+import {
+	finalizeSent,
+	legacyLedgerRow,
+	runSend,
+	sweepLedger,
+	type FinalizeIo,
+	type LedgerRow,
+	type Prepared,
+	type SendDeps,
+	type SendOutcome,
+} from "../../lib/send/pipeline";
+import { findByLegacyKey, ledgerStore, lockLedgerRow } from "../../lib/send/ledger-store";
 import { toArray } from "drizzle-orm/mysql-core";
-import { and, eq, lt, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import addressparser from "addressparser";
 import { PgTransaction } from "drizzle-orm/pg-core";
 import { getRedis } from "../../lib/get-redis";
@@ -74,23 +88,34 @@ type AttachmentDownload = {
 };
 
 export default defineNitroPlugin(async (nitroApp) => {
+	// Outbox. A single send path, arbitrated by the draft_messages ledger row
+	// (lib/send/pipeline.ts): scheduled or delayed send (SCHEDULED_JOB, jobId = row) and legacy
+	// "send-and-reconcile" job, which gets its row before leaving. A failure throws so that
+	// callers waiting on the job (unsubscribe and others) see it; never an automatic resend.
+	const settle = (res: SendOutcome) => {
+		if (res.outcome === "failed" || res.outcome === "interrupted") throw new Error(res.error);
+		if (res.outcome === "skipped" && res.row?.status === "failed") {
+			throw new Error(String(res.row.payload?.__error ?? "Sending failed"));
+		}
+		return { success: true, outcome: res.outcome };
+	};
 	const worker = new Worker(
 		"send-mail",
 		async (job) => {
-			switch (job.name) {
-				case "send-scheduled-draft":
-					await processDraft(job.data);
-					return { success: true };
-				case "send-and-reconcile": {
-					// A provider refusal returned as a value (not thrown) counts as a failure.
-					const result = await send(job.data);
-					if (result && (result as any).success === false) {
-						throw new Error(String((result as any).error ?? "Sending failed"));
-					}
-					return { success: true };
+			let rowId = "";
+			try {
+				switch (job.name) {
+					case SCHEDULED_JOB:
+						rowId = String(job.data?.draftMessageId ?? "");
+						return settle(await runSend(rowId, sendDeps));
+					case "send-and-reconcile":
+						rowId = await legacyRowOf(job);
+						return settle(await runSend(rowId, sendDeps));
+					default:
+						return { success: true };
 				}
-				default:
-					return { success: true };
+			} finally {
+				attachmentCache.delete(rowId);
 			}
 		},
 		{ connection },
@@ -99,29 +124,16 @@ export default defineNitroPlugin(async (nitroApp) => {
 	worker.on("completed", (job) => {
 		console.log(`[send-mail] ${job.id} completed`);
 	});
+	// The draft marks (pendingSend, sendError) are set by the pipeline, from the row: here, only
+	// the log (a removal here would unlock a draft whose row is still "sending").
 	worker.on("failed", (job, err) => {
 		console.error(`[send-mail] ${job?.id} failed: ${err?.message}`);
-		// Final failure of a send coming from a draft (delayed or scheduled): the "sending" mark is
-		// removed and the error kept on the draft ("Not sent" badge).
-		const draftMessageId = imapDraftIdOfJob(job?.name, job?.data as any);
-		if (
-			job &&
-			draftMessageId &&
-			job.attemptsMade >= (job.opts?.attempts ?? 1)
-		) {
-			setDraftSendState(draftMessageId, {
-				pendingSend: null,
-				sendError: { message: err?.message ?? "Sending failed", at: new Date().toISOString() },
-			}).catch((e: any) =>
-				console.error("[send-mail] sendError mark failed:", e?.message ?? e),
-			);
-		}
 	});
 
 	// Scheduled sends survive a worker restart or a Redis loss: each "scheduled" row gets its job
 	// back (jobId = row, adding it again has no effect), with the sending identity in the data
-	// (access check of "Cancel"). A row left in "sending" for more than 10 minutes is only
-	// reported.
+	// (access check of "Cancel"). Rows left in "sending" are handled by the ledger sweep
+	// (sweepLedger, at the end of the file).
 	const rehydrateScheduled = async () => {
 		const { sendMailQueue } = await getRedis();
 		const rows = await db
@@ -157,6 +169,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 						.update(draftMessages)
 						.set({
 							status: "failed",
+							lastError: message,
 							payload: { ...row.payload, __error: message },
 							updatedAt: new Date(),
 						})
@@ -191,26 +204,8 @@ export default defineNitroPlugin(async (nitroApp) => {
 				console.error(`[send-mail] scheduled ${row.id} not restored:`, e?.message ?? e);
 			}
 		}
-		const stuck = await db
-			.select({ id: draftMessages.id })
-			.from(draftMessages)
-			.where(
-				and(
-					eq(draftMessages.status, "sending"),
-					lt(draftMessages.updatedAt, new Date(Date.now() - 10 * 60_000)),
-				),
-			);
-		if (stuck.length) {
-			console.warn(
-				`[send-mail] ${stuck.length} draft_messages row(s) in "sending" for over 10 min: ${stuck.map((r) => r.id).join(", ")}`,
-			);
-		}
 		console.log(`[send-mail] scheduled sends: ${rows.length} pending, ${added} job(s) restored`);
 	};
-	rehydrateScheduled().catch((e: any) =>
-		console.error("[send-mail] scheduled restore failed:", e?.message ?? e),
-	);
-
 	const getOriginalMessage = async (decodedForm: Record<any, any>) => {
 		const [message] = await db
 			.select({
@@ -261,311 +256,318 @@ export default defineNitroPlugin(async (nitroApp) => {
 		return { value, html: joined, text: joined };
 	}
 
-	const processDraft = async ({
-									draftMessageId,
-								}: {
-		draftMessageId: string;
-	}) => {
-		const [draft] = await db
-			.select()
-			.from(draftMessages)
-			.where(eq(draftMessages.id, draftMessageId))
-			.limit(1);
+	// Outbox. The former sendTx (everything in one transaction, SMTP included) is split:
+	// renderSend (reads only, outside any transaction), SMTP in the pipeline, then finalizeIo
+	// (idempotent Sent copy, effects after the commit). Order: lib/send/pipeline.ts.
 
-		if (!draft) throw new Error("Draft not found");
+	// Attachments downloaded at render time, reused for the eml of the Sent copy (dropped at the
+	// end of the job; finalizing from the sweep reads them again from S3).
+	const attachmentCache = new Map<string, AttachmentDownload[]>();
 
-		const claimed = await db
-			.update(draftMessages)
-			.set({ status: "sending", updatedAt: new Date() })
-			.where(
-				and(
-					eq(draftMessages.id, draft.id),
-					eq(draftMessages.status, "scheduled"),
-				),
-			)
-			.returning({ id: draftMessages.id });
+	const renderSend = async (row: LedgerRow): Promise<Prepared> => {
+		const decodedForm = row.payload as Record<string, unknown>;
+		const [mailbox] = await db
+			.select({
+				mailbox: mailboxes,
+				identity: identities,
+				provider: providers,
+				smtp: smtpAccounts,
+			})
+			.from(mailboxes)
+			.leftJoin(identities, eq(mailboxes.identityId, identities.id))
+			.leftJoin(providers, eq(identities.providerId, providers.id))
+			.leftJoin(smtpAccounts, eq(identities.smtpAccountId, smtpAccounts.id))
+			.where(eq(mailboxes.id, String(decodedForm.sentMailboxId)));
 
-		if (claimed.length === 0) return;
-
-		try {
-			// A refusal of the provider returned as a value (not thrown) counts as a failure.
-			const result = await send(draft.payload);
-			if (result && (result as any).success === false) {
-				throw new Error(String((result as any).error ?? "Sending failed"));
-			}
-
-			await db
-				.update(draftMessages)
-				.set({ status: "sent", updatedAt: new Date() })
-				.where(eq(draftMessages.id, draft.id));
-		} catch (err: any) {
-			await db
-				.update(draftMessages)
-				.set({
-					status: "failed",
-					payload: {
-						...draft.payload,
-						__error: err?.message ? String(err.message) : String(err),
-					},
-					updatedAt: new Date(),
-				})
-				.where(eq(draftMessages.id, draft.id));
-
-			throw err;
+		if (!mailbox) {
+			throw new Error("Mailbox not found");
 		}
-	};
 
-	// A send that started from a draft deletes it (database, then IMAP through the
-	// draft:delete job). A cancelled or failed send leaves it in place.
-	const send = async (decodedForm: Record<any, unknown>) => {
-		const result = await sendTx(decodedForm);
-		if (result?.success && decodedForm.draftMessageId) {
-			try {
-				const [ident] = await db
-					.select({ id: identities.id, ownerId: identities.ownerId })
-					.from(identities)
-					.where(eq(identities.id, String(decodedForm.identityId ?? "")));
-				if (ident) {
-					await deleteDraft({
-						ownerId: ident.ownerId,
-						identityId: ident.id,
-						draftMessageId: String(decodedForm.draftMessageId),
-						afterSend: true,
-					});
-				}
-			} catch (err: any) {
-				console.error("[send-mail] draft cleanup failed:", err?.message ?? err);
-			}
-		}
-		return result;
-	};
-
-	const sendTx = async (decodedForm: Record<any, unknown>) => {
-		return await db.transaction(async (tx) => {
-			const [mailbox] = await tx
-				.select({
-					mailbox: mailboxes,
-					identity: identities,
-					provider: providers,
-					smtp: smtpAccounts,
-				})
-				.from(mailboxes)
-				.leftJoin(identities, eq(mailboxes.identityId, identities.id))
-				.leftJoin(providers, eq(identities.providerId, providers.id))
-				.leftJoin(smtpAccounts, eq(identities.smtpAccountId, smtpAccounts.id))
-				.where(eq(mailboxes.id, String(decodedForm.sentMailboxId)));
-
-			if (!mailbox) {
-				throw new Error("Mailbox not found");
-			}
-
-			const [secrets] = mailbox.identity.providerId
-				? await decryptAdminSecrets({
-					linkTable: providerSecrets,
-					foreignCol: providerSecrets.providerId,
-					secretIdCol: providerSecrets.secretId,
-					ownerId: mailbox.identity.ownerId,
-					parentId: String(mailbox.identity.providerId),
-				})
-				: await decryptAdminSecrets({
-					linkTable: smtpAccountSecrets,
-					foreignCol: smtpAccountSecrets.accountId,
-					secretIdCol: smtpAccountSecrets.secretId,
-					ownerId: mailbox.identity.ownerId,
-					parentId: String(mailbox.identity.smtpAccountId),
-				});
-
-			const credentials = secrets?.vault?.decrypted_secret
-				? JSON.parse(secrets.vault.decrypted_secret)
-				: {};
-
-			const mailer = createMailer(
-				mailbox.provider ? mailbox.provider.type : "smtp",
-				credentials,
-			);
-
-			const attachmentBlobs = await fetchAttachmentBlobs(
-				decodedForm.attachments as string,
-				{
-					workspaceId: mailbox.mailbox.workspaceId,
-					identityOwnerId: mailbox.identity.ownerId,
-					senderUserId: String(decodedForm.senderUserId ?? "") || null,
-				},
-			);
-
-			const data: MailComposeInput = {
-				messageId: String(decodedForm.messageId ?? ""),
-				to: toArray(decodedForm.to as any),
-				cc: toArray(decodedForm.cc as any),
-				bcc: toArray(decodedForm.bcc as any),
-				subject: (decodedForm.subject as string) || undefined,
-				text: (decodedForm.text as string) || undefined,
-				html: (decodedForm.html as string) || undefined,
-				mode: (decodedForm.mode as ComposeMode) || "new",
-			};
-
-			let origRow: GetOriginalMessageType | null = null;
-			if (
-				(data.mode === "reply" || data.mode === "forward") &&
-				decodedForm.originalMessageId
-			) {
-				origRow = await getOriginalMessage(decodedForm);
-				// Access control: an original message from another workspace is ignored (no quote, no
-				// thread attachment, no In-Reply-To); a reply without an original message is refused
-				// further down, like a message not found.
-				if (origRow?.message && !originalUsableBy(origRow.message, mailbox.mailbox)) {
-					console.warn(
-						`[send-mail] original message ${origRow.message.id} is not in workspace ${mailbox.mailbox.workspaceId}: ignored`,
-					);
-					origRow = null;
-				}
-			}
-
-			const signatureHtml =
-				decodedForm.includeSignature !== "false"
-					? String((mailbox.identity.metaData as any)?.signatureHtml ?? "").trim()
-					: "";
-			// Signature requested but empty for this identity (Settings > General > Signature is
-			// per identity): say so in the log, so nobody goes looking for a bug.
-			if (decodedForm.includeSignature !== "false" && !signatureHtml) {
-				console.warn(
-					`[send-mail] identity ${mailbox.identity.value} (${mailbox.identity.id}) has no signature: sending without one`,
-				);
-			}
-
-			// RFC style (reply below the quote, "-- " before the signature), an option of the sending
-			// user (workspaces.meta.prefRfcStyle[userId], see apps/web/lib/actions/rfc-style.ts).
-			// Scope of the quote chosen in the editor; absent (job already queued) = whole message.
-			const senderUserId =
-				String(decodedForm.senderUserId ?? "") || mailbox.identity.ownerId;
-			const rfcStyle = await rfcStyleEnabled(mailbox.mailbox.workspaceId, senderUserId);
-			const stripSubjectPrefixes = await stripSubjectPrefixesEnabled(
-				mailbox.mailbox.workspaceId,
-				senderUserId,
-			);
-			const quoteScope = quoteScopeOf(decodedForm.quoteScope);
-			// Quote edited in the editor (quoteMode custom + quoteHtml) or removed (none).
-			const quoteOverride = quoteOverrideOf(decodedForm.quoteMode, decodedForm.quoteHtml);
-
-			const { subject, text, html } = generateMailAttrs({
-				data,
-				orig: origRow,
-				signatureHtml,
-				rfcStyle,
-				stripSubjectPrefixes,
-				quoteScope,
-				quoteOverride,
-			});
-
-			const mailboxIdForMessage = String(decodedForm.sentMailboxId);
-
-			let threadIdForMessage: string;
-
-			// A forward stays in the thread of the forwarded message (like a reply), otherwise it
-			// appears nowhere under the original message; it also carries In-Reply-To and References,
-			// like Gmail and Thunderbird.
-			const threaded = data.mode === "reply" || data.mode === "forward";
-			if (data.mode === "reply") {
-				if (!origRow?.message) throw new Error("Original message not found");
-				threadIdForMessage = origRow.message.threadId;
-			} else if (data.mode === "forward" && origRow?.message?.threadId) {
-				threadIdForMessage = origRow.message.threadId;
-			} else {
-				threadIdForMessage = await ensureThreadId(
-					mailbox.identity.ownerId,
-					mailbox.mailbox.workspaceId,
-					tx as PgTransaction<any>,
-				);
-			}
-
-			const inReplyTo =
-				threaded && origRow?.message
-					? origRow.message.messageId
-					: null;
-
-			const references =
-				threaded && origRow?.message
-					? Array.from(
-						new Set(
-							[
-								...(Array.isArray(origRow.message.references)
-									? origRow.message.references
-									: []),
-								origRow.message.messageId ?? null,
-							].filter(Boolean),
-						),
-					).slice(-30)
-					: [];
-
-			const newMessageBody = MessageInsertSchema.parse({
-				mailboxId: mailboxIdForMessage,
-				workspaceId: mailbox.mailbox.workspaceId,
-				threadId: threadIdForMessage,
-				messageId: "PLACEHOLDER",
-				inReplyTo: inReplyTo ?? undefined,
-				references,
-				hasAttachments: attachmentBlobs.length > 0,
-				to: toAddressObj(data.to || []),
-				from: mailbox.identity.value,
-				cc: toAddressObj(data?.cc || []),
-				bcc: toAddressObj(data.bcc || []),
-				// In RFC style the text starts with the quote: the snippet stays the reply.
-				snippet: generateSnippet((rfcStyle && data.text) || text || html || ""),
-				subject,
-				text,
-				html,
+		const [secrets] = mailbox.identity.providerId
+			? await decryptAdminSecrets({
+				linkTable: providerSecrets,
+				foreignCol: providerSecrets.providerId,
+				secretIdCol: providerSecrets.secretId,
 				ownerId: mailbox.identity.ownerId,
-				seen: true,
+				parentId: String(mailbox.identity.providerId),
+			})
+			: await decryptAdminSecrets({
+				linkTable: smtpAccountSecrets,
+				foreignCol: smtpAccountSecrets.accountId,
+				secretIdCol: smtpAccountSecrets.secretId,
+				ownerId: mailbox.identity.ownerId,
+				parentId: String(mailbox.identity.smtpAccountId),
 			});
-			if (decodedForm.apiMessageId) {
-				newMessageBody.id = String(decodedForm.apiMessageId);
-			}
 
-			// Kind of automatic mail requested by the payload ("unsubscribe").
-			const autoMail = decodedForm.autoMail === "unsubscribe" ? "unsubscribe" : null;
-			const mailerResponse = await mailer.sendEmail(data.to, {
-				from: mailbox.identity.value,
+		const credentials = secrets?.vault?.decrypted_secret
+			? JSON.parse(secrets.vault.decrypted_secret)
+			: {};
+
+		const mailer = createMailer(
+			mailbox.provider ? mailbox.provider.type : "smtp",
+			credentials,
+		);
+
+		const attachmentBlobs = await fetchAttachmentBlobs(
+			decodedForm.attachments as string,
+			{
+				workspaceId: mailbox.mailbox.workspaceId,
+				identityOwnerId: mailbox.identity.ownerId,
+				senderUserId: String(decodedForm.senderUserId ?? "") || null,
+			},
+		);
+
+		const data: MailComposeInput = {
+			messageId: String(decodedForm.messageId ?? ""),
+			to: toArray(decodedForm.to as any),
+			cc: toArray(decodedForm.cc as any),
+			bcc: toArray(decodedForm.bcc as any),
+			subject: (decodedForm.subject as string) || undefined,
+			text: (decodedForm.text as string) || undefined,
+			html: (decodedForm.html as string) || undefined,
+			mode: (decodedForm.mode as ComposeMode) || "new",
+		};
+
+		let origRow: GetOriginalMessageType | null = null;
+		if (
+			(data.mode === "reply" || data.mode === "forward") &&
+			decodedForm.originalMessageId
+		) {
+			origRow = await getOriginalMessage(decodedForm);
+			// Access control: an original message from another workspace is ignored (no quote, no
+			// thread attachment, no In-Reply-To); a reply without an original message is refused
+			// further down, like a message not found.
+			if (origRow?.message && !originalUsableBy(origRow.message, mailbox.mailbox)) {
+				console.warn(
+					`[send-mail] original message ${origRow.message.id} is not in workspace ${mailbox.mailbox.workspaceId}: ignored`,
+				);
+				origRow = null;
+			}
+		}
+
+		const signatureHtml =
+			decodedForm.includeSignature !== "false"
+				? String((mailbox.identity.metaData as any)?.signatureHtml ?? "").trim()
+				: "";
+		// Signature requested but empty for this identity (Settings > General > Signature is
+		// per identity): say so in the log, so nobody goes looking for a bug.
+		if (decodedForm.includeSignature !== "false" && !signatureHtml) {
+			console.warn(
+				`[send-mail] identity ${mailbox.identity.value} (${mailbox.identity.id}) has no signature: sending without one`,
+			);
+		}
+
+		// RFC style (reply below the quote, "-- " before the signature), an option of the sending
+		// user (workspaces.meta.prefRfcStyle[userId], see apps/web/lib/actions/rfc-style.ts).
+		// Scope of the quote chosen in the editor; absent (job already queued) = whole message.
+		const senderUserId =
+			String(decodedForm.senderUserId ?? "") || mailbox.identity.ownerId;
+		const rfcStyle = await rfcStyleEnabled(mailbox.mailbox.workspaceId, senderUserId);
+		const stripSubjectPrefixes = await stripSubjectPrefixesEnabled(
+			mailbox.mailbox.workspaceId,
+			senderUserId,
+		);
+		const quoteScope = quoteScopeOf(decodedForm.quoteScope);
+		// Quote edited in the editor (quoteMode custom + quoteHtml) or removed (none).
+		const quoteOverride = quoteOverrideOf(decodedForm.quoteMode, decodedForm.quoteHtml);
+
+		const { subject, text, html } = generateMailAttrs({
+			data,
+			orig: origRow,
+			signatureHtml,
+			rfcStyle,
+			stripSubjectPrefixes,
+			quoteScope,
+			quoteOverride,
+		});
+
+		// A forward stays in the thread of the forwarded message (like a reply), otherwise it
+		// appears nowhere under the original message; it also carries In-Reply-To and References,
+		// like Gmail and Thunderbird. Without an original thread, the thread is created when
+		// finalizing (Sent copy), not before the send.
+		const threaded = data.mode === "reply" || data.mode === "forward";
+		let threadId: string | null = null;
+		if (data.mode === "reply") {
+			if (!origRow?.message) throw new Error("Original message not found");
+			threadId = origRow.message.threadId;
+		} else if (data.mode === "forward" && origRow?.message?.threadId) {
+			threadId = origRow.message.threadId;
+		}
+
+		const inReplyTo =
+			threaded && origRow?.message
+				? origRow.message.messageId
+				: null;
+
+		const references =
+			threaded && origRow?.message
+				? Array.from(
+					new Set(
+						[
+							...(Array.isArray(origRow.message.references)
+								? origRow.message.references
+								: []),
+							origRow.message.messageId ?? null,
+						].filter(Boolean),
+					),
+				).slice(-30)
+				: [];
+
+		// Kind of automatic mail requested by the payload ("unsubscribe").
+		const autoMail = decodedForm.autoMail === "unsubscribe" ? "unsubscribe" : null;
+		const from = mailbox.identity.value;
+		const finalSubject = String(subject);
+		attachmentCache.set(row.id, attachmentBlobs);
+		return {
+			from,
+			imapDraftId: decodedForm.draftMessageId ? String(decodedForm.draftMessageId) : null,
+			// Frozen on the row at acceptance: the Sent copy is replayed from the row.
+			rendered: {
+				mailboxId: String(decodedForm.sentMailboxId),
+				workspaceId: mailbox.mailbox.workspaceId,
+				identityId: mailbox.mailbox.identityId,
+				ownerId: mailbox.identity.ownerId,
+				senderUserId: String(decodedForm.senderUserId ?? "") || null,
+				from,
+				to: data.to ?? [],
 				cc: data.cc ?? [],
 				bcc: data.bcc ?? [],
-				subject: String(newMessageBody.subject),
-				text: newMessageBody.text ?? "",
-				html: newMessageBody.html ?? "",
-				inReplyTo: inReplyTo ?? "",
-				references: references,
-				extraHeaders: autoMail ? { [AUTO_MAIL_HEADER]: autoMail } : undefined,
-				attachments: attachmentBlobs.map((att) => ({
-					name: att.name,
-					content: att.blob,
-					contentType: String(att.item.contentType),
-				})),
-			});
+				subject: finalSubject,
+				text: text ?? "",
+				html: html ?? "",
+				// In RFC style the text starts with the quote: the snippet stays the reply.
+				snippet: generateSnippet((rfcStyle && data.text) || text || html || ""),
+				threadId,
+				inReplyTo,
+				references,
+				attachments: attachmentBlobs.map((att) => att.item),
+				autoMail,
+				apiMessageId: decodedForm.apiMessageId ? String(decodedForm.apiMessageId) : null,
+			},
+			send: (messageId) =>
+				mailer.sendEmail(data.to, {
+					messageId,
+					from,
+					cc: data.cc ?? [],
+					bcc: data.bcc ?? [],
+					subject: finalSubject,
+					text: text ?? "",
+					html: html ?? "",
+					inReplyTo: inReplyTo ?? "",
+					references: references,
+					extraHeaders: autoMail ? { [AUTO_MAIL_HEADER]: autoMail } : undefined,
+					attachments: attachmentBlobs.map((att) => ({
+						name: att.name,
+						content: att.blob,
+						contentType: String(att.item.contentType),
+					})),
+				}),
+		};
+	};
 
-			if (mailerResponse.success) {
-				const parsedMessage = MessageInsertSchema.parse({
-					...newMessageBody,
-					messageId: String(mailerResponse.MessageId) || `msg-${Date.now()}`,
-				});
-
-				const [newMessage] = await tx
-					.insert(messages)
-					.values(parsedMessage as MessageCreate)
-					.returning();
-
-
+	const finalizeIo: FinalizeIo = {
+		transaction: (fn) =>
+			db.transaction((tx) =>
+				fn({
+					lockRow: (id) => lockLedgerRow(tx, id),
+					ensureThread: async (row) =>
+						row.rendered?.threadId
+							? String(row.rendered.threadId)
+							: ensureThreadId(String(row.rendered!.ownerId), String(row.rendered!.workspaceId), tx as PgTransaction<any>),
+					insertMessage: async (row, threadId) => {
+						const r = row.rendered!;
+						const parsed = MessageInsertSchema.parse({
+							mailboxId: String(r.mailboxId),
+							workspaceId: String(r.workspaceId),
+							threadId,
+							messageId: String(row.messageId),
+							inReplyTo: r.inReplyTo ?? undefined,
+							references: r.references ?? [],
+							hasAttachments: (r.attachments ?? []).length > 0,
+							to: toAddressObj(r.to || []),
+							from: String(r.from),
+							cc: toAddressObj(r.cc || []),
+							bcc: toAddressObj(r.bcc || []),
+							snippet: String(r.snippet ?? ""),
+							subject: r.subject,
+							text: r.text,
+							html: r.html,
+							ownerId: String(r.ownerId),
+							seen: true,
+						});
+						if (r.apiMessageId) parsed.id = String(r.apiMessageId);
+						// IMAP copy in Sent that arrived first (same Message-ID): taken over as is.
+						const [created] = await tx
+							.insert(messages)
+							.values(parsed as MessageCreate)
+							.onConflictDoNothing({ target: [messages.mailboxId, messages.messageId] })
+							.returning({ id: messages.id });
+						if (created) return { id: created.id, inserted: true };
+						const [existing] = await tx
+							.select({ id: messages.id })
+							.from(messages)
+							.where(and(eq(messages.mailboxId, String(r.mailboxId)), eq(messages.messageId, String(row.messageId))))
+							.limit(1);
+						if (!existing) throw new Error("Sent copy neither inserted nor found");
+						return { id: existing.id, inserted: false };
+					},
+					insertAttachments: async (messageRowId, row) => {
+						for (const item of row.rendered?.attachments ?? []) {
+							await tx
+								.insert(messageAttachments)
+								.values({
+									...MessageAttachmentInsertSchema.parse(item),
+									ownerId: String(row.rendered!.ownerId),
+									workspaceId: String(row.rendered!.workspaceId),
+									messageId: messageRowId,
+								})
+								.onConflictDoNothing();
+						}
+					},
+					upsertThreadItem: (messageRowId) => upsertMailboxThreadItem(messageRowId, tx),
+					setSentRowId: (id, messageRowId) =>
+						tx.update(draftMessages).set({ sentRowId: messageRowId, updatedAt: new Date() }).where(eq(draftMessages.id, id)),
+				}),
+			),
+		// Non-transactional effects, each isolated: a failure here never fails a send accepted by
+		// the server.
+		afterCommit: async ({ row, messageRowId, inserted }) => {
+			const r = row.rendered!;
+			const step = async (label: string, fn: () => Promise<unknown>) => {
+				try {
+					await fn();
+				} catch (err: any) {
+					console.error(`[send-mail] ${row.id} ${label} failed:`, err?.message ?? err);
+				}
+			};
+			await step("eml", async () => {
+				const [msg] = await db
+					.select({ ownerId: messages.ownerId, mailboxId: messages.mailboxId, rawStorageKey: messages.rawStorageKey })
+					.from(messages)
+					.where(eq(messages.id, messageRowId))
+					.limit(1);
+				if (!msg || msg.rawStorageKey) return;
+				const blobs =
+					attachmentCache.get(row.id) ??
+					(await fetchAttachmentBlobs(JSON.stringify(r.attachments ?? []), {
+						workspaceId: String(r.workspaceId),
+						identityOwnerId: String(r.ownerId),
+						senderUserId: r.senderUserId ?? null,
+					}));
 				const emlBuffer = await buildEmlBuffer({
-					messageId: String(mailerResponse.MessageId) || `msg-${Date.now()}`,
-					from: mailbox.identity.value,
-					to: data.to || [],
-					cc: data.cc || [],
-					bcc: data.bcc || [],
-					subject: String(newMessage.subject || "(no subject)"),
-					text: newMessage.text,
-					html: newMessage.html,
-					inReplyTo,
-					references,
-					attachments: attachmentBlobs,
+					messageId: String(row.messageId),
+					from: String(r.from),
+					to: r.to || [],
+					cc: r.cc || [],
+					bcc: r.bcc || [],
+					subject: String(r.subject || "(no subject)"),
+					text: r.text,
+					html: r.html,
+					inReplyTo: r.inReplyTo,
+					references: r.references,
+					attachments: blobs,
 				});
-				const rawStorageKey = `eml/${newMessage.ownerId}/${newMessage.mailboxId}/${newMessage.id}.eml`;
+				const rawStorageKey = `eml/${msg.ownerId}/${msg.mailboxId}/${messageRowId}.eml`;
 				await s3.send(
 					new PutObjectCommand({
 						Bucket: serverConfig.S3_BUCKET,
@@ -574,70 +576,137 @@ export default defineNitroPlugin(async (nitroApp) => {
 						ContentType: "message/rfc822",
 					}),
 				);
-				await tx
+				await db
 					.update(messages)
-					.set({
-						rawStorageKey,
-						sizeBytes: emlBuffer.length,
-					})
-					.where(eq(messages.id, newMessage.id));
+					.set({ rawStorageKey, sizeBytes: emlBuffer.length })
+					.where(and(eq(messages.id, messageRowId), isNull(messages.rawStorageKey)));
+			});
+			if (inserted) {
+				await step("search", async () => {
+					const { searchIngestQueue } = await getRedis();
+					await searchIngestQueue.add("add", { messageId: messageRowId }, { removeOnComplete: true });
+				});
 
-
-
-
-				for (const attachmentBlob of attachmentBlobs) {
-					await tx.insert(messageAttachments).values({
-						...attachmentBlob.item,
-						ownerId: newMessage.ownerId,
-						workspaceId: mailbox.mailbox.workspaceId,
-						messageId: newMessage.id,
-					});
-				}
-
-				await upsertMailboxThreadItem(newMessage.id, tx);
-
-				const { searchIngestQueue } = await getRedis();
-				await searchIngestQueue.add(
-					"add",
-					{ messageId: newMessage.id },
-					{ removeOnComplete: true },
-				);
 				// Automatic mail (unsubscribe): the recipient enters neither the address book nor the
 				// suggestions (the Sent folder copy is filtered by the header in
-				// message-parser-contacts.ts).
-				const skipRecipientStats = !!autoMail;
-				// Recipients join the sender's address book. Never blocking: a failure here must not make
-				// a successful send fail.
-				if (!skipRecipientStats) try {
-					await upsertContactsFromOutgoing({
-						ownerIds: [
-							String(decodedForm.senderUserId ?? ""),
-							mailbox.identity.ownerId,
-						].filter(Boolean),
-						workspaceId: mailbox.mailbox.workspaceId,
-						ownAddresses: [mailbox.identity.value],
-						recipients: [data.to, data.cc],
-					});
-				} catch (err: any) {
-					console.error("[send-mail] outgoing contacts failed:", err?.message ?? err);
+				// message-parser-contacts.ts). The recipients join the address book of the sender.
+				if (!r.autoMail) {
+					const ownerIds = [String(r.senderUserId ?? ""), String(r.ownerId)].filter(Boolean);
+					await step("contacts", () =>
+						upsertContactsFromOutgoing({
+							ownerIds,
+							workspaceId: String(r.workspaceId),
+							ownAddresses: [String(r.from)],
+							recipients: [r.to, r.cc],
+						}),
+					);
+					// Recipient suggestions (frecency and co-occurrence), To, Cc and Bcc.
+					await step("recipient stats", () =>
+						ingestRecipientStats({
+							ownerIds,
+							messageId: String(row.messageId),
+							sentAt: row.acceptedAt ?? new Date(),
+							ownAddresses: [String(r.from)],
+							recipients: [r.to, r.cc, r.bcc],
+						}),
+					);
 				}
-				// Recipient suggestions (frecency and co-occurrence), To, Cc and Bcc.
-				if (!skipRecipientStats) await ingestRecipientStats({
-					ownerIds: [String(decodedForm.senderUserId ?? ""), newMessage.ownerId].filter(Boolean),
-					messageId: String(parsedMessage.messageId),
-					sentAt: newMessage.date ?? newMessage.createdAt ?? null,
-					ownAddresses: [mailbox.identity.value],
-					recipients: [data.to, data.cc, data.bcc],
-				});
-			} else {
-				// A refusal without a cause stays a failure (lib/send-outcome.ts).
-				return {
-					success: false,
-					error: mailerFailureOf(mailerResponse) as string,
-				};
 			}
-			return { success: true };
-		});
+			// A send that came from a draft deletes it (database, then IMAP through the draft:delete
+			// job). A canceled or failed send leaves it in place.
+			const draftMessageId = row.payload?.draftMessageId;
+			if (draftMessageId) {
+				await step("draft cleanup", async () => {
+					const [ident] = await db
+						.select({ id: identities.id, ownerId: identities.ownerId })
+						.from(identities)
+						.where(eq(identities.id, String(row.payload?.identityId ?? row.identityId ?? "")));
+					if (ident) {
+						await deleteDraft({
+							ownerId: ident.ownerId,
+							identityId: ident.id,
+							draftMessageId: String(draftMessageId),
+							afterSend: true,
+						});
+					}
+				});
+			}
+		},
+	};
+
+	const sendDeps: SendDeps = {
+		store: ledgerStore,
+		render: renderSend,
+		newMessageId: (from) => messageIdFor(from, randomUUID()),
+		finalize: (rowId) => finalizeSent(rowId, finalizeIo),
+		// Failed end of a send: the "sending" mark is removed and the error kept on the draft
+		// ("Not sent" badge); the row stays in the Outbox.
+		markFailed: async (row, error) => {
+			const draftMessageId = row.payload?.draftMessageId;
+			if (!draftMessageId) return;
+			await setDraftSendState(
+				String(draftMessageId),
+				{ pendingSend: null, sendError: { message: draftSendErrorOf(row, error), at: new Date().toISOString() } },
+				{ ifJobId: row.id },
+			);
+		},
+		// Orphan mark (sweep): the draft of a send that left is deleted as after the send;
+		// otherwise the mark is removed, and the error of a failure still in the Outbox goes back
+		// onto the draft as with markFailed.
+		settleDraft: async (o, action) => {
+			if (action === "delete") {
+				await deleteDraft({
+					ownerId: o.ownerId,
+					identityId: String(o.identityId ?? ""),
+					draftMessageId: o.draftId,
+					afterSend: true,
+					ifJobId: o.rowId,
+				});
+				return;
+			}
+			const failed = o.status === "failed" && !o.dismissedAt && o.lastError;
+			await setDraftSendState(
+				o.draftId,
+				failed
+					? { pendingSend: null, sendError: { message: draftSendErrorOf(o, o.lastError), at: new Date().toISOString() } }
+					: { pendingSend: null },
+				{ ifJobId: o.rowId },
+			);
+		},
+		log: (msg, err) => console.error(`[send-mail] ${msg}`, (err as any)?.message ?? err ?? ""),
+	};
+
+	// Legacy "send-and-reconcile" job: identity, owner and workspace taken from the Sent folder of
+	// the payload (the worker has no RLS session for the default values).
+	const legacyRowOf = async (job: Job) => {
+		const data = (job.data ?? {}) as Record<string, any>;
+		const [mb] = await db
+			.select({
+				identityId: identities.id,
+				ownerId: identities.ownerId,
+				workspaceId: mailboxes.workspaceId,
+				value: identities.value,
+			})
+			.from(mailboxes)
+			.innerJoin(identities, eq(mailboxes.identityId, identities.id))
+			.where(eq(mailboxes.id, String(data.sentMailboxId ?? "")))
+			.limit(1);
+		if (!mb) throw new Error("Mailbox not found");
+		return legacyLedgerRow(
+			{ id: job.id, timestamp: job.timestamp, data },
+			{ identityId: mb.identityId, fromAddress: mb.value },
+			{
+				findByLegacyKey,
+				insertRow: async (v) => {
+					const [created] = await db
+						.insert(draftMessages)
+						.values({ ...v, ownerId: mb.ownerId, workspaceId: mb.workspaceId })
+						.returning({ id: draftMessages.id });
+					return created;
+				},
+				newMessageId: (from) => messageIdFor(from, randomUUID()),
+			},
+		);
 	};
 
 	// The sending user's "RFC style" option, read from the workspace meta (same layout as the
@@ -852,9 +921,25 @@ export default defineNitroPlugin(async (nitroApp) => {
 		});
 	}
 
+	// Scheduled sends picked up again at startup, then the ledger sweep (interrupted sends, late
+	// Sent copies), at startup and every 5 minutes.
+	const sweep = () =>
+		sweepLedger(sendDeps)
+			.then(({ interrupted, finalized, settled }) => {
+				if (interrupted.length || finalized.length || settled.length) {
+					console.warn(`[send-mail] ledger sweep: interrupted ${interrupted.join(", ") || "-"}, finalized ${finalized.join(", ") || "-"}, drafts settled ${settled.join(", ") || "-"}`);
+				}
+			})
+			.catch((e: any) => console.error("[send-mail] ledger sweep failed:", e?.message ?? e));
+	rehydrateScheduled()
+		.catch((e: any) => console.error("[send-mail] scheduled restore failed:", e?.message ?? e))
+		.finally(sweep);
+	const sweepTimer = setInterval(sweep, 5 * 60_000);
+
 	nitroApp.hooks.hookOnce("close", async () => {
 		console.log("Closing nitro server...");
 		console.log("Task is done!");
+		clearInterval(sweepTimer);
 		try {
 			await worker.close();
 		} catch (err: any) {

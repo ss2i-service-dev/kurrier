@@ -6,6 +6,8 @@ import {
 	RawSesConfigSchema,
 	SesConfig,
 	VerifyResult,
+	httpFailureAmbiguous,
+	SendEmailResult,
 } from "../core";
 import {
 	CreateReceiptRuleSetCommand,
@@ -873,7 +875,7 @@ export class SesMailer implements Mailer {
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
-	): Promise<{ success: boolean; MessageId?: string; error?: string }> {
+	): Promise<SendEmailResult> {
 		// const subject = opts?.subject ?? "Test email";
 		// const body =
 		//     opts?.body ??
@@ -981,8 +983,12 @@ export class SesMailer implements Mailer {
 			};
 		} catch (err) {
 			console.error("SES sendTestEmail error:", err);
-			// The cause goes up to the worker (SMTP refusal, network error).
-			return { success: false, error: String((err as any)?.response || (err as any)?.message || String(err)) };
+			// The cause goes up to the worker (SMTP refusal, network error), and whether the outcome is unknown.
+			return {
+				success: false,
+				error: String((err as any)?.response || (err as any)?.message || String(err)),
+				ambiguous: httpFailureAmbiguous(err),
+			};
 		}
 	}
 

@@ -124,6 +124,26 @@ export type EmailIdentity = {
 	slug: string;
 };
 
+// Outcome of a send. `response`: the server reply on acceptance (text of the 250).
+// `ambiguous`: a failure where it is unknown whether the message left (connection cut after
+// DATA without a numeric reply, API timeout); never resent without confirmation.
+export type SendEmailResult = {
+	success: boolean;
+	MessageId?: string;
+	error?: string;
+	response?: string;
+	ambiguous?: boolean;
+};
+
+// Failure of an HTTP sending API: ambiguous without an HTTP status (timeout, network cut), the
+// message may have left. Status per SDK: AWS ($metadata), SendGrid (code), Mailgun, Postmark.
+export function httpFailureAmbiguous(err: unknown): boolean {
+	const e = (err ?? {}) as Record<string, any>;
+	const status =
+		e.$metadata?.httpStatusCode ?? e.status ?? e.statusCode ?? (typeof e.code === "number" ? e.code : undefined);
+	return !(Number(status) >= 400);
+}
+
 export interface Mailer {
 	verify(id: string, metaData?: Record<any, any>): Promise<VerifyResult>;
 	sendTestEmail(
@@ -145,8 +165,11 @@ export interface Mailer {
 			// Extra headers (e.g. X-Kurrier-Auto) added to the message as-is.
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
+			// Message-ID set before the send, correlation key of the draft_messages ledger. A
+			// provider that rewrites it returns its own in MessageId.
+			messageId?: string;
 		},
-	): Promise<{ success: boolean; MessageId?: string; error?: string }>;
+	): Promise<SendEmailResult>;
 	addDomain(domain: string, opts: Record<any, any>): Promise<DomainIdentity>;
 	addEmail(
 		email: string,

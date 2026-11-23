@@ -6,6 +6,8 @@ import {
 	PostmarkConfig,
 	RawPostmarkConfigSchema,
 	VerifyResult,
+	httpFailureAmbiguous,
+	SendEmailResult,
 } from "../core";
 import postmark from "postmark";
 import { sanitizeFilename } from "@common/mail-client";
@@ -384,7 +386,7 @@ export class PostmarkMailer implements Mailer {
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
-	): Promise<{ success: boolean; MessageId?: string; error?: string }> {
+	): Promise<SendEmailResult> {
 		try {
 			const Attachments =
 				opts.attachments && opts.attachments.length
@@ -431,6 +433,7 @@ export class PostmarkMailer implements Mailer {
 			return {
 				success: false,
 				error: err?.message ?? "Postmark send exception",
+				ambiguous: httpFailureAmbiguous(err),
 			};
 		}
 	}

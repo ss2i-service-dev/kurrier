@@ -1,5 +1,6 @@
 import {
 	db,
+	draftMessages,
 	identities,
 	mailboxes,
 	mailboxThreads,
@@ -7,7 +8,7 @@ import {
 	threads,
 } from "@db";
 import type { AddressObjectJSON } from "@schema";
-import { and, desc, eq, notExists, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, notExists, sql } from "drizzle-orm";
 import { generateSnippet, upsertMailboxThreadItem } from "./mail";
 import type { QuoteMode, QuoteScope } from "./compose";
 import { addressObjToList } from "./mail-client";
@@ -17,6 +18,7 @@ export * from "./draft-send";
 import {
 	DRAFT_PENDING_ERROR,
 	draftTimesOf,
+	isScheduledMark,
 	mergeDraftMeta,
 	pendingSendAlive,
 	type DraftPendingSend,
@@ -107,12 +109,16 @@ export type DraftMeta = {
 // Writes (object) or clears (null) pendingSend / sendError in meta.draft, by jsonb_set on
 // these keys only: a concurrent autosave or IMAP sync (meta.imap) is not overwritten. A
 // key absent from the patch is left untouched.
+// `ifJobId`: only writes if the draft send mark still points to this ledger row (or if the
+// draft carries none, or a legacy countdown): a late failure or cleanup never clears the
+// mark of a more recent send.
 export async function setDraftSendState(
 	draftMessageId: string,
 	patch: {
 		pendingSend?: DraftPendingSend | null;
 		sendError?: DraftSendError | null;
 	},
+	opts: { ifJobId?: string } = {},
 ) {
 	let expr = sql`(case when jsonb_typeof(${messages.metaData}) = 'object' then ${messages.metaData} else '{}'::jsonb end)`;
 	for (const key of ["pendingSend", "sendError"] as const) {
@@ -127,7 +133,56 @@ export async function setDraftSendState(
 	await db
 		.update(messages)
 		.set({ metaData: expr })
-		.where(and(eq(messages.id, draftMessageId), eq(messages.draft, true)));
+		.where(
+			and(
+				eq(messages.id, draftMessageId),
+				eq(messages.draft, true),
+				opts.ifJobId
+					? sql`(coalesce(${messages.metaData}->'draft'->'pendingSend'->>'jobId', '') in ('', ${opts.ifJobId})
+						or ${messages.metaData}->'draft'->'pendingSend'->>'jobId' like 'undo-send-%')`
+					: undefined,
+			),
+		);
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Does the send mark still lock the draft? For a send that went through the ledger (jobId =
+// draft_messages row), the row decides: finished or missing, the draft can be edited, deleted
+// and sent again (pendingSendAlive).
+export async function pendingSendLive(pending: DraftPendingSend | null | undefined): Promise<boolean> {
+	if (!pending || !isScheduledMark(pending) || !UUID_RE.test(pending.jobId)) return pendingSendAlive(pending);
+	const [row] = await db
+		.select({
+			status: draftMessages.status,
+			acceptedAt: draftMessages.acceptedAt,
+			sentRowId: draftMessages.sentRowId,
+			dismissedAt: draftMessages.dismissedAt,
+		})
+		.from(draftMessages)
+		.where(eq(draftMessages.id, pending.jobId))
+		.limit(1);
+	return pendingSendAlive(pending, Date.now(), row ?? null);
+}
+
+// Previous send of the draft interrupted (the server did not answer, never accepted) and not
+// dismissed yet: the mail may have been sent, the draft does not leave again (enqueueSend).
+export async function interruptedSendOf(draftMessageId: string, identityId: string): Promise<boolean> {
+	const [row] = await db
+		.select({ id: draftMessages.id })
+		.from(draftMessages)
+		.where(
+			and(
+				eq(draftMessages.identityId, identityId),
+				eq(draftMessages.status, "failed"),
+				eq(draftMessages.acceptanceUnknown, true),
+				isNull(draftMessages.acceptedAt),
+				isNull(draftMessages.dismissedAt),
+				sql`${draftMessages.payload}->>'draftMessageId' = ${draftMessageId}`,
+			),
+		)
+		.limit(1);
+	return !!row;
 }
 
 export type DraftInput = {
@@ -266,7 +321,7 @@ export async function upsertDraftRow(input: DraftInput) {
 	if (input.draftMessageId && !existing) throw new Error("Draft not found");
 	// A pending send carries a copy of the content; changing the draft behind its back would be
 	// lost. Cancel the send first (which clears the mark).
-	if (existing && pendingSendAlive(draftMetaOf(existing)?.pendingSend)) {
+	if (existing && (await pendingSendLive(draftMetaOf(existing)?.pendingSend))) {
 		throw new Error(DRAFT_PENDING_ERROR);
 	}
 
@@ -533,10 +588,14 @@ export async function deleteDraftRow(opts: {
 	// Cleanup after a successful send (the draft leaves with the message): the "pending send"
 	// guard does not apply.
 	afterSend?: boolean;
+	// Cleanup of an orphan mark: the draft is only deleted if its send mark still points to
+	// this ledger row.
+	ifJobId?: string;
 }): Promise<DraftImapRef | null> {
 	const row = await getDraftRow(opts);
 	if (!row) return null;
-	if (!opts.afterSend && pendingSendAlive(draftMetaOf(row)?.pendingSend)) {
+	if (opts.ifJobId && draftMetaOf(row)?.pendingSend?.jobId !== opts.ifJobId) return null;
+	if (!opts.afterSend && (await pendingSendLive(draftMetaOf(row)?.pendingSend))) {
 		throw new Error(DRAFT_PENDING_ERROR);
 	}
 	const [box] = await db

@@ -3,11 +3,32 @@ import {
 	DomainIdentity,
 	Mailer,
 	RawSmtpConfigSchema,
+	SendEmailResult,
 	SmtpVerifyInput,
 	VerifyResult,
 } from "../core";
 import { ImapFlow } from "imapflow";
 import SMTPTransport from "nodemailer/lib/smtp-transport";
+
+// Is an SMTP failure ambiguous (the message may have left)? No if the server answered with a
+// code (certain refusal, at any step, DATA included), if the connection or the resolution never
+// succeeded, or if authentication or TLS failed (before DATA). Otherwise yes: nodemailer labels
+// a cut before MAIL FROM and a cut after the content alike as "CONN", without the step; when in
+// doubt, ambiguous (confirmation before resending).
+export function smtpFailureAmbiguous(err: unknown): boolean {
+	const e = (err ?? {}) as Record<string, any>;
+	if (e.responseCode) return false;
+	if (["EAUTH", "ENOAUTH", "EOAUTH2", "EDNS", "ETLS", "EENVELOPE"].includes(e.code)) return false;
+	if (e.syscall === "connect" || e.syscall === "getaddrinfo") return false;
+	if (e.code === "ETIMEDOUT" && /Connection timeout|Greeting never received/.test(String(e.message))) return false;
+	if (e.code === "EMESSAGE" && (e.command === "API" || e.command === "MAIL FROM")) return false;
+	return true;
+}
+
+// Transport timeouts (nodemailer defaults: 2 min, 30 s, 10 min) well below the threshold where
+// the sweep declares a send "interrupted" (STALE_SENDING_MS, 10 min): a silent server fails the
+// send before that, an active send is never taken for an interrupted one.
+export const SMTP_TIMEOUTS = { connectionTimeout: 30_000, greetingTimeout: 30_000, socketTimeout: 120_000 } as const;
 
 export class SmtpMailer implements Mailer {
 	private transporter: Transporter;
@@ -20,6 +41,7 @@ export class SmtpMailer implements Mailer {
 			secure: cfg.secure ?? cfg.port === 465,
 			auth: cfg.auth,
 			pool: cfg.pool ?? false,
+			...SMTP_TIMEOUTS,
 		} as SMTPTransport.Options);
 		this.imapClient = cfg.imap
 			? new ImapFlow({
@@ -150,8 +172,9 @@ export class SmtpMailer implements Mailer {
 			// Extra headers (e.g. X-Kurrier-Auto) added to the message as-is.
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
+			messageId?: string;
 		},
-	): Promise<{ success: boolean; MessageId?: string; error?: string }> {
+	): Promise<SendEmailResult> {
 		try {
 			// convert Blob attachments -> Nodemailer format (Buffer)
 			const attachments = await Promise.all(
@@ -182,13 +205,22 @@ export class SmtpMailer implements Mailer {
 				// attachments, as Outlook does: a remote image would be blocked by default
 				// for most recipients.
 				attachDataUrls: true,
+				// Message-ID set by the ledger, otherwise nodemailer generates it.
+				...(opts.messageId ? { messageId: opts.messageId } : {}),
 			});
 
-			return { success: true, MessageId: String(info.messageId || "") };
+			return {
+				success: true,
+				MessageId: String(info.messageId || ""),
+				response: info.response ? String(info.response) : undefined,
+			};
 		} catch (err) {
-			// You can add logging here if desired
-			// The cause goes up to the worker (SMTP refusal, network error).
-			return { success: false, error: String((err as any)?.response || (err as any)?.message || String(err)) };
+			// The cause goes up to the worker (SMTP refusal, network error), and whether the outcome is unknown.
+			return {
+				success: false,
+				error: String((err as any)?.response || (err as any)?.message || String(err)),
+				ambiguous: smtpFailureAmbiguous(err),
+			};
 		}
 	}
 

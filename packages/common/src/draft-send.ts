@@ -65,6 +65,17 @@ export function draftTimesOf(row: {
 // silently changed or deleted: the send carries a copy of the content, a change would be lost
 // without the user knowing.
 export const DRAFT_PENDING_ERROR = "This draft is scheduled; cancel the scheduled send first";
+// Previous send interrupted, or cut off after sending (the server did not answer): the mail
+// may have been sent, the draft does not leave again until the send is dismissed in the
+// Outbox ("Retry" asks for confirmation there).
+export const DRAFT_MAYBE_SENT_ERROR = "This message may already have been sent: check the Outbox";
+
+// Error set on the draft at the end of a failed send.
+export function draftSendErrorOf(row: { acceptanceUnknown?: boolean | null }, error: string | null | undefined): string {
+	if (!row.acceptanceUnknown) return String(error ?? "");
+	return error ? `${DRAFT_MAYBE_SENT_ERROR}. ${error}` : DRAFT_MAYBE_SENT_ERROR;
+}
+
 // Undo countdown with no outcome for 3 minutes: unknown state, the mark no longer locks.
 export const PENDING_STALE_MS = 3 * 60_000;
 
@@ -72,15 +83,43 @@ export const PENDING_STALE_MS = 3 * 60_000;
 export const isScheduledMark = (pending: DraftPendingSend | null | undefined) =>
 	!!pending?.jobId && !pending.jobId.startsWith("undo-send-");
 
+// draft_messages ledger row a mark points to (jobId = row id).
+export type MarkLedgerRow = {
+	status: string;
+	acceptedAt?: Date | string | null;
+	sentRowId?: string | null;
+	dismissedAt?: Date | string | null;
+};
+
+// The row keeps the draft locked: send waiting, in progress, or accepted without a Sent copy
+// yet (finalizing then deletes the draft).
+const rowHoldsDraft = (row: MarkLedgerRow) =>
+	!row.dismissedAt &&
+	(row.status === "scheduled" ||
+		row.status === "sending" ||
+		(row.status === "sent" && !!row.acceptedAt && !row.sentRowId));
+
+// Orphan mark (finished row, draft not cleaned up: crash after the commit, failed cleanup,
+// restore or mark removal): sent with its Sent copy -> the draft goes; failure, cancel,
+// dismissed row or legacy "sent" row -> only the mark is removed, the content stays. Null: the
+// row still holds the draft.
+export type SettleAction = "delete" | "unlock";
+export function settleActionOf(row: MarkLedgerRow): SettleAction | null {
+	if (rowHoldsDraft(row)) return null;
+	return row.status === "sent" && row.sentRowId && !row.dismissedAt ? "delete" : "unlock";
+}
+
+// `row`: row a scheduled send mark points to (undefined = not read, null = missing).
 export function pendingSendAlive(
 	pending: DraftPendingSend | null | undefined,
 	now: number = Date.now(),
+	row?: MarkLedgerRow | null,
 ): boolean {
 	if (!pending) return false;
 	const at = Date.parse(pending.sendAt);
 	if (Number.isNaN(at)) return false;
-	// A scheduled send stays alive as long as its mark exists (the time may be past if the
-	// worker is stopped): only the send, a final failure and a cancel clear it.
-	if (isScheduledMark(pending)) return true;
+	// A scheduled send stays alive as long as its row does (the time may be past if the worker
+	// is stopped); a finished or missing row no longer locks the draft.
+	if (isScheduledMark(pending)) return row === undefined || (!!row && rowHoldsDraft(row));
 	return at > now - PENDING_STALE_MS;
 }

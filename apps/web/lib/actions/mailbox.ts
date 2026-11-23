@@ -45,7 +45,7 @@ import { isSignedIn } from "@/lib/actions/auth";
 import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
-import { extractListUnsubscribe, imapDraftIdOfJob, pendingSendAlive, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
+import { cancelSend, enqueueSend, sendNowPlanOf, dismissRestoresDraft, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendLive, interruptedSendOf, deleteDraftRow, DRAFT_DELETE_JOB, draftDeleteJobOptions, type SettleAction, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import { saveDraft } from "@/lib/actions/drafts";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
@@ -65,6 +65,7 @@ import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3 } from "@/lib/create-s3-client";
 import { attachmentUrls } from "@/lib/attachment-links";
+import type { OutboxTracking } from "@/lib/outbox-view";
 
 let typeSenseClient: Client | null = null;
 function getTypeSenseClient(): Client {
@@ -453,7 +454,7 @@ export async function sendMail(
 			decodedForm.draftMessageId = draftId;
 			// A draft whose send is already pending (undo delay or scheduled) is neither sent a
 			// second time nor scheduled again: the send is canceled first.
-			if (pendingSendAlive((await draftSendStateOfMessage(draftId)).pendingSend)) {
+			if (await pendingSendLive((await draftSendStateOfMessage(draftId)).pendingSend)) {
 				return {
 					success: false,
 					error: "This draft already has a pending send. Cancel it first.",
@@ -482,6 +483,8 @@ export async function sendMail(
 	const scheduledAtRaw = decodedForm.scheduledAt
 		? String(decodedForm.scheduledAt)
 		: "";
+	let origin: "scheduled" | "undo" = "undo";
+	let sendAt = new Date();
 	if (scheduledAtRaw) {
 		// A time more than one minute in the past is refused (the mail would leave right away,
 		// which the user did not ask for).
@@ -496,93 +499,111 @@ export async function sendMail(
 			};
 		}
 
-		const parsed = DraftMessageInsertSchema.safeParse({
-			identityId: identity.id,
-			mailboxId: decodedForm.mailboxId,
+		origin = "scheduled";
+		sendAt = check.at;
+	}
+
+	// Outbox. Every send from the interface is a draft_messages ledger row, then the draft
+	// mark, then a job with the same id (packages/common/src/outbox.ts): scheduled at the chosen
+	// time, or delayed by the undo delay chosen by the user (Settings > Compose, 0 = send
+	// immediately). "Undo" and "Send now" go through the row; server-side, so closing the tab
+	// does not prevent the send.
+	const undoMs = origin === "undo" ? (await undoSendSeconds()) * 1000 : 0;
+	if (origin === "undo") sendAt = new Date(Date.now() + undoMs);
+	const imapDraftId = decodedForm.draftMessageId ? String(decodedForm.draftMessageId) : null;
+	const { sendMailQueue } = await getRedis();
+	const queued = await enqueueSend(
+		{
 			payload: decodedForm,
-			status: "scheduled",
-			scheduledAt: check.at,
-		});
-
-		if (!parsed.success) {
-			return {
-				success: false,
-				error: "There was an error trying to schedule your mail.",
-			};
-		}
-
-		const row = await rls(async (tx) => {
-			const [created] = await tx
-				.insert(draftMessages)
-				.values(parsed.data)
-				.returning({
-					id: draftMessages.id,
-					scheduledAt: draftMessages.scheduledAt,
-				});
-			return created ?? null;
-		});
-
-		if (!row?.id || !row.scheduledAt) {
-			return { success: false, error: "Failed to schedule your mail." };
-		}
-
-		const { sendMailQueue } = await getRedis();
-		const job = scheduledJobOf(
-			{ id: row.id, identityId: identity.id, scheduledAt: row.scheduledAt, payload: decodedForm },
-		);
-		try {
-			await sendMailQueue.add(job.name, job.data, job.opts);
-		} catch (e) {
-			// Without a job, the row would only leave at the next worker start: it is removed.
-			await rls((tx) => tx.delete(draftMessages).where(eq(draftMessages.id, row.id)));
-			console.error("[send] scheduling enqueue failed", e);
-			return { success: false, error: "Failed to schedule your mail." };
-		}
-		// The source draft carries the send mark (pending section of Drafts, the banner replaces
-		// the editor when opened, no change silently lost).
-		if (!(await markDraftScheduled(job.data.imapDraftId, scheduledPendingSend(row)))) {
-			// No scheduled send without a mark: the draft would stay editable and the send
-			// invisible. The job and the row are removed.
-			try {
-				await (await sendMailQueue.getJob(row.id))?.remove();
-			} catch {
-				// job already taken: removing the row below keeps it from leaving
-			}
-			await rls((tx) => tx.delete(draftMessages).where(eq(draftMessages.id, row.id)));
-			return { success: false, error: "Failed to schedule your mail." };
-		}
-		revalidatePath("/dashboard/mail");
+			identityId: identity.id,
+			mailboxId: String(decodedForm.mailboxId),
+			origin,
+			sendAt,
+			fromAddress: identity.value,
+		},
+		{
+			insertRow: async (v) => {
+				const values = DraftMessageInsertSchema.parse(v);
+				const [created] = await rls((tx) =>
+					tx
+						.insert(draftMessages)
+						.values(values)
+						.returning({ id: draftMessages.id, scheduledAt: draftMessages.scheduledAt }),
+				);
+				if (!created?.id) throw new Error("send row not created");
+				return created;
+			},
+			// The source draft carries the send mark (Outbox section, the banner replaces the
+			// editor when opened, no change silently lost). A scheduled send is not created
+			// without a mark; a delayed send leaves even without one.
+			mark: async (row) =>
+				origin === "scheduled"
+					? markDraftScheduled(imapDraftId, scheduledPendingSend(row))
+					: (await markDraftPending(imapDraftId ?? "", row.id, undoMs), true),
+			unmark: async () => {
+				const id = imapDraftId ? await ownedDraftId(imapDraftId) : null;
+				if (id) await setDraftSendState(id, { pendingSend: null });
+			},
+			addJob: (name, data, opts) => sendMailQueue.add(name, data, opts),
+			deleteRow: (id) =>
+				rls((tx) =>
+					tx
+						.delete(draftMessages)
+						.where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
+				),
+			cancelRow: (id) =>
+				rls((tx) =>
+					tx
+						.update(draftMessages)
+						.set({ status: "canceled", updatedAt: new Date() })
+						.where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
+				),
+			supersede: (draftId) => supersedeFailedSends(draftId),
+			interrupted: (draftId) => interruptedSendOf(draftId, identity.id),
+		},
+	).catch((e: any) => ({ ok: false as const, error: String(e?.message ?? e), maybeSent: false }));
+	if (!queued.ok) {
+		// Previous send interrupted (may have been sent): say so, nothing was queued.
+		if (queued.maybeSent) return { success: false, error: queued.error };
+		console.error("[send] enqueue failed", queued.error);
+		return {
+			success: false,
+			error: origin === "scheduled" ? "Failed to schedule your mail." : "Failed to send your mail. Nothing was sent.",
+		};
+	}
+	revalidatePath("/dashboard/mail");
+	if (origin === "scheduled") {
 		return {
 			success: true,
 			message: "Message scheduled",
-			data: {
-				draftMessageId: row.id,
-				scheduledAt: new Date(row.scheduledAt).toISOString(),
-			},
+			data: { draftMessageId: queued.rowId, scheduledAt: queued.scheduledAt.toISOString() },
 		};
 	}
-
-	// Undo send. The job goes out with a delay: the interface offers "Undo" (job removal)
-	// and "Send now" (job promotion) during that delay. Server-side, so closing the tab
-	// does not prevent the send.
-	// Delay chosen by the user (Settings > Compose), 0 = send immediately.
-	const undoMs = (await undoSendSeconds()) * 1000;
-	const { sendMailQueue } = await getRedis();
-	const job = await sendMailQueue.add("send-and-reconcile", decodedForm, {
-		jobId: `undo-send-${crypto.randomUUID()}`,
-		delay: undoMs,
-	});
-	// The original draft carries the "sending" mark (Drafts list, opening).
-	await markDraftPending(
-		String(decodedForm.draftMessageId ?? ""),
-		String(job.id),
-		undoMs,
-	);
 	return {
 		success: true,
 		message: "Message sent",
-		data: { pendingSendId: String(job.id), undoMs },
+		data: { pendingSendId: queued.rowId, undoMs },
 	};
+}
+
+// A new send of a draft dismisses its previous failed sends from the Outbox (otherwise "Retry"
+// on the old one would send a second time). Never an interrupted send (may have been sent):
+// it is the only trace, the user dismisses it. RLS.
+async function supersedeFailedSends(imapDraftId: string) {
+	const rls = await rlsClient();
+	await rls((tx) =>
+		tx
+			.update(draftMessages)
+			.set({ dismissedAt: new Date(), updatedAt: new Date() })
+			.where(
+				and(
+					eq(draftMessages.status, "failed"),
+					eq(draftMessages.acceptanceUnknown, false),
+					isNull(draftMessages.dismissedAt),
+					sql`${draftMessages.payload}->>'draftMessageId' = ${imapDraftId}`,
+				),
+			),
+	);
 }
 
 // The draft is only touched if it is visible to the user: RLS and sending identity of the
@@ -678,6 +699,7 @@ async function scheduledRowOf(rowId: string) {
 				id: draftMessages.id,
 				identityId: draftMessages.identityId,
 				status: draftMessages.status,
+				origin: draftMessages.origin,
 				scheduledAt: draftMessages.scheduledAt,
 				payload: draftMessages.payload,
 			})
@@ -750,57 +772,129 @@ async function restoreDraftFromRow(
 	return saved.draftMessageId;
 }
 
-// "Undo" of a send still pending. Returns the form if the job was removed; if it has already
-// gone (or is being sent), nothing more can be done. A scheduled send whose Redis job is gone
-// (purge, missed recovery) is canceled through its draft_messages row (jobId = row id); the
-// content goes back into the draft.
+// "Undo" of a send still pending. A send tracked by its draft_messages row (jobId = row id:
+// undo delay, scheduled send) is canceled through the row: CAS scheduled -> canceled before
+// any job removal and any draft restore (cancelSend); if lost, the real state is returned
+// (already sent, being sent). A legacy delayed "undo-send-*" job (in flight during an
+// upgrade) is removed while it waits.
 export async function cancelPendingSend(pendingSendId: string) {
-	const job = await ownedPendingSend(pendingSendId);
+	const id = String(pendingSendId);
 	try {
-		if (!job || job.name === SCHEDULED_JOB) {
-			const row = await cancelScheduledRow(String(pendingSendId));
-			if (!row) return { cancelled: false as const };
-			try {
-				await restoreDraftFromRow(row);
-			} catch (e) {
-				// The canceled row keeps the content; the draft stays readable, without a mark.
-				console.error("[send] restore of scheduled content failed", e);
-			}
-			return { cancelled: true as const };
+		const seen = await scheduledRowOf(id);
+		if (seen) {
+			const rls = await rlsClient();
+			const res = await cancelSend({
+				casCancel: async () => {
+					const [row] = await rls((tx) =>
+						tx
+							.update(draftMessages)
+							.set({ status: "canceled", updatedAt: new Date() })
+							.where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled")))
+							.returning({ id: draftMessages.id }),
+					);
+					return row ?? null;
+				},
+				readRow: () => ledgerStateRowOf(id),
+				removeJob: async () => {
+					const { sendMailQueue } = await getRedis();
+					await (await sendMailQueue.getJob(id))?.remove();
+				},
+				// Undo delay: the draft stayed in place, only its mark is removed (recreated from
+				// the row if it is gone). Scheduled send: the content sent goes back into the
+				// draft.
+				restore: () => restoreDraftFromRow(seen, { onlyIfMissing: seen.origin === "undo" }),
+				unlock: () => unlockDraftOfRow(seen),
+				settle: (action) => settleDraftOfRow(seen, action),
+			});
+			return { cancelled: res.cancelled, state: res.state };
 		}
-		if ((await job.getState()) !== "delayed") return { cancelled: false as const };
+		const job = await ownedPendingSend(id);
+		if (!job || job.name === SCHEDULED_JOB) return { cancelled: false as const, state: null };
+		if ((await job.getState()) !== "delayed") return { cancelled: false as const, state: null };
 		await job.remove();
 		try {
-			const id = await ownedDraftId(imapDraftIdOfJob(job.name, job.data));
-			if (id) await setDraftSendState(id, { pendingSend: null });
+			const draftId = await ownedDraftId(imapDraftIdOfJob(job.name, job.data));
+			if (draftId) await setDraftSendState(draftId, { pendingSend: null });
 		} catch (e) {
 			console.error("[send] pendingSend clear failed", e);
 		}
-		return { cancelled: true as const };
-	} catch {
-		return { cancelled: false as const };
+		return { cancelled: true as const, state: "canceled" as const };
+	} catch (e) {
+		console.error("[send] cancel failed", e);
+		return { cancelled: false as const, state: null };
 	}
 }
 
+// State of a ledger row already checked by scheduledRowOf.
+async function ledgerStateRowOf(rowId: string) {
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({
+				status: draftMessages.status,
+				deliveryState: draftMessages.deliveryState,
+				acceptanceUnknown: draftMessages.acceptanceUnknown,
+				acceptedAt: draftMessages.acceptedAt,
+				dismissedAt: draftMessages.dismissedAt,
+				sentRowId: draftMessages.sentRowId,
+			})
+			.from(draftMessages)
+			.where(eq(draftMessages.id, rowId))
+			.limit(1),
+	);
+	return row ?? null;
+}
+
+// Row already canceled (second click): the draft mark is only removed if it still points to
+// this row; the content is not touched.
+async function unlockDraftOfRow(row: { id: string; payload: Record<string, any> }) {
+	const draftId = await ownedDraftId(String(row.payload?.draftMessageId ?? ""));
+	if (!draftId) return;
+	if ((await draftSendStateOfMessage(draftId)).pendingSend?.jobId !== row.id) return;
+	await setDraftSendState(draftId, { pendingSend: null }, { ifJobId: row.id });
+}
+
+// Cancel on a finished row whose draft still carries the mark (cancelSend): sent with its Sent
+// copy, the draft is deleted as after a send; otherwise only the mark is removed.
+async function settleDraftOfRow(
+	row: { id: string; payload: Record<string, any>; identity: Record<string, any> },
+	action: SettleAction,
+) {
+	if (action === "unlock") return unlockDraftOfRow(row);
+	const draftId = await ownedDraftId(String(row.payload?.draftMessageId ?? ""));
+	if (!draftId) return;
+	const ref = await deleteDraftRow({
+		ownerId: String(row.identity.ownerId),
+		draftMessageId: draftId,
+		afterSend: true,
+		ifJobId: row.id,
+	});
+	if (!ref) return;
+	const { smtpQueue } = await getRedis();
+	await smtpQueue.add(DRAFT_DELETE_JOB, ref, draftDeleteJobOptions());
+}
+
 // "Send now": the pending job goes out immediately. The mark (sendAt = now) is only set once the
-// job is promoted or added again: a failure does not suggest a send that left. Redis job gone
-// for a scheduled send: it is added again without delay from the row.
+// job is promoted or added again: a failure does not suggest a send that left. Redis job gone or
+// finished while the row still waits: added again without delay from the row (sendNowPlanOf).
 export async function sendPendingNow(pendingSendId: string) {
 	const job = await ownedPendingSend(pendingSendId);
 	try {
 		let imapDraftId = "";
-		if (job) {
-			if ((await job.getState()) !== "delayed") return;
+		const row = await scheduledRowOf(String(pendingSendId));
+		const plan = sendNowPlanOf(job ? await job.getState() : null, row?.status ?? null);
+		if (plan === "promote" && job) {
 			await job.promote();
 			imapDraftId = imapDraftIdOfJob(job.name, job.data);
-		} else {
-			const row = await scheduledRowOf(String(pendingSendId));
-			if (!row || row.status !== "scheduled") return;
+		} else if (plan === "readd" && row) {
+			// Job finished (failed, completed) while the row still waits: removed, otherwise BullMQ
+			// would ignore the add with the same id.
+			if (job) await job.remove();
 			const re = scheduledJobOf({ ...row, scheduledAt: new Date() });
 			const { sendMailQueue } = await getRedis();
 			await sendMailQueue.add(re.name, re.data, { ...re.opts, delay: 0 });
 			imapDraftId = re.data.imapDraftId ?? "";
-		}
+		} else return;
 		const id = await ownedDraftId(imapDraftId);
 		if (id)
 			await setDraftSendState(id, {
@@ -816,13 +910,18 @@ export async function sendPendingNow(pendingSendId: string) {
 // waiting here would block all the others.
 export async function waitPendingSend(pendingSendId: string): Promise<FormState> {
 	const job = await ownedPendingSend(pendingSendId);
-	if (!job) return {};
-	const { sendMailEvents } = await getRedis();
-	try {
-		return (await job.waitUntilFinished(sendMailEvents, 120_000)) ?? {};
-	} catch (e: any) {
-		return { error: e?.message ?? "Sending failed" };
+	if (job) {
+		const { sendMailEvents } = await getRedis();
+		try {
+			return (await job.waitUntilFinished(sendMailEvents, 120_000)) ?? {};
+		} catch (e: any) {
+			return { error: e?.message ?? "Sending failed" };
+		}
 	}
+	// Job already removed from Redis: the outcome is on the ledger row (Outbox).
+	const row = await scheduledRowOf(String(pendingSendId));
+	if (row?.status === "failed") return { error: String(row.payload?.__error ?? "Sending failed") };
+	return {};
 }
 
 export const deltaFetch = async ({ identityId: requestedId }: { identityId: string }) => {
@@ -1975,6 +2074,242 @@ export async function deleteScheduledDraft(
 		revalidatePath("/dashboard/mail");
 		return { success: true };
 	});
+}
+
+// Outbox: sends waiting, in progress, and failures not dismissed, read from the
+// draft_messages ledger (states: packages/common/src/outbox-state.ts). Candidates in SQL,
+// exact visibility through isOutboxVisible.
+const outboxCandidate = or(
+	inArray(draftMessages.status, ["scheduled", "sending"]),
+	and(eq(draftMessages.status, "failed"), isNull(draftMessages.dismissedAt)),
+	and(eq(draftMessages.status, "sent"), notInArray(draftMessages.deliveryState, ["none", "delivered"])),
+);
+
+const iso = (d: Date | string | null | undefined) => (d == null ? null : new Date(d).toISOString());
+
+const outboxStateCols = {
+	id: draftMessages.id,
+	identityId: draftMessages.identityId,
+	status: draftMessages.status,
+	deliveryState: draftMessages.deliveryState,
+	acceptanceUnknown: draftMessages.acceptanceUnknown,
+	acceptedAt: draftMessages.acceptedAt,
+	dismissedAt: draftMessages.dismissedAt,
+};
+
+// Sidebar counter, per identity visible to the user: total of visible sends and number of
+// alerts (failed, interrupted), plus what is needed to refresh the page while a send moves
+// (lib/outbox-view.ts, outboxRefreshOf). Neither content nor recipients.
+export type OutboxCount = { identityId: string; total: number; alert: number } & OutboxTracking;
+
+export const fetchOutboxCounts = async (): Promise<OutboxCount[]> => {
+	const rls = await rlsClient();
+	const rows = await rls((tx) =>
+		tx
+			.select({ ...outboxStateCols, scheduledAt: draftMessages.scheduledAt })
+			.from(draftMessages)
+			.innerJoin(identities, eq(draftMessages.identityId, identities.id))
+			.where(outboxCandidate),
+	);
+	const byIdentity = new Map<string, typeof rows>();
+	for (const r of rows) {
+		if (!r.identityId) continue;
+		byIdentity.set(r.identityId, [...(byIdentity.get(r.identityId) ?? []), r]);
+	}
+	return [...byIdentity].map(([identityId, list]) => {
+		const states = list.map((r) => ({ r, state: sendStateOf(r) }));
+		return {
+			identityId,
+			...outboxCountOf(list),
+			busy: states.filter(({ state }) => state === "sending" || state === "queued" || state === "canceling").length,
+			pendingAt: states.filter(({ state }) => state === "pending").map(({ r }) => iso(r.scheduledAt)!).filter(Boolean),
+		};
+	});
+};
+
+// Visible Outbox rows of an identity: Drafts hides the matching drafts (lib/outbox-view.ts,
+// inOutbox).
+export const fetchOutboxIds = async (identityPublicId: string): Promise<string[]> =>
+	(await fetchOutbox(identityPublicId)).map((i) => i.id);
+
+export type OutboxItem = {
+	id: string;
+	state: SendState;
+	actions: OutboxActions;
+	origin: string;
+	subject: string;
+	to: string[];
+	scheduledAt: string | null;
+	updatedAt: string;
+	error: string | null;
+	draftMessageId: string | null;
+};
+
+// Outbox list of an identity: failures first (to handle), then in progress, then waiting by
+// send time. The message content stays on the server.
+export const fetchOutbox = async (identityPublicId: string): Promise<OutboxItem[]> => {
+	const rls = await rlsClient();
+	const [identity] = await rls((tx) =>
+		tx.select({ id: identities.id }).from(identities).where(eq(identities.publicId, identityPublicId)),
+	);
+	if (!identity) return [];
+	const rows = await rls((tx) =>
+		tx
+			.select({
+				...outboxStateCols,
+				origin: draftMessages.origin,
+				scheduledAt: draftMessages.scheduledAt,
+				updatedAt: draftMessages.updatedAt,
+				lastError: draftMessages.lastError,
+				subject: sql<string | null>`${draftMessages.payload}->>'subject'`,
+				to: sql<unknown>`${draftMessages.payload}->'to'`,
+				draftMessageId: sql<string | null>`${draftMessages.payload}->>'draftMessageId'`,
+				legacyError: sql<string | null>`${draftMessages.payload}->>'__error'`,
+			})
+			.from(draftMessages)
+			.where(and(eq(draftMessages.identityId, identity.id), outboxCandidate)),
+	);
+	const rank: Partial<Record<SendState, number>> = { failed: 0, interrupted: 0, rejected: 0, unknown: 1, canceling: 1, sending: 2, queued: 2, pending: 3 };
+	return rows
+		.filter((r) => isOutboxVisible(r))
+		.map((r) => ({
+			id: r.id,
+			state: sendStateOf(r)!,
+			actions: outboxActionsOf(r),
+			origin: r.origin,
+			subject: String(r.subject ?? ""),
+			to: toArray(r.to as any),
+			scheduledAt: iso(r.scheduledAt),
+			updatedAt: iso(r.updatedAt)!,
+			error: r.lastError ?? r.legacyError ?? null,
+			draftMessageId: r.draftMessageId ?? null,
+		}))
+		.sort(
+			(a, b) =>
+				(rank[a.state] ?? 9) - (rank[b.state] ?? 9) ||
+				String(a.scheduledAt ?? a.updatedAt).localeCompare(String(b.scheduledAt ?? b.updatedAt)),
+		);
+};
+
+// "Retry" a failed send: CAS failed -> scheduled, never after the server accepted it; an
+// interrupted send (may have been sent) asks for confirmation. Refused if the draft changed
+// since the failure (the old content would be sent). The old job with the same id is removed
+// (BullMQ would ignore the add), then the job leaves without delay; on failure, the row goes
+// back to failed.
+export async function retryOutboxSend(
+	rowId: string,
+	opts: { confirmed?: boolean } = {},
+): Promise<{ ok: boolean; needsConfirm?: boolean; error?: string }> {
+	const seen = await scheduledRowOf(String(rowId));
+	if (!seen) return { ok: false, error: "Send not found." };
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({ ...outboxStateCols, updatedAt: draftMessages.updatedAt, lastError: draftMessages.lastError })
+			.from(draftMessages)
+			.where(eq(draftMessages.id, seen.id))
+			.limit(1),
+	);
+	if (!row || !outboxActionsOf(row).retry) return { ok: false, error: "This send cannot be retried." };
+	if (outboxActionsOf(row).confirmRetry && !opts.confirmed) return { ok: false, needsConfirm: true };
+	const draftId = await ownedDraftId(String(seen.payload?.draftMessageId ?? ""));
+	if (draftId) {
+		const [draft] = await rls((tx) =>
+			tx
+				.select({ metaData: messages.metaData, createdAt: messages.createdAt, updatedAt: messages.updatedAt })
+				.from(messages)
+				.where(eq(messages.id, draftId))
+				.limit(1),
+		);
+		const savedAt = draft ? draftTimesOf(draft as any).savedAt : null;
+		if (savedAt && new Date(savedAt).getTime() > new Date(row.updatedAt).getTime()) {
+			return { ok: false, error: "The draft changed since the failure: open it and send it again." };
+		}
+	}
+	const now = new Date();
+	const [won] = await rls((tx) =>
+		tx
+			.update(draftMessages)
+			.set({ status: "scheduled", scheduledAt: now, acceptanceUnknown: false, lastError: null, updatedAt: now })
+			.where(
+				and(
+					eq(draftMessages.id, seen.id),
+					eq(draftMessages.status, "failed"),
+					isNull(draftMessages.acceptedAt),
+					isNull(draftMessages.dismissedAt),
+					opts.confirmed ? sql`true` : eq(draftMessages.acceptanceUnknown, false),
+				),
+			)
+			.returning({ id: draftMessages.id }),
+	);
+	if (!won) return { ok: false, error: "This send changed state in the meantime." };
+	const revert = async () => {
+		await rls((tx) =>
+			tx
+				.update(draftMessages)
+				.set({ status: "failed", acceptanceUnknown: row.acceptanceUnknown, lastError: row.lastError, updatedAt: new Date() })
+				.where(and(eq(draftMessages.id, seen.id), eq(draftMessages.status, "scheduled"))),
+		);
+		if (draftId) await setDraftSendState(draftId, { pendingSend: null });
+	};
+	try {
+		if (draftId) {
+			await setDraftSendState(draftId, {
+				pendingSend: { jobId: seen.id, sendAt: now.toISOString() },
+				sendError: null,
+			});
+		}
+		const { sendMailQueue } = await getRedis();
+		// A job still active (worker stuck) refuses the removal: no retry.
+		await (await sendMailQueue.getJob(seen.id))?.remove();
+		const job = scheduledJobOf({ id: seen.id, identityId: seen.identityId, scheduledAt: now, payload: seen.payload });
+		await sendMailQueue.add(job.name, job.data, { ...job.opts, delay: 0 });
+	} catch (e) {
+		console.error("[outbox] retry failed", e);
+		await revert().catch((err) => console.error("[outbox] retry revert failed", err));
+		return { ok: false, error: "Cannot retry right now." };
+	}
+	revalidatePath("/dashboard/mail");
+	return { ok: true };
+}
+
+// "Back to drafts": the failure is dismissed from the Outbox (CAS on dismissed_at), then the
+// draft is found as is, or recreated from the row if it is gone. A direct send (without a
+// source draft) is only dismissed (dismissRestoresDraft).
+export async function dismissOutboxSend(rowId: string): Promise<{ ok: boolean; error?: string }> {
+	const seen = await scheduledRowOf(String(rowId));
+	if (!seen) return { ok: false, error: "Send not found." };
+	const rls = await rlsClient();
+	const [won] = await rls((tx) =>
+		tx
+			.update(draftMessages)
+			.set({ dismissedAt: new Date(), updatedAt: new Date() })
+			.where(
+				and(
+					eq(draftMessages.id, seen.id),
+					isNull(draftMessages.dismissedAt),
+					or(
+						eq(draftMessages.status, "failed"),
+						and(eq(draftMessages.status, "sent"), eq(draftMessages.deliveryState, "rejected")),
+					),
+				),
+			)
+			.returning({ id: draftMessages.id }),
+	);
+	if (!won) return { ok: false, error: "This send changed state in the meantime." };
+	if (!dismissRestoresDraft(seen.origin)) {
+		await unlockDraftOfRow(seen).catch((e) => console.error("[outbox] unlock on dismiss failed", e));
+		revalidatePath("/dashboard/mail");
+		return { ok: true };
+	}
+	try {
+		await restoreDraftFromRow(seen, { onlyIfMissing: true });
+	} catch (e) {
+		console.error("[outbox] draft restore on dismiss failed", e);
+		return { ok: false, error: "Send dismissed, but the draft could not be recreated." };
+	}
+	revalidatePath("/dashboard/mail");
+	return { ok: true };
 }
 
 export async function snoozeThread(input: {

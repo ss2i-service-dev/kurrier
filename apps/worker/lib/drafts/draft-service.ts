@@ -20,11 +20,11 @@
  *     trash: that is what mail clients (Gmail, Thunderbird, Roundcube) do for a draft.
  *   sendDraft({ ownerId, identityId, draftMessageId, delayMs?, senderUserId? })
  *     -> { pendingSendId, undoMs, scheduledAt? }
- *     Same path as the composer (`send-and-reconcile` job, delayed and cancellable); the
- *     draft is deleted by send-mail.ts once the send succeeds. With `sendAt` (scheduled
- *     send): a "scheduled" draft_messages row plus a delayed `send-scheduled-draft` job, like
- *     the composer's "Schedule send" menu; the draft carries the pendingSend mark until then
- *     (cancellable from the web interface).
+ *     Same path as the composer: a "scheduled" draft_messages ledger row (Outbox) plus a
+ *     `send-scheduled-draft` job with the same id, delayed by the undo delay or, with
+ *     `sendAt` (scheduled send), until the chosen time; the draft carries the pendingSend
+ *     mark until then (cancelable from the web interface) and is deleted by send-mail.ts once
+ *     the send is accepted.
  *
  * Jobs (smtp-worker queue, one at a time, so never two concurrent APPENDs):
  *   draft:sync   { draftMessageId }   -> syncDraftToImap
@@ -51,8 +51,9 @@ import {
 	draftDomain,
 	draftMetaOf,
 	draftSendPayload,
-	pendingSendAlive,
-	scheduledJobOf,
+	enqueueSend,
+	pendingSendLive,
+	interruptedSendOf,
 	scheduledPendingSend,
 	validateScheduledAt,
 	draftSyncJobOptions,
@@ -63,7 +64,7 @@ import {
 } from "@common";
 import { db, draftMessages, identities, mailboxes, messages } from "@db";
 import { getServerEnv } from "@schema";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { ImapFlow } from "imapflow";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { s3 } from "../create-s3-client";
@@ -183,6 +184,8 @@ export async function deleteDraft(
 		draftMessageId: string;
 		// Cleanup after a successful send: the "pending send" guard does not apply.
 		afterSend?: boolean;
+		// Cleanup of an orphan mark: only if the mark still points to this ledger row.
+		ifJobId?: string;
 	},
 	imapInstances?: Map<string, ImapFlow>,
 ) {
@@ -208,10 +211,10 @@ export async function sendDraft(opts: {
 	// A send already pending (undo delay or scheduled) is not doubled; a mark stale for more than
 	// 3 minutes (unknown state in the interface) no longer blocks.
 	const row = await getDraftRow(opts);
-	if (pendingSendAlive(row ? draftMetaOf(row)?.pendingSend : null)) {
+	if (await pendingSendLive(row ? draftMetaOf(row)?.pendingSend : null)) {
 		throw new Error("This draft already has a send in progress; cancel it first.");
 	}
-	const { sendMailQueue } = await getRedis();
+	let sendAt: Date;
 	if (opts.sendAt) {
 		const check = validateScheduledAt(opts.sendAt);
 		if (!check.ok) {
@@ -219,70 +222,84 @@ export async function sendDraft(opts: {
 				check.reason === "past" ? "send_at is in the past." : "send_at is not a valid date.",
 			);
 		}
-		const [identity] = await db
-			.select({ workspaceId: identities.workspaceId })
-			.from(identities)
-			.where(eq(identities.id, payload.identityId));
-		if (!identity) throw new Error("Identity not found");
-		const [created] = await db
-			.insert(draftMessages)
-			.values({
-				ownerId: opts.ownerId,
-				workspaceId: identity.workspaceId,
-				identityId: payload.identityId,
-				mailboxId: payload.mailboxId,
-				status: "scheduled",
-				scheduledAt: check.at,
-				payload,
-			})
-			.returning({ id: draftMessages.id, scheduledAt: draftMessages.scheduledAt });
-		const job = scheduledJobOf({
-			id: created.id,
-			identityId: payload.identityId,
-			scheduledAt: created.scheduledAt,
-			payload,
-		});
-		try {
-			await sendMailQueue.add(job.name, job.data, job.opts);
-		} catch (e) {
-			// Without a job, the row would only leave at the next worker start: it is removed.
-			await db.delete(draftMessages).where(eq(draftMessages.id, created.id));
-			throw e;
-		}
-		try {
-			await setDraftSendState(opts.draftMessageId, {
-				pendingSend: scheduledPendingSend(created),
-				sendError: null,
-			});
-		} catch (e) {
-			// Without a mark, the draft would stay editable and the send invisible: the job and the
-			// row are removed rather than leaving a scheduled send without a mark.
-			await (await sendMailQueue.getJob(created.id))?.remove().catch(() => {});
-			await db.delete(draftMessages).where(eq(draftMessages.id, created.id));
-			throw new Error(
-				`Scheduling failed, nothing was scheduled: ${(e as Error)?.message ?? e}`,
-			);
-		}
-		return {
-			pendingSendId: created.id,
-			undoMs: job.opts.delay,
-			scheduledAt: check.at.toISOString(),
-		};
+		sendAt = check.at;
+	} else {
+		sendAt = new Date(Date.now() + (opts.delayMs ?? UNDO_SEND_MS));
 	}
-	const delay = opts.delayMs ?? UNDO_SEND_MS;
-	const job = await sendMailQueue.add("send-and-reconcile", payload, {
-		jobId: `undo-send-${crypto.randomUUID()}`,
-		delay,
-	});
-	// Mark the draft as "sending": the Drafts list and the draft view display it.
-	await setDraftSendState(opts.draftMessageId, {
-		pendingSend: {
-			jobId: String(job.id),
-			sendAt: new Date(Date.now() + delay).toISOString(),
+	const [identity] = await db
+		.select({ workspaceId: identities.workspaceId, value: identities.value })
+		.from(identities)
+		.where(eq(identities.id, payload.identityId));
+	if (!identity) throw new Error("Identity not found");
+	// Outbox: draft_messages ledger row, draft mark (set before the job: the worker only removes
+	// it afterwards), then a job with the same id (packages/common/src/outbox.ts). Without a mark,
+	// a scheduled send is not created (editable draft, invisible send); a delayed send without a
+	// mark fails too, nothing was sent.
+	const { sendMailQueue } = await getRedis();
+	const queued = await enqueueSend(
+		{
+			payload,
+			identityId: payload.identityId,
+			mailboxId: payload.mailboxId,
+			origin: opts.sendAt ? "scheduled" : "undo",
+			sendAt,
+			fromAddress: identity.value,
 		},
-		sendError: null,
-	});
-	return { pendingSendId: String(job.id), undoMs: delay, scheduledAt: undefined };
+		{
+			insertRow: async (v) => {
+				const [created] = await db
+					.insert(draftMessages)
+					.values({ ...v, ownerId: opts.ownerId, workspaceId: identity.workspaceId })
+					.returning({ id: draftMessages.id, scheduledAt: draftMessages.scheduledAt });
+				return created;
+			},
+			mark: async (row) => {
+				await setDraftSendState(opts.draftMessageId, {
+					pendingSend: scheduledPendingSend(row),
+					sendError: null,
+				});
+				return true;
+			},
+			unmark: () => setDraftSendState(opts.draftMessageId, { pendingSend: null }),
+			addJob: (name, data, jobOpts) => sendMailQueue.add(name, data, jobOpts),
+			deleteRow: (id) =>
+				db.delete(draftMessages).where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
+			cancelRow: (id) =>
+				db
+					.update(draftMessages)
+					.set({ status: "canceled", updatedAt: new Date() })
+					.where(and(eq(draftMessages.id, id), eq(draftMessages.status, "scheduled"))),
+			// A new send of the draft dismisses its previous failed sends (otherwise "Retry" on the
+			// old one would send a second time), never an interrupted send (may have been sent).
+			supersede: (draftId) =>
+				db
+					.update(draftMessages)
+					.set({ dismissedAt: new Date(), updatedAt: new Date() })
+					.where(
+						and(
+							eq(draftMessages.status, "failed"),
+							eq(draftMessages.acceptanceUnknown, false),
+							isNull(draftMessages.dismissedAt),
+							eq(draftMessages.identityId, payload.identityId),
+							sql`${draftMessages.payload}->>'draftMessageId' = ${draftId}`,
+						),
+					),
+			interrupted: (draftId) => interruptedSendOf(draftId, payload.identityId),
+		},
+	);
+	if (!queued.ok) {
+		if (queued.maybeSent) throw new Error(queued.error);
+		throw new Error(
+			opts.sendAt
+				? `Scheduling failed, nothing was scheduled: ${queued.error}`
+				: `Sending failed, nothing was sent: ${queued.error}`,
+		);
+	}
+	return {
+		pendingSendId: queued.rowId,
+		undoMs: Math.max(0, queued.scheduledAt.getTime() - Date.now()),
+		scheduledAt: opts.sendAt ? queued.scheduledAt.toISOString() : undefined,
+	};
 }
 
 // ---------------------------------------------------------------------------

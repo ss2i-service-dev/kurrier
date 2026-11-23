@@ -5,6 +5,8 @@ import {
 	RawSendgridConfigSchema,
 	SendgridConfig,
 	VerifyResult,
+	httpFailureAmbiguous,
+	SendEmailResult,
 } from "../core";
 import sgClient from "@sendgrid/client";
 import sgMail from "@sendgrid/mail";
@@ -398,7 +400,7 @@ export class SendgridMailer implements Mailer {
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
-	): Promise<{ success: boolean; MessageId?: string; error?: string }> {
+	): Promise<SendEmailResult> {
 		try {
 			// Convert Blob attachments -> SendGrid format (Base64 string)
 			const attachments = opts.attachments
@@ -444,8 +446,12 @@ export class SendgridMailer implements Mailer {
 			};
 		} catch (err) {
 			console.error("sendEmail error", err);
-			// The cause goes up to the worker (SMTP refusal, network error).
-			return { success: false, error: String((err as any)?.response || (err as any)?.message || String(err)) };
+			// The cause goes up to the worker (SMTP refusal, network error), and whether the outcome is unknown.
+			return {
+				success: false,
+				error: String((err as any)?.response || (err as any)?.message || String(err)),
+				ambiguous: httpFailureAmbiguous(err),
+			};
 		}
 	}
 }

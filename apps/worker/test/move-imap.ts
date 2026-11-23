@@ -7,7 +7,9 @@
 // without losing the other threads, UID removed from the transaction on, database rollback
 // of what the server did not move (including what was never sent), IMAP unavailable =
 // nothing moves, batch of more than 65,534 arrived UIDs, and deltaFetch no longer deleting
-// the copy in Sent.
+// the copy in Sent. Gmail: a message already at the destination (absent from the source)
+// takes its UID over by Message-ID, and a row without a UID is looked up by Message-ID
+// instead of being moved in the database only.
 // Test database: see mcp-test-env.ts:
 //   MCP_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55436/kurrier_test \
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/move-imap.ts
@@ -57,8 +59,15 @@ class FakeStalwart {
 	async status(path: string) {
 		return { path, uidNext: this.folders.get(path)!.uidNext };
 	}
-	async search() {
-		return []; // Stalwart returns nothing on SEARCH HEADER Message-ID
+	gmail = false; // X-GM-EXT-1: SEARCH HEADER Message-ID and X-GM-RAW "rfc822msgid:" both answer
+	get capabilities() {
+		return new Map(this.gmail ? [["X-GM-EXT-1", true]] : []);
+	}
+	async search(q: any = {}) {
+		if (!this.gmail) return []; // Stalwart returns nothing on SEARCH HEADER Message-ID
+		const norm = (v: unknown) => String(v ?? "").trim().replace(/^<|>$/g, "").toLowerCase();
+		const want = norm(q.header ? q.header["message-id"] : String(q.gmraw ?? "").replace(/^rfc822msgid:/, ""));
+		return [...this.folders.get(this.selected)!.msgs].filter(([, m]) => norm(m) === want).map(([u]) => u);
 	}
 	async *fetch(range: string | { uid: string }) {
 		const f = this.folders.get(this.selected)!;
@@ -551,6 +560,98 @@ async function main() {
 		assert(!!s1 && s1.mailboxId === f.sent.id, "deltaFetch: the copy in Sent still exists, in Sent");
 		assert(rows.find((r) => r.id === arch.ids[0])?.mailboxId === archive.id, "deltaFetch: the Archive copy did not move");
 		assert((await cursorOf(archive.id)) === 1, "deltaFetch: Archive cursor advanced (1)");
+	}
+
+	// 11. Gmail: message already archived by another client, absent from the Inbox (absence
+	//     proven) but present in "All Mail" at its original UID. It takes that UID over by
+	//     Message-ID, without a MOVE; a UID already held by another row of the folder is never
+	//     taken; a message deleted everywhere stays at the destination without a UID; one still
+	//     in the Inbox leaves through the MOVE in the same batch; the job succeeds.
+	{
+		const f = await createUserFixture("move-gmail-already-archived");
+		const all = await folderOf(f, "archive", "[Gmail]/All Mail");
+		await syncRow(f, f.inbox.id, 9000);
+		await syncRow(f, all.id, 9000);
+		const a = `<Already-Archived-${Date.now()}@x>`;
+		const held = `<uid-held-${Date.now()}@x>`;
+		const deleted = `<deleted-everywhere-${Date.now()}@x>`;
+		const present = `<still-in-inbox-${Date.now()}@x>`;
+		const imap = new FakeStalwart({
+			INBOX: { uidNext: 9001, msgs: [[8000, `<unrelated-${Date.now()}@x>`], [8001, present]] },
+			"[Gmail]/All Mail": { uidNext: 9001, msgs: [[500, a.toLowerCase()], [501, held]] },
+		});
+		imap.gmail = true;
+		imap.existsOverride = 9000; // big Gmail folders: never scanned, SEARCH only
+		const other = await thread(f, all.id, [{ mid: `<other-row-${Date.now()}@x>`, uid: 501, path: "[Gmail]/All Mail" }]);
+		const t = await thread(f, f.inbox.id, [{ mid: a, uid: 7000 }, { mid: held, uid: 7001 }, { mid: deleted, uid: 7002 }, { mid: present, uid: 8001 }]);
+		let error: unknown = null;
+		await moveMail({ threadId: t.id, threadIds: [t.id], mailboxId: f.inbox.id, op: "archive", moveImap: true }, on(f, imap)).catch((e) => (error = e));
+		assert(error === null, `Gmail, already archived: the job does not throw (${error})`);
+		assert(imap.moves === 1 && !imap.folders.get("INBOX")!.msgs.has(8001), `Gmail, already archived: a single UID MOVE, for the message still in the Inbox (${imap.moves})`);
+		const rows = new Map((await msgRows(t.ids)).map((r) => [r.messageId, r]));
+		const ra = rows.get(a)!;
+		assert(
+			ra.mailboxId === all.id && (ra.metaData as any).imap.uid === 500 && (ra.metaData as any).imap.mailboxPath === "[Gmail]/All Mail",
+			`Gmail, already archived: "All Mail" UID taken over by Message-ID (${JSON.stringify((ra.metaData as any).imap)})`,
+		);
+		const rp = rows.get(held)!;
+		assert(rp.mailboxId === all.id && (rp.metaData as any).imap.uid === undefined, "Gmail, already archived: a UID held by another row of the folder is never taken");
+		const [ro] = await msgRows(other.ids);
+		assert((ro.metaData as any).imap.uid === 501, "Gmail, already archived: the other row keeps its UID");
+		const rs = rows.get(deleted)!;
+		assert(rs.mailboxId === all.id && (rs.metaData as any).imap.uid === undefined, "Gmail, deleted everywhere: at the destination without a UID");
+		const rn = rows.get(present)!;
+		assert(rn.mailboxId === all.id && (rn.metaData as any).imap.uid === 9001, `Gmail, still in the Inbox: arrival UID of the MOVE (${JSON.stringify((rn.metaData as any).imap)})`);
+		assert((await cursorOf(all.id)) === 9001, "Gmail, already archived: the \"All Mail\" cursor is beyond the single message that arrived");
+	}
+
+	// 12. Row without a UID in a synced folder (left without one by a previous move): looked up
+	//     by Message-ID in the source instead of a "database only" move (the database said
+	//     Trash, Gmail kept the message in the Inbox). Not found without proof of absence (big
+	//     Stalwart folder, failed SEARCH): moved in the database only as before, without a UID,
+	//     and the job succeeds (never a job that fails endlessly because of it).
+	{
+		const f = await createUserFixture("move-no-uid");
+		const trash = await trashOf(f);
+		await syncRow(f, f.inbox.id, 300);
+		await syncRow(f, trash.id, 0);
+		const s = `<no-uid-${Date.now()}@x>`;
+		const imap = new FakeStalwart({
+			INBOX: { uidNext: 301, msgs: [[210, s]] },
+			"Deleted Items": { uidNext: 1, msgs: [] },
+		});
+		imap.gmail = true;
+		// IMAP path of the folder, as in production (the fixture only has the name "Inbox")
+		await db.update(mailboxes).set({ metaData: { imap: { path: "INBOX" } } }).where(eq(mailboxes.id, f.inbox.id));
+		const ts = await thread(f, f.inbox.id, [{ mid: s, uid: null }]);
+		await moveMail(job([ts.id], f.inbox.id, true), on(f, imap));
+		assert(imap.moves === 1 && !imap.folders.get("INBOX")!.msgs.has(210), "no UID: IMAP MOVE done (found by Message-ID)");
+		const [r] = await msgRows(ts.ids);
+		assert(
+			r.mailboxId === trash.id && (r.metaData as any)?.imap?.uid === 1 && imap.folders.get("Deleted Items")!.msgs.get(1) === s,
+			`no UID: in the trash with its arrival UID (${JSON.stringify(r.metaData)})`,
+		);
+
+		const f2 = await createUserFixture("move-no-uid-not-found");
+		const trash2 = await trashOf(f2);
+		await syncRow(f2, f2.inbox.id, 300);
+		await syncRow(f2, trash2.id, 0);
+		const n = `<not-found-${Date.now()}@x>`;
+		const imap2 = new FakeStalwart({
+			INBOX: { uidNext: 301, msgs: [[220, n]] },
+			"Deleted Items": { uidNext: 1, msgs: [] },
+		});
+		imap2.existsOverride = 6000;
+		await db.update(mailboxes).set({ metaData: { imap: { path: "INBOX" } } }).where(eq(mailboxes.id, f2.inbox.id));
+		const tn = await thread(f2, f2.inbox.id, [{ mid: n, uid: null }]);
+		let error2: unknown = null;
+		await moveMail(job([tn.id], f2.inbox.id, true), on(f2, imap2)).catch((e) => (error2 = e));
+		assert(error2 === null, `no UID, not found without proof: the job does not throw (${error2})`);
+		const [r2] = await msgRows(tn.ids);
+		assert(
+			r2.mailboxId === trash2.id && (r2.metaData as any)?.imap?.uid === undefined && imap2.moves === 0 && imap2.folders.get("INBOX")!.msgs.has(220),
+			`no UID, not found without proof: in the trash in the database only, without a UID, server unchanged (${JSON.stringify(r2.metaData)})`,
+		);
 	}
 }
 

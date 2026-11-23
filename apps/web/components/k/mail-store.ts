@@ -26,6 +26,7 @@ import {
 import { hideThreads, moveWithUndo } from "@/lib/pending-moves";
 import { setThreadPinned } from "@/lib/actions/k-pins";
 import { refreshUnreadBadge } from "@/components/k/new-mail-notifier";
+import { createArrivalTracker, type ArrivalSnapshot } from "@/lib/arrival-tracker";
 
 type State = {
 	read: Map<string, boolean>;
@@ -156,7 +157,7 @@ const ids = (x: string | string[]) => (Array.isArray(x) ? x : [x]);
 function setRead(threadIds: string[], value: boolean | null) {
 	const read = new Map(state.read);
 	threadIds.forEach((id) => {
-		readBaseline.delete(String(id));
+		arrivals.reset(String(id));
 		if (value === null) read.delete(id);
 		else read.set(id, value);
 	});
@@ -174,20 +175,13 @@ export function isManuallyUnread(threadId: string) {
 	return manualUnread.has(String(threadId));
 }
 
-// Thread read or open on screen: date of its last message at that moment. A
-// message that arrives afterwards (open thread: it is marked read on the server
-// as soon as it is displayed) gets the unread marker back, as a visual
-// indicator, until the thread is next opened from the list (mailActions.read).
-const readBaseline = new Map<string, string>();
-export function arrivedSinceRead(threadId: string, lastActivityAt: unknown, track: boolean): boolean {
-	const id = String(threadId);
-	const now = String(lastActivityAt ?? "");
-	const base = readBaseline.get(id);
-	if (base === undefined) {
-		if (track) readBaseline.set(id, now);
-		return false;
-	}
-	return base !== now;
+// Thread read or open on screen: a message from someone else that arrives afterwards (open
+// thread: it is marked read on the server as soon as it is displayed) gets the unread marker
+// back, as a visual indicator, until the thread is next opened from the list (mailActions.read).
+// Our own reply and the copy of our own mail (alias) do not light it again (lib/arrival-tracker).
+const arrivals = createArrivalTracker();
+export function arrivedSinceRead(threadId: string, snap: ArrivalSnapshot, own: Set<string>, track: boolean): boolean {
+	return arrivals.arrived(threadId, snap, own, track);
 }
 
 /** Thread already marked read on screen (on click in the list): no second marking. */

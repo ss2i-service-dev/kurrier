@@ -70,7 +70,12 @@ export default function KThreadRow({
 	// A message has arrived since the thread was read or opened on screen: unread
 		// marker, even if displaying it already marked it read.
 	const incoming = activeMailbox.kind !== "sent" && !isDrafts;
-	const arrived = incoming && arrivedSinceRead(item.threadId, item.lastActivityAt, isActive || readOverride === true);
+	const arrived = incoming && arrivedSinceRead(
+			item.threadId,
+			{ count: item.messageCount, lastFrom: item.participants?.from?.[0]?.e },
+			ownAddresses,
+			isActive || readOverride === true,
+		);
 	const isUnread = !isTrash && (arrived || (readOverride === undefined ? item.unreadCount > 0 : !readOverride));
 	const starred = starOverride ?? item.starred;
 	const smtp = !!mailboxSync;

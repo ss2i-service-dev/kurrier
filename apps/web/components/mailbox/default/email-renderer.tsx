@@ -448,7 +448,7 @@ function EmailRenderer({
 							</ActionIcon>
 						</Tooltip>
 						<Tooltip label="Archive (a)" withArrow>
-							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Archive" onClick={archiveMessage}>
+							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Archive" data-k-shortcut="open-archive" onClick={archiveMessage}>
 								<Archive size={18} />
 							</ActionIcon>
 						</Tooltip>
@@ -458,7 +458,7 @@ function EmailRenderer({
 							</ActionIcon>
 						</Tooltip>
 						<Tooltip label="Delete (e)" withArrow>
-							<ActionIcon variant={"subtle"} color={"red"} aria-label="Delete" onClick={deleteMessage}>
+							<ActionIcon variant={"subtle"} color={"red"} aria-label="Delete" data-k-shortcut="open-delete" onClick={deleteMessage}>
 								<Trash2 size={18} />
 							</ActionIcon>
 						</Tooltip>

@@ -99,12 +99,51 @@
 
   const inOpenMail = () => /\/threads\/[^/]+/.test(window.location.pathname);
 
-  // In an open mail: the mail's labelled button. On the list: the button of the
-  // selection bar, marked data-k-shortcut (mail-list-header.tsx) and visible
-  // only if mails are checked; without a selection, nothing happens. Never by
+  // Open mail: every message has its own bar (Archive, Delete). The shortcut aims at the one
+  // of the message being read, not the first of the thread, which is out of view in a long
+  // thread.
+  // tops: top of each bar in thread order; high / low: visible area under the sticky top bar.
+  // Returns the highest visible bar, else the last one above the screen (the message whose
+  // body is being read), else the first; -1 without a bar.
+  const pickReadBar = (tops, high, low) => {
+    let above = -1;
+    for (let i = 0; i < tops.length; i++) {
+      if (tops[i] >= high && tops[i] < low) return i;
+      if (tops[i] < high) above = i;
+    }
+    return above >= 0 ? above : tops.length ? 0 : -1;
+  };
+  const barOfReadMessage = (mark) => {
+    const buttons = Array.from(document.querySelectorAll(`button[data-k-shortcut="${mark}"]`)).filter(visible);
+    const high = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--mail-header-h")) || 0;
+    const i = pickReadBar(buttons.map((b) => b.getBoundingClientRect().top), high, window.innerHeight);
+    const button = i >= 0 ? buttons[i] : null;
+    // Bar off screen: brought just under the top bar.
+    if (button) {
+      const r = button.getBoundingClientRect();
+      if (r.top < high || r.bottom > window.innerHeight) window.scrollBy({ top: r.top - high - 8, behavior: "instant" });
+    }
+    return button;
+  };
+
+  // In an open mail: the button of the message's bar, marked data-k-shortcut
+  // (email-renderer.tsx), present on every message; fallback on the labelled button (modern
+  // interface, then by text). Not the bottom text button alone: it is rendered only under the
+  // last message, absent when the last one is a reply still in the Outbox.
+  // On the list: the button of the selection bar, marked data-k-shortcut (mail-list-header.tsx)
+  // and visible only if mails are checked; without a selection, nothing happens. Never by
   // title: each row of the list has its own "Delete" / "Archive" buttons.
   const onMailOrSelection = (label) => {
-    if (inOpenMail()) return click(label);
+    if (inOpenMail()) {
+      const bar = label === "Delete" ? "open-delete" : "open-archive";
+      if (modern() && ACTIONS_K[label] && clickK(ACTIONS_K[label])) return true;
+      const button = barOfReadMessage(bar);
+      if (button) {
+        button.click();
+        return true;
+      }
+      return click(label);
+    }
     const mark = label === "Delete" ? "selection-delete" : "selection-archive";
     const target = Array.from(
       document.querySelectorAll(`button[data-k-shortcut="${mark}"]`)

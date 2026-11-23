@@ -3,6 +3,8 @@ import { cookies } from "next/headers";
 import { Inter, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import { interfaceMode } from "@/lib/actions/interface-pref";
 import { hour24Enabled } from "@/lib/actions/hour-format";
+import { autoReloadEnabled } from "@/lib/actions/auto-reload";
+import { VersionWatcher } from "@/components/common/version-watcher";
 import { KUiProvider } from "@/components/k/ui-context";
 import "dayjs/locale/fr";
 import "./globals.css";
@@ -77,6 +79,8 @@ export default async function RootLayout({
 	// Interface chosen by the user (classic by default).
 	const modern = (await interfaceMode()) === "modern";
 	const hour24 = await hour24Enabled();
+	// Reload the page after an update (per-user option, off by default).
+	const autoReload = await autoReloadEnabled();
 	const { theme: mantineTheme, colorScheme } = createMantineTheme({
 		theme,
 		mode,
@@ -111,6 +115,7 @@ export default async function RootLayout({
 							</KUiProvider>
 						</MantineProvider>
 					</ConfigProvider>
+					{autoReload && <VersionWatcher />}
 				</AppearanceProvider>
 				<Script src="/keyboard-shortcuts.js" strategy="afterInteractive" />
 			</body>

@@ -13,16 +13,18 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { kInboxPulse } from "@/lib/actions/k-pulse";
+import { isWatching } from "@/lib/stale-tab";
 import { tabSectionOf, tabTitle } from "@/lib/tab-identity";
 
 // After a deployment, an open tab stays on the old version: its server actions
 // no longer exist ("Failed to find Server Action") and the user's first action
 // (read, unread...) reloads the page abruptly. The pulse detects this earlier
 // (two failed calls in a row) and offers to reload, never forcing it (a message
-// may be being written).
+// may be being written). With the option "Reload the page after an update", the version watcher
+// (components/common/version-watcher.tsx) takes over: no second notice.
 let staleShown = false;
 function announceNewVersion(modern: boolean) {
-	if (staleShown) return;
+	if (staleShown || isWatching()) return;
 	staleShown = true;
 	toast("A new version of Kurrier is available", {
 		id: "k-new-version",

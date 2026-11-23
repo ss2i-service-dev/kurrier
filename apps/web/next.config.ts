@@ -1,7 +1,16 @@
 import type { NextConfig } from "next";
+import { formatBuildVersion } from "./lib/app-version";
+
+// Build number, the same in the bundle and in /api/version (version watcher). A pipeline can
+// set NEXT_PUBLIC_BUILD_VERSION (commit, tag); otherwise the build date is used. It is written
+// back to the environment so that the processes started by the build (which load this file
+// again) inherit it instead of computing another minute.
+process.env.NEXT_PUBLIC_BUILD_VERSION ||= formatBuildVersion(new Date());
+const buildVersion = process.env.NEXT_PUBLIC_BUILD_VERSION;
 
 const nextConfig: NextConfig = {
 	devIndicators: false,
+	env: { NEXT_PUBLIC_BUILD_VERSION: buildVersion },
 	output: "standalone",
 	serverExternalPackages: ["pino", "pino-pretty", "thread-stream"],
 	reactCompiler: true,

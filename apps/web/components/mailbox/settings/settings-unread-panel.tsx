@@ -12,6 +12,7 @@ import type { ThreadOrder } from "@/lib/actions/thread-order";
 import { setListUnderThread } from "@/lib/actions/list-under-thread";
 import { setStripSubjectPrefixesEnabled } from "@/lib/actions/subject-prefixes";
 import { setHour24Enabled } from "@/lib/actions/hour-format";
+import { setAutoReloadEnabled } from "@/lib/actions/auto-reload";
 import type { ListUnderThread } from "@/lib/list-under-thread";
 
 
@@ -24,6 +25,7 @@ function SettingsUnreadPanel({
 	listUnderThread,
 	stripPrefixes: initialStrip = false,
 	hour24: initialHour24 = false,
+	autoReload: initialAutoReload = false,
 }: {
 	enabled: boolean;
 	listPreview: ListPreviewMode;
@@ -31,6 +33,7 @@ function SettingsUnreadPanel({
 	listUnderThread: ListUnderThread;
 	stripPrefixes?: boolean;
 	hour24?: boolean;
+	autoReload?: boolean;
 }) {
 	const [enabled, setEnabled] = useState(initial);
 	const [pending, startTransition] = useTransition();
@@ -41,6 +44,23 @@ function SettingsUnreadPanel({
 	const [stripPending, startStripTransition] = useTransition();
 	const [hour24, setHour24] = useState(initialHour24);
 	const [hour24Pending, startHour24Transition] = useTransition();
+	const [autoReload, setAutoReload] = useState(initialAutoReload);
+	const [autoReloadPending, startAutoReloadTransition] = useTransition();
+
+	// Page reloaded by itself after an update of Kurrier.
+	const onAutoReloadChange = (next: boolean) => {
+		setAutoReload(next);
+		startAutoReloadTransition(async () => {
+			const r = await setAutoReloadEnabled(next);
+			if (r?.success === false) {
+				setAutoReload(!next);
+				toast.error(r.error ?? "Could not save the preference");
+				return;
+			}
+			toast.success(next ? "The page reloads itself after an update." : "The page is no longer reloaded after an update.");
+			router.refresh();
+		});
+	};
 
 	// Times of the invitation cards in 24-hour format.
 	const onHour24Change = (next: boolean) => {
@@ -142,6 +162,14 @@ function SettingsUnreadPanel({
 				checked={hour24}
 				disabled={hour24Pending}
 				onChange={(e) => onHour24Change(e.currentTarget.checked)}
+				mt="md"
+			/>
+			<Switch
+				label={"Reload the page after an update"}
+				description={"Off by default. A tab opened before an update keeps the old version and can fail with \"An unexpected response was received from the server\". On: when a new version is deployed (checked when you come back to the tab and every 30 seconds), or as soon as a server action fails because of it, the page is covered by a notice that blocks the screen and reloads. Drafts in progress are kept in this browser and reopened after the reload."}
+				checked={autoReload}
+				disabled={autoReloadPending}
+				onChange={(e) => onAutoReloadChange(e.currentTarget.checked)}
 				mt="md"
 			/>
 			<Switch

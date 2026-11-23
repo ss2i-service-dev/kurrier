@@ -10,6 +10,7 @@ import { listUnderThread } from "@/lib/actions/list-under-thread";
 import { rfcStyleEnabled } from "@/lib/actions/rfc-style";
 import { stripSubjectPrefixesEnabled } from "@/lib/actions/subject-prefixes";
 import { hour24Enabled } from "@/lib/actions/hour-format";
+import { autoReloadEnabled } from "@/lib/actions/auto-reload";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
 import SettingsInterface from "@/components/mailbox/settings/settings-interface";
 import { interfaceMode } from "@/lib/actions/interface-pref";
@@ -31,6 +32,7 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
     const listUnder = await listUnderThread();
     const stripPrefixes = await stripSubjectPrefixesEnabled();
     const hour24 = await hour24Enabled();
+    const autoReload = await autoReloadEnabled();
     // RFC style on send (per user, stored server-side).
     const rfcStyle = await rfcStyleEnabled();
     // Undo-send delay (per user).
@@ -90,7 +92,7 @@ async function Page({params}: {params: Promise<Record<string, string>>}) {
     return <>
         <SettingsGeneral updateName={updateName} identity={identity} />
         <SettingsSignature updateSignature={updateSignature} identity={identity} />
-        <SettingsUnreadPanel enabled={unreadPanelOn} listPreview={listPreview} threadOrder={conversationOrder} listUnderThread={listUnder} stripPrefixes={stripPrefixes} hour24={hour24} />
+        <SettingsUnreadPanel enabled={unreadPanelOn} listPreview={listPreview} threadOrder={conversationOrder} listUnderThread={listUnder} stripPrefixes={stripPrefixes} hour24={hour24} autoReload={autoReload} />
         <SettingsComposeStyle enabled={rfcStyle} undoSeconds={undoSeconds} />
         <SettingsInterface mode={uiMode} />
     </>

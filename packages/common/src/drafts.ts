@@ -107,7 +107,7 @@ export async function setDraftSendState(
 		sendError?: DraftSendError | null;
 	},
 ) {
-	let expr = sql`coalesce(${messages.metaData}, '{}'::jsonb)`;
+	let expr = sql`(case when jsonb_typeof(${messages.metaData}) = 'object' then ${messages.metaData} else '{}'::jsonb end)`;
 	for (const key of ["pendingSend", "sendError"] as const) {
 		if (!(key in patch)) continue;
 		const value = patch[key];
@@ -382,7 +382,7 @@ export async function upsertDraftRow(input: DraftInput) {
 				...fields,
 				// pendingSend is taken from the database at write time (send set between the read and
 				// here).
-				metaData: sql`jsonb_set(coalesce(${messages.metaData}, '{}'::jsonb), '{draft}', (${JSON.stringify(draftMeta)}::jsonb - 'pendingSend') || case when ${messages.metaData} #> '{draft,pendingSend}' is not null then jsonb_build_object('pendingSend', ${messages.metaData} #> '{draft,pendingSend}') else '{}'::jsonb end, true)`,
+				metaData: sql`jsonb_set((case when jsonb_typeof(${messages.metaData}) = 'object' then ${messages.metaData} else '{}'::jsonb end), '{draft}', (${JSON.stringify(draftMeta)}::jsonb - 'pendingSend') || case when ${messages.metaData} #> '{draft,pendingSend}' is not null then jsonb_build_object('pendingSend', ${messages.metaData} #> '{draft,pendingSend}') else '{}'::jsonb end, true)`,
 			})
 			.where(eq(messages.id, existing.id))
 			.returning();

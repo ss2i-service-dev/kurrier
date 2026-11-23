@@ -181,7 +181,7 @@ export const discoverMailboxes = async (
 		await db
 			.update(mailboxes)
 			.set({
-				metaData: sql`jsonb_set(coalesce(meta,'{}'::jsonb), '{imap,selectable}', 'false'::jsonb, true)`,
+				metaData: sql`jsonb_set((case when jsonb_typeof(meta) = 'object' then meta else '{}'::jsonb end), '{imap,selectable}', 'false'::jsonb, true)`,
 				updatedAt: new Date(),
 			})
 			.where(

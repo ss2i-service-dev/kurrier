@@ -211,7 +211,7 @@ export const moveMail = async (
 			// and would leave the row without a path or a UID.
 			set.metaData = sql`
         jsonb_set(
-          coalesce(${messages.metaData}, '{}'::jsonb) || jsonb_build_object('imap', coalesce(${messages.metaData}->'imap', '{}'::jsonb)),
+          (case when jsonb_typeof(${messages.metaData}) = 'object' then ${messages.metaData} else '{}'::jsonb end) || jsonb_build_object('imap', coalesce(${messages.metaData}->'imap', '{}'::jsonb)),
           '{imap,mailboxPath}',
           to_jsonb(${destPath}::text),
           true
@@ -639,7 +639,7 @@ async function setUids(pairs: Array<[string, number]>, mailboxId: string) {
 	for (const part of chunks(pairs, 1000)) {
 		await db.execute(sql`
 			update messages
-			set meta = jsonb_set(coalesce(messages.meta, '{}'::jsonb), '{imap,uid}', to_jsonb(v.uid), true)
+			set meta = jsonb_set((case when jsonb_typeof(messages.meta) = 'object' then messages.meta else '{}'::jsonb end), '{imap,uid}', to_jsonb(v.uid), true)
 			from (values ${sql.join(
 				part.map(([id, uid]) => sql`(${id}::uuid, ${Number(uid)}::bigint)`),
 				sql`, `,
@@ -666,10 +666,10 @@ async function revertToSource(
 				    updated_at = now(),
 				    meta = case when v.uid > 0
 				      then jsonb_set(
-				        jsonb_set(coalesce(messages.meta, '{}'::jsonb), '{imap,mailboxPath}', to_jsonb(${srcPath}::text), true),
+				        jsonb_set((case when jsonb_typeof(messages.meta) = 'object' then messages.meta else '{}'::jsonb end), '{imap,mailboxPath}', to_jsonb(${srcPath}::text), true),
 				        '{imap,uid}', to_jsonb(v.uid), true)
 				      -- row that left without a UID (looked up by Message-ID): no UID 0 written
-				      else jsonb_set(coalesce(messages.meta, '{}'::jsonb), '{imap,mailboxPath}', to_jsonb(${srcPath}::text), true) #- '{imap,uid}'
+				      else jsonb_set((case when jsonb_typeof(messages.meta) = 'object' then messages.meta else '{}'::jsonb end), '{imap,mailboxPath}', to_jsonb(${srcPath}::text), true) #- '{imap,uid}'
 				    end
 				from (values ${sql.join(
 					part.map((it) => sql`(${it.id}::uuid, ${Number(it.uid)}::bigint)`),

@@ -385,7 +385,7 @@ export async function syncDraftToImap(
 			.update(messages)
 			.set({
 				...extra,
-				metaData: sql`jsonb_set(coalesce(${messages.metaData}, '{}'::jsonb), '{draft,imapRevision}', to_jsonb(${revision}::int), true)`,
+				metaData: sql`jsonb_set((case when jsonb_typeof(${messages.metaData}) = 'object' then ${messages.metaData} else '{}'::jsonb end), '{draft,imapRevision}', to_jsonb(${revision}::int), true)`,
 			})
 			.where(and(eq(messages.id, row.id), eq(messages.draft, true)))
 			.returning({ id: messages.id });
@@ -479,7 +479,7 @@ export async function syncDraftToImap(
 				messageId: newMessageId,
 				rawStorageKey,
 				sizeBytes: eml.length,
-				metaData: sql`jsonb_set(jsonb_set(coalesce(${messages.metaData}, '{}'::jsonb), '{imap}', ${JSON.stringify(
+				metaData: sql`jsonb_set(jsonb_set((case when jsonb_typeof(${messages.metaData}) = 'object' then ${messages.metaData} else '{}'::jsonb end), '{imap}', ${JSON.stringify(
 					{
 						uid: newUid ?? null,
 						mailboxPath: path,

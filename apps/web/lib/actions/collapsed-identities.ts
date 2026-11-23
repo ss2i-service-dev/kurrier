@@ -60,7 +60,7 @@ export async function setIdentityCollapsed(identityPublicId: string, collapsed: 
 		: current.filter((id) => id !== identityPublicId);
 	await db.execute(sql`
 		update workspaces
-		set meta = coalesce(meta, '{}'::jsonb) || jsonb_build_object(
+		set meta = (case when jsonb_typeof(meta) = 'object' then meta else '{}'::jsonb end) || jsonb_build_object(
 			'prefCollapsedIdentities',
 			coalesce(meta->'prefCollapsedIdentities', '{}'::jsonb)
 				|| jsonb_build_object(${ctx.userId}::text, ${JSON.stringify(next)}::jsonb)

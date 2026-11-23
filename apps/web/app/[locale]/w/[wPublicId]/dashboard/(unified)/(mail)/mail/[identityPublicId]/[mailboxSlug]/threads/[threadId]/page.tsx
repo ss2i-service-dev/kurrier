@@ -1,9 +1,10 @@
 import { isModernUi } from "@/lib/actions/interface-pref";
 import MailboxPage from "../../page";
 import { fetchThreadMailbox } from "@/lib/thread-mailbox";
-import React from "react";
+import React, {Suspense} from "react";
 import {fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
 import ThreadItem from "@/components/mailbox/default/thread-item";
+import ThreadAttachments from "@/components/mailbox/default/thread-attachments";
 import { Divider } from "@mantine/core";
 import {MessageEntity} from "@db";
 import { threadOrder } from "@/lib/actions/thread-order";
@@ -46,6 +47,9 @@ async function ClassicPage({
 
 	return (
 		<>
+			<Suspense fallback={null}>
+				<ThreadAttachments messages={chronological} className="mx-4 mt-3 lg:mx-7" />
+			</Suspense>
 			{shown.map((message, position) => {
 				const threadIndex = newestFirst ? shown.length - 1 - position : position;
 				return (

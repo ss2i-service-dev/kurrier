@@ -16,37 +16,59 @@ import EditorAttachmentItem, {
 } from "@/components/mailbox/default/editor/editor-attachment-item";
 import type { MessageAttachmentWithUrl } from "@/components/mailbox/default/email-renderer";
 import { useModernUi } from "@/components/k/ui-context";
-import { Viewer } from "@/components/k/attachments";
+import { badgeFor, isPreviewable, Viewer } from "@/components/k/attachments";
+
+// "thread" variant: block at the top of the conversation, folded beyond this many files.
+const THREAD_VISIBLE = 8;
 
 export default function MessageAttachments({
 	attachments,
 	publicConfig,
 	hiddenIds,
+	variant = "message",
 }: {
 	attachments: MessageAttachmentWithUrl[];
 	publicConfig: PublicConfig;
 	// Inline images already displayed in the message body.
 	hiddenIds: string[];
+	variant?: "message" | "thread";
 }) {
 	const modern = useModernUi();
 	const [showPreviews, setShowPreviews] = useState(false);
 	// A .pptx opens in the viewer, the browser cannot display it.
 	const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+	const [showAll, setShowAll] = useState(false);
 
 	const files = (attachments ?? []).filter((a) => !hiddenIds.includes(a.id));
 	if (files.length === 0) return null;
 
-	const previewable = files.some((a) => {
-		const k = getKind(a);
-		return !!a.signedUrl && (k === "image" || k === "pdf" || k === "video");
-	});
+	const inThread = variant === "thread";
+	const visibleFiles = inThread && !showAll ? files.slice(0, THREAD_VISIBLE) : files;
+	// At the top of the thread, everything previewable opens in the viewer.
+	const opensInViewer = (a: MessageAttachmentWithUrl) => (inThread ? isPreviewable(a) : !!a.contentUrl);
+
+	const previewable =
+		!inThread &&
+		files.some((a) => {
+			const k = getKind(a);
+			return !!a.signedUrl && (k === "image" || k === "pdf" || k === "video");
+		});
+
+	const frame = inThread
+		? modern
+			? "rounded-k border border-k-line bg-k-surface px-3 py-2.5"
+			: "rounded-lg border border-neutral-200 px-3 py-2.5 dark:border-neutral-800"
+		: modern
+			? "border-t border-k-line py-3"
+			: "border-t border-dotted py-3";
 
 	return (
-		<div className={modern ? "border-t border-k-line py-3" : "border-t border-dotted py-3"}>
+		<div className={frame}>
 			<div className={`mb-2 flex items-center gap-3 text-sm ${modern ? "text-k-ink" : ""}`}>
 				<span className="inline-flex items-center gap-1.5 font-semibold">
 					<Paperclip className="h-4 w-4" />
 					{files.length} {files.length > 1 ? "attachments" : "attachment"}
+					{inThread && " in this thread"}
 				</span>
 				{previewable && (
 					<button
@@ -84,8 +106,9 @@ export default function MessageAttachments({
 				</div>
 			) : (
 				<div className="flex flex-wrap gap-2">
-					{files.map((a, i) => {
+					{visibleFiles.map((a, i) => {
 						const kind = getKind(a);
+						const inViewer = opensInViewer(a);
 						const name = a.filenameOriginal || "attachment";
 						const size = formatBytes(a.sizeBytes);
 						return (
@@ -103,9 +126,9 @@ export default function MessageAttachments({
 									href={a.signedUrl || "#"}
 									target="_blank"
 									rel="noreferrer noopener"
-									title={a.contentUrl ? `Preview ${name}` : `Open ${name}`}
+									title={inViewer ? `Preview ${name}` : `Open ${name}`}
 									onClick={
-										a.contentUrl
+										inViewer
 											? (e) => {
 													e.preventDefault();
 													setViewerIndex(i);
@@ -114,9 +137,24 @@ export default function MessageAttachments({
 									}
 									className="inline-flex min-w-0 items-center gap-2 py-1.5 pl-2.5 pr-1"
 								>
-									<span className="shrink-0 text-neutral-500">
-										<KindIcon kind={kind} />
-									</span>
+									{inThread ? (
+										// Same marker as the mail thumbnails: real image or type badge.
+										kind === "image" && a.signedUrl ? (
+											// biome-ignore lint/a11y/useAltText: decorative thumbnail, the name is shown beside it
+											<img src={a.signedUrl} alt="" loading="lazy" className="h-5 w-5 shrink-0 rounded-[4px] object-cover" />
+										) : (
+											<span
+												className="shrink-0 rounded-[4px] px-1.5 py-0.5 text-[10px] font-bold leading-none tracking-wide text-white"
+												style={{ background: badgeFor(name, kind).color }}
+											>
+												{badgeFor(name, kind).label}
+											</span>
+										)
+									) : (
+										<span className="shrink-0 text-neutral-500">
+											<KindIcon kind={kind} />
+										</span>
+									)}
 									<span className="min-w-0 truncate hover:underline">{name}</span>
 									{size && (
 										<span className="shrink-0 text-xs text-muted-foreground">{size}</span>
@@ -134,6 +172,19 @@ export default function MessageAttachments({
 							</div>
 						);
 					})}
+					{visibleFiles.length < files.length && (
+						<button
+							type="button"
+							onClick={() => setShowAll(true)}
+							className={
+								modern
+									? "k-focus rounded-k-sm px-2 py-1.5 text-[13px] text-k-ink-3 hover:bg-k-hover hover:text-k-ink"
+									: "rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+							}
+						>
+							Show {files.length - visibleFiles.length} more
+						</button>
+					)}
 				</div>
 			)}
 

@@ -20,6 +20,7 @@ import ThreadMessages from "@/components/k/thread-messages";
 import ReplyDock from "@/components/k/reply-dock";
 import { dedupeThreadMessages } from "@/lib/thread-dedupe";
 import MailUnsubscriber from "@/components/mailbox/default/mail-unsubscriber";
+import ThreadAttachments from "@/components/mailbox/default/thread-attachments";
 
 // Reading pane. Action bar, subject, flat messages (older ones collapsed and
 // grouped), reply anchored at the bottom.
@@ -110,6 +111,10 @@ export default async function KThreadPage({
 								<MailUnsubscriber mailSubscription={byMessageId.get(first.id) ?? null} message={first} />
 							</div>
 						</div>
+
+						<Suspense fallback={null}>
+							<ThreadAttachments messages={messages} className="mb-4" />
+						</Suspense>
 
 						<ThreadMessages expanded={order.map((i) => expanded[i])}>
 							{order.map((threadIndex) => messages[threadIndex]).map((message) => {

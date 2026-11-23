@@ -251,7 +251,9 @@ function MailListHeader({
 
 	return (
 		<>
-			<div className="sticky top-0 z-10 flex items-center bg-background/95 px-3 py-2 backdrop-blur rounded-t-2xl">
+			{/* Stuck under the top bar (search, identity), itself sticky: at top-0 it went underneath
+			    on the first scroll and its actions disappeared. */}
+			<div className="sticky top-[var(--mail-header-h,0px)] z-10 flex items-center bg-background/95 px-3 py-2 backdrop-blur rounded-t-2xl">
 				{!isOnSnoozedPage && (
 					<input
 						type="checkbox"

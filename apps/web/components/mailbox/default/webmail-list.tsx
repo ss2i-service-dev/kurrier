@@ -18,8 +18,8 @@ import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-ite
 import { usePathname } from "next/navigation";
 import {use} from "react";
 import { useHiddenThreads } from "@/lib/pending-moves";
-import { isSendingDraft, useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
-import { IconSend } from "@tabler/icons-react";
+import { useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
+import { inOutbox } from "@/lib/outbox-view";
 
 type WebListProps = {
 	mailboxThreadPromise: Promise<{ mailboxThreads: FetchMailboxThreadsResult, labelsByThreadId: FetchMailboxThreadLabelsResult }>;
@@ -29,6 +29,8 @@ type WebListProps = {
 	fetchMailboxPromise: Promise<FetchMailboxResult>;
 	globalLabelsPromise: Promise<FetchLabelsResult>;
 	workspacePublicId?: string;
+	// Ids of the sends visible in the Outbox (fetchOutboxIds), folder page only.
+	outboxIdsPromise?: Promise<string[]>;
 };
 
 export default function WebmailList({
@@ -38,7 +40,8 @@ export default function WebmailList({
 	identityMailboxesPromise,
 	globalLabelsPromise,
 	workspacePublicId,
-	fetchMailboxPromise
+	fetchMailboxPromise,
+	outboxIdsPromise,
 }: WebListProps) {
 	const {labelsByThreadId, mailboxThreads: serverThreads} = use(mailboxThreadPromise)
 	const globalLabels = use(globalLabelsPromise)
@@ -51,15 +54,16 @@ export default function WebmailList({
 	const onThread = /\/threads\/[^/]+/.test(pathname ?? "");
 	// Threads being moved away (trash, archive...) disappear from the list on click.
 	const isHidden = useHiddenThreads();
-	const mailboxThreads = serverThreads.filter(
+	const shownThreads = serverThreads.filter(
 		(t) => !isHidden(String(t.mailboxId), String(t.threadId)),
 	);
 
-	// In Drafts, pending sends (Undo still possible) form an Outbox at the top,
-	// separate from the drafts: they must not be mistaken for drafts.
-	const isDraftsBox = activeMailbox.kind === "drafts";
-	const sending = isDraftsBox ? mailboxThreads.filter((t) => isSendingDraft(t.draftSend)) : [];
-	const drafts = isDraftsBox ? mailboxThreads.filter((t) => !isSendingDraft(t.draftSend)) : mailboxThreads;
+	// In Drafts, drafts whose send is waiting or in progress are left out: they are in the
+	// Outbox. A failed send removes its mark (pipeline markFailed): the draft comes back to
+	// Drafts with the error, and stays in the Outbox too.
+	const outboxIds = new Set(outboxIdsPromise ? use(outboxIdsPromise) : []);
+	const mailboxThreads =
+		activeMailbox.kind === "drafts" ? shownThreads.filter((t) => !inOutbox(t.draftSend, outboxIds)) : shownThreads;
 
 	const renderItem = (mailboxThreadItem: (typeof mailboxThreads)[number]) =>
 								isMobile ? (
@@ -89,8 +93,9 @@ export default function WebmailList({
 									/>
 								);
 
-	// While a draft of the list is being sent or scheduled, the list keeps refreshing.
-	useSendListRefresh(mailboxThreads.map((t) => t.draftSend));
+	// While a draft of the list is being sent, the list keeps refreshing (including the ones the
+	// Outbox takes out of the list, to see them come back if the send fails).
+	useSendListRefresh(shownThreads.map((t) => t.draftSend));
 
 	return (
 		<div className={onThread ? "hidden" : ""} data-k-mail-list="">
@@ -121,21 +126,7 @@ export default function WebmailList({
 						/>
 
 						<ul role="list" className={`divide-y rounded-4xl`}>
-							{sending.length > 0 ? (
-								<>
-									<li className="flex items-center gap-2 bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-900 dark:bg-sky-900/50 dark:text-sky-100">
-										<IconSend size={14} aria-hidden />
-										Outbox ({sending.length}) — being sent, Undo still possible. These are not drafts anymore.
-									</li>
-									{sending.map(renderItem)}
-									<li className="px-3 py-1.5 text-xs font-semibold text-muted-foreground">
-										Drafts ({drafts.length})
-									</li>
-									{drafts.map(renderItem)}
-								</>
-							) : (
-								mailboxThreads.map(renderItem)
-							)}
+							{mailboxThreads.map(renderItem)}
 						</ul>
 					</div>
 				)}

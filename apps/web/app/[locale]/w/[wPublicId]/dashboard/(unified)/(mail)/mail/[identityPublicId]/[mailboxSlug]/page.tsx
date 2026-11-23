@@ -2,6 +2,8 @@ import {
 	fetchIdentityMailboxList,
 	fetchMailbox,
 	fetchMailboxThreads,
+	fetchOutboxIds,
+	type FetchMailboxResult,
 } from "@/lib/actions/mailbox";
 import {fetchLabelsByIdentityPublicId, fetchMailboxThreadLabels} from "@/lib/actions/labels";
 import { getPublicEnv } from "@schema";
@@ -14,6 +16,13 @@ import { listUnderThread } from "@/lib/actions/list-under-thread";
 import KThreadList from "@/components/k/thread-list";
 import { fetchKPinnedThreads } from "@/lib/actions/k-pins";
 import { kRealAttachmentsOf } from "@/lib/actions/k-threads";
+
+// Sends shown in the Outbox, which Drafts does not list. Read for Drafts only; on error nothing
+// is left out: the drafts stay visible with their send badge.
+const outboxIdsFor = (identityPublicId: string, mailbox: Promise<FetchMailboxResult>) =>
+	mailbox
+		.then(({ activeMailbox }) => (activeMailbox.kind === "drafts" ? fetchOutboxIds(identityPublicId) : []))
+		.catch(() => [] as string[]);
 
 async function ClassicPage({
 	params,
@@ -59,6 +68,7 @@ async function ClassicPage({
 					identityMailboxesPromise={identityMailboxesPromise}
 					globalLabelsPromise={globalLabelsPromise}
 					workspacePublicId={workspacePublicId}
+					outboxIdsPromise={outboxIdsFor(identityPublicId, fetchMailboxPromise)}
 				/>
 
 				<MailPagination
@@ -107,6 +117,7 @@ async function ModernPage({
 				globalLabelsPromise={fetchLabelsByIdentityPublicId({ identityPublicId, scope: "thread" })}
 				workspacePublicId={workspacePublicId}
 				startPage={Number(page) > 0 ? Number(page) : 1}
+				outboxIdsPromise={outboxIdsFor(identityPublicId, fetchMailboxPromise)}
 			/>
 		</div>
 	);

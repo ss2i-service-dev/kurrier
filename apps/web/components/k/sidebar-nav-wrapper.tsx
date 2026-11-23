@@ -2,7 +2,7 @@ import {
 	fetchIdentityMailboxList,
 	fetchIdentitySnoozedThreads,
 	fetchMailboxUnreadCounts,
-	fetchScheduledDraftCounts,
+	fetchOutboxCounts,
 } from "@/lib/actions/mailbox";
 import { getWorkspacePublicId } from "@/lib/actions/clients";
 import { fetchDraftCounts } from "@/lib/actions/drafts";
@@ -15,12 +15,14 @@ import KLabelsSidebar from "@/components/k/labels-sidebar";
 // Same data as identity-mailboxes-list-wrapper.tsx (with the draft count in place
 // of the unread count for Drafts), rendered by the modern interface's sidebar.
 export default async function KSidebarNavWrapper() {
-	const [identityMailboxes, unreadThreadCounts, globalLabels, workspacePublicId, draftCounts] = await Promise.all([
+	const [identityMailboxes, unreadThreadCounts, globalLabels, workspacePublicId, draftCounts, outboxCounts] = await Promise.all([
 		fetchIdentityMailboxList(),
 		fetchMailboxUnreadCounts(),
 		fetchLabelsWithCounts(),
 		getWorkspacePublicId(),
 		fetchDraftCounts(),
+		// Outbox counter per identity
+		fetchOutboxCounts(),
 	]);
 	const unreadCounts = new Map(unreadThreadCounts);
 	for (const [mailboxId, n] of draftCounts) {
@@ -31,7 +33,7 @@ export default async function KSidebarNavWrapper() {
 			<KSidebarNav
 				identityMailboxes={identityMailboxes}
 				unreadCounts={unreadCounts}
-				scheduledDraftsPromise={fetchScheduledDraftCounts()}
+				outboxCounts={outboxCounts}
 				snoozedThreadsPromise={fetchIdentitySnoozedThreads()}
 				workspacePublicId={workspacePublicId}
 			/>

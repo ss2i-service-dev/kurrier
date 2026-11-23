@@ -1,6 +1,6 @@
 "use client";
 // Thread list of a folder. Same data and behaviours as webmail-list.tsx
-// (threads hidden on click via pending-moves, Outbox of pending sends in
+// (threads hidden on click via pending-moves, drafts in the Outbox left out of
 // Drafts, refresh while a send is in progress), with the modern interface's
 // presentation, an All / Unread filter (served by the server, page by page),
 // and pinned threads on top.
@@ -8,7 +8,7 @@ import * as React from "react";
 import { use } from "react";
 import { usePathname } from "next/navigation";
 import { Inbox } from "lucide-react";
-import { IconMail, IconPinnedFilled, IconSend } from "@tabler/icons-react";
+import { IconMail, IconPinnedFilled } from "@tabler/icons-react";
 import { PublicConfig } from "@schema";
 import {
 	FetchIdentityMailboxListResult,
@@ -18,7 +18,8 @@ import {
 import { FetchLabelsResult, FetchMailboxThreadLabelsResult } from "@/lib/actions/labels";
 import { DynamicContextProvider, useDynamicContext } from "@/hooks/use-dynamic-context";
 import { useHiddenThreads } from "@/lib/pending-moves";
-import { isSendingDraft, useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
+import { useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
+import { inOutbox } from "@/lib/outbox-view";
 import KListHeader from "@/components/k/list-header";
 import KThreadRow from "@/components/k/thread-row";
 import { mailboxTitle } from "@/components/k/format";
@@ -47,6 +48,8 @@ type Props = {
 	workspacePublicId?: string;
 	/** Starting page (?page=), the following ones load on scroll. */
 	startPage?: number;
+	/** Ids of the sends visible in the Outbox (fetchOutboxIds), folder page only. */
+	outboxIdsPromise?: Promise<string[]>;
 };
 
 const NO_PINS: Promise<PinnedData> = Promise.resolve({ pinnedIds: [], mailboxThreads: [], labelsByThreadId: {}, realAttachments: [] });
@@ -75,6 +78,7 @@ function ListBody({
 	workspacePublicId,
 	fetchMailboxPromise,
 	startPage = 1,
+	outboxIdsPromise,
 }: Props) {
 	const { labelsByThreadId: serverLabels, mailboxThreads: serverFirst, realAttachments: serverFiles } = use(mailboxThreadPromise);
 	const pinnedData = use(pinnedPromise);
@@ -138,10 +142,16 @@ function ListBody({
 	React.useEffect(() => settlePins(serverPinned), [serverPinned]);
 	const isPinned = (id: string) => pinOverride.get(String(id)) ?? serverPinned.has(String(id));
 
-	const visible = baseThreads.filter((t) => !isHidden(String(t.mailboxId), String(t.threadId)));
+	// In Drafts, drafts whose send is waiting or in progress are left out: they are in the
+	// Outbox. A failed send removes its mark (pipeline markFailed): the draft comes back to
+	// Drafts with the error, and stays in the Outbox too.
+	const outboxIds = new Set(outboxIdsPromise ? use(outboxIdsPromise) : []);
+	const inOutboxRow = (t: Thread) => activeMailbox.kind === "drafts" && inOutbox(t.draftSend, outboxIds);
+	const unhidden = baseThreads.filter((t) => !isHidden(String(t.mailboxId), String(t.threadId)));
+	const visible = unhidden.filter((t) => !inOutboxRow(t));
 	const visibleKeys = new Set(visible.map(keyOf));
 	const fromPins = withFiles(pinnedData.mailboxThreads as Thread[]).filter(
-		(t) => !visibleKeys.has(keyOf(t)) && !isHidden(String(t.mailboxId), String(t.threadId)),
+		(t) => !visibleKeys.has(keyOf(t)) && !isHidden(String(t.mailboxId), String(t.threadId)) && !inOutboxRow(t),
 	);
 	const pinnedRows = [...fromPins, ...visible]
 		.filter((t) => isPinned(String(t.threadId)))
@@ -173,8 +183,9 @@ function ListBody({
 		);
 	}, [allThreads, pinnedData.mailboxThreads]);
 
-	// While a draft in the list is being sent or scheduled, the list keeps refreshing.
-	useSendListRefresh(shown.map((t) => t.draftSend));
+	// While a draft of the list is being sent, the list keeps refreshing (including the ones the
+	// Outbox takes out of the list, to see them come back if the send fails).
+	useSendListRefresh(unhidden.map((t) => t.draftSend));
 
 	return (
 		<>
@@ -290,11 +301,6 @@ function Rows({
 		/>
 	);
 
-	// In Drafts, pending sends (Undo still possible) form an Outbox at the top,
-		// separate from the drafts.
-	const isDraftsBox = activeMailbox.kind === "drafts";
-	const sending = isDraftsBox ? rows.filter((t) => isSendingDraft(t.draftSend)) : [];
-	const drafts = isDraftsBox ? rows.filter((t) => !isSendingDraft(t.draftSend)) : rows;
 	const section = "px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-[0.06em] text-k-ink-3";
 
 	return (
@@ -309,7 +315,7 @@ function Rows({
 					{/* End of the pinned block: empty band in the page background colour,
 										    edge to edge of the pane. Pinned and the rest of the list read as
 										    two stacked cards. */}
-					{rows.length > 0 && sending.length === 0 && (
+					{rows.length > 0 && (
 						<>
 							<li aria-hidden className="!my-1.5 -mx-1.5 h-3 border-y border-k-line bg-k-canvas" />
 							<li className={`${section} flex items-center gap-1.5`}>
@@ -320,19 +326,7 @@ function Rows({
 					)}
 				</>
 			)}
-			{sending.length > 0 ? (
-				<>
-					<li className={`${section} flex items-center gap-1.5 !text-k-accent`}>
-						<IconSend size={13} aria-hidden />
-						Pending sends ({sending.length}) · can be undone
-					</li>
-					{sending.map(row(false))}
-					<li className={section}>Drafts ({drafts.length})</li>
-					{drafts.map(row(false))}
-				</>
-			) : (
-				rows.map(row(false))
-			)}
+			{rows.map(row(false))}
 		</ul>
 	);
 }

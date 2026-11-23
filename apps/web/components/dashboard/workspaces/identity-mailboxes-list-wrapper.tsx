@@ -2,7 +2,7 @@ import {
     fetchIdentityMailboxList,
     fetchIdentitySnoozedThreads,
     fetchMailboxUnreadCounts,
-    fetchScheduledDraftCounts
+    fetchOutboxCounts
 } from "@/lib/actions/mailbox";
 import {getWorkspacePublicId} from "@/lib/actions/clients";
 import {fetchDraftCounts} from "@/lib/actions/drafts";
@@ -23,6 +23,7 @@ async function IdentityMailboxesListWrapper() {
         workspacePublicId,
         draftCounts,
         collapsed,
+        outboxCounts,
     ] = await Promise.all([
         fetchIdentityMailboxList(),
         fetchMailboxUnreadCounts(),
@@ -30,6 +31,8 @@ async function IdentityMailboxesListWrapper() {
         getWorkspacePublicId(),
         fetchDraftCounts(),
         collapsedIdentities(),
+        // Outbox counter per identity
+        fetchOutboxCounts(),
     ]);
 
     // The Drafts folder shows its draft count in place of unread threads.
@@ -38,7 +41,6 @@ async function IdentityMailboxesListWrapper() {
         unreadCounts.set(mailboxId, { unreadThreads: n, unreadTotal: n });
     }
 
-    const scheduledDraftsPromise = fetchScheduledDraftCounts();
     const snoozedThreadsPromise = fetchIdentitySnoozedThreads()
 
     return (
@@ -46,7 +48,7 @@ async function IdentityMailboxesListWrapper() {
             <IdentityMailboxesList
                 identityMailboxes={identityMailboxes}
                 unreadCounts={unreadCounts}
-                scheduledDraftsPromise={scheduledDraftsPromise}
+                outboxCounts={outboxCounts}
                 snoozedThreadsPromise={snoozedThreadsPromise}
                 workspacePublicId={workspacePublicId}
                 initialCollapsed={collapsed}

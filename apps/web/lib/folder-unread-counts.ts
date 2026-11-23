@@ -12,3 +12,10 @@ export function showsUnreadCount(kind: string | null | undefined): boolean {
 export function showsSidebarCount(kind: string | null | undefined): boolean {
 	return kind === "drafts" || showsUnreadCount(kind);
 }
+
+// Outbox: the number of visible sends (waiting, in progress, failed), never unread counts;
+// nothing at zero; red as soon as a send needs an action.
+export function outboxSidebarCount(c: { total: number; alert: number } | null | undefined): { n: number; alert: boolean } | null {
+	if (!c || c.total <= 0) return null;
+	return { n: c.total, alert: c.alert > 0 };
+}

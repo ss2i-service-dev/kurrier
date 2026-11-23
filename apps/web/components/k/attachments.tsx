@@ -10,6 +10,7 @@ import { getKind } from "@/components/mailbox/default/editor/editor-attachment-i
 import type { MessageAttachmentWithUrl } from "@/components/mailbox/default/email-renderer";
 import { formatBytes } from "@/components/k/format";
 import PptxPreview from "@/components/k/pptx-preview";
+import SheetPreview from "@/components/k/sheet-preview";
 import TextPreview from "@/components/k/text-preview";
 import ZipPreview from "@/components/k/zip-preview";
 import { isTabular } from "@/lib/text-preview";
@@ -17,10 +18,10 @@ import { isTabular } from "@/lib/text-preview";
 type Kind = ReturnType<typeof getKind>;
 export const PREVIEWABLE: Kind[] = ["image", "pdf", "text", "video", "audio"];
 
-// A .pptx, a CSV sent as application/vnd.ms-excel or a zip have no family of their own: they
-// are previewable when the page carries the URL of their preview.
+// A .pptx, a workbook, a CSV sent as application/vnd.ms-excel or a zip have no family of their
+// own: they are previewable when the page carries the URL of their preview.
 export const isPreviewable =(a: MessageAttachmentWithUrl) =>
-	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl || !!a.textUrl || !!a.zipUrl);
+	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl || !!a.textUrl || !!a.sheetUrl || !!a.zipUrl);
 
 // Type badge: colour and abbreviation per file family.
 export function badgeFor(name: string, kind: Kind) {
@@ -186,8 +187,8 @@ export function Viewer({
 							.join(" · ")}
 					</div>
 				</div>
-				{/* A .pptx, a CSV or a zip opened in a tab would simply be downloaded. */}
-				{!current.contentUrl && !current.zipUrl && !(current.textUrl && isTabular(current)) && (
+				{/* A .pptx, a workbook, a CSV or a zip opened in a tab would simply be downloaded. */}
+				{!current.contentUrl && !current.sheetUrl && !current.zipUrl &&!(current.textUrl && isTabular(current)) && (
 					<a
 						href={current.signedUrl}
 						target="_blank"
@@ -251,6 +252,9 @@ export function Viewer({
 							tabular={isTabular(current)}
 							downloadUrl={current.downloadUrl}
 						/>
+					)}
+					{current.sheetUrl && (
+						<SheetPreview key={current.id} url={current.sheetUrl} name={name} downloadUrl={current.downloadUrl} />
 					)}
 					{current.zipUrl && (
 						<ZipPreview key={current.id} url={current.zipUrl} name={name} downloadUrl={current.downloadUrl} />

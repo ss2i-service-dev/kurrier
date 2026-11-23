@@ -45,7 +45,7 @@ export default function MessageAttachments({
 	const inThread = variant === "thread";
 	const visibleFiles = inThread && !showAll ? files.slice(0, THREAD_VISIBLE) : files;
 	// At the top of the thread, everything previewable opens in the viewer.
-	const opensInViewer = (a: MessageAttachmentWithUrl) => (inThread ? isPreviewable(a) : !!(a.contentUrl || a.textUrl || a.zipUrl));
+	const opensInViewer = (a: MessageAttachmentWithUrl) => (inThread ? isPreviewable(a) : !!(a.contentUrl || a.textUrl || a.sheetUrl || a.zipUrl));
 
 	const previewable =
 		!inThread &&
@@ -100,7 +100,7 @@ export default function MessageAttachments({
 							key={a.id}
 							attachment={a}
 							publicConfig={publicConfig}
-							onPreview={a.contentUrl || a.textUrl || a.zipUrl ? () => setViewerIndex(i) : undefined}
+							onPreview={a.contentUrl || a.textUrl || a.sheetUrl || a.zipUrl ? () => setViewerIndex(i) : undefined}
 						/>
 					))}
 				</div>

@@ -125,3 +125,24 @@ export function parseCsv(text: string, delim: string, maxRows = Number.POSITIVE_
 	if (field !== "" || row.length > 0) endRow();
 	return { rows, totalRows, truncated: totalRows > rows.length };
 }
+
+// Beyond this, rendering the table slows the browser down: the rest comes with the download.
+export const MAX_TABLE_ROWS = 5000;
+const NUMBER = /^[-+]?[\d\s  .,]*\d[\d\s  .,]*\s?(%|€|\$|£|EUR|CAD|USD)?$/i;
+
+// Displayable table (CSV or workbook sheet): first row = headers, `rows` may be shorter than
+// `totalRows` (at most MAX_TABLE_ROWS + 1 rows read), `totalRows` counts the header.
+export function buildTable(rows: string[][], totalRows: number) {
+	const columns = rows.reduce((m, r) => Math.max(m, r.length), 0);
+	const [header = [], ...body] = rows;
+	// A column is numeric if all its non-empty cells are: right-aligned.
+	const numeric = Array.from({ length: columns }, (_, c) => {
+		const values = body.map((r) => (r[c] ?? "").trim()).filter(Boolean);
+		return values.length > 0 && values.every((v) => NUMBER.test(v));
+	});
+	// Long text column (labels): wrapped with a minimum width; the others (dates, codes,
+	// amounts) stay on one line.
+	const long = Array.from({ length: columns }, (_, c) => body.some((r) => (r[c] ?? "").length > 40));
+	return { header, body: body.slice(0, MAX_TABLE_ROWS), totalRows: Math.max(0, totalRows - 1), columns, numeric, long };
+}
+export type PreviewTable = ReturnType<typeof buildTable>;

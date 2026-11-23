@@ -40,6 +40,7 @@ test("stable links, no signature in the page", () => {
 		downloadUrl: `/api/attachments/${ID}?mode=download`,
 		contentUrl: undefined,
 		textUrl: undefined,
+		sheetUrl: undefined,
 		zipUrl: undefined,
 	});
 });

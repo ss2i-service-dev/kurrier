@@ -43,6 +43,8 @@ export type MessageAttachmentWithUrl = MessageAttachmentEntity & {
 	contentUrl?: string;
 	// Same bytes for a text or a CSV, rendered as text or as a table.
 	textUrl?: string;
+	// Same bytes for an xls, xlsx or ods workbook, read in the browser.
+	sheetUrl?: string;
 	// JSON list of the files of a zip.
 	zipUrl?: string;
 	// Direct S3 URL of an image referenced by cid: in the body of the message.

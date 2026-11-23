@@ -3,6 +3,7 @@
 // the storage ("Bad request: Date is too old"). The page now only carries
 // /api/attachments/<id>, and the signature happens at click time. Pure functions, tested by
 // apps/web/test/attachment-links.ts.
+import { canPreviewSheet } from "./sheet-preview";
 import { canPreviewText } from "./text-preview";
 import { canListZip } from "./zip-listing";
 
@@ -50,6 +51,8 @@ export function attachmentUrls(a: {
 		contentUrl: canPreviewPptx(a) ? attachmentLink(a.id, "content") : undefined,
 		// Text and CSV: same bytes, rendered as text or as a table (lib/text-preview.ts).
 		textUrl: canPreviewText(a) ? attachmentLink(a.id, "content") : undefined,
+		// Workbooks (xls, xlsx, ods): same bytes, read by SheetJS in the browser (lib/sheet-preview.ts).
+		sheetUrl: canPreviewSheet(a) ? attachmentLink(a.id, "content") : undefined,
 		// Zip: list of the files only (lib/zip-listing.ts), nothing is decompressed.
 		zipUrl: canListZip(a) ? attachmentLink(a.id, "listing") : undefined,
 	};

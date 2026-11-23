@@ -2,7 +2,7 @@
 // Access goes through RLS, like the display of the thread. The response is a redirect to a
 // fresh S3 URL: the file stays served by the S3 origin, so an HTML or SVG attachment never
 // runs on the origin of the application.
-// - content: the bytes of a .pptx, a text or a CSV for the preview, on the same origin (S3
+// - content: the bytes of a .pptx, a text, a CSV or a workbook for the preview, on the same origin (S3
 //   refuses the fetch of the browser, CORS). Never interpretable: binary type, attachment,
 //   nosniff, sandbox.
 // - listing: JSON list of the files of a zip, read by S3 ranges (lib/zip-listing.ts).
@@ -21,6 +21,7 @@ import {
 	PPTX_PREVIEW_MAX_BYTES,
 } from "@/lib/attachment-links";
 import { s3 } from "@/lib/create-s3-client";
+import { canPreviewSheet, SHEET_PREVIEW_MAX_BYTES } from "@/lib/sheet-preview";
 import { canPreviewText, TEXT_PREVIEW_MAX_BYTES } from "@/lib/text-preview";
 import {
 	canListZip,
@@ -70,7 +71,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 			? PPTX_PREVIEW_MAX_BYTES
 			: canPreviewText(attachment)
 				? TEXT_PREVIEW_MAX_BYTES
-				: 0;
+				: canPreviewSheet(attachment)
+					? SHEET_PREVIEW_MAX_BYTES
+					: 0;
 		if (!maxBytes) return failure(415, "Preview not available for this file.");
 		const object = await s3.send(new GetObjectCommand({ Bucket, Key }));
 		if (!object.Body) return failure(404, "Attachment not found.");

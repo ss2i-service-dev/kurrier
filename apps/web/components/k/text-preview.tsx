@@ -5,11 +5,8 @@
 // detected), text otherwise.
 import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
-import { decodeText, detectDelimiter, parseCsv } from "@/lib/text-preview";
-
-// Beyond this, rendering the table slows the browser down: the rest comes with the download.
-const MAX_ROWS = 5000;
-const NUMBER = /^[-+]?[\d\s  .,]*\d[\d\s  .,]*\s?(%|€|\$|£|EUR|CAD|USD)?$/i;
+import DataTable from "@/components/k/data-table";
+import { buildTable, decodeText, detectDelimiter, MAX_TABLE_ROWS, parseCsv } from "@/lib/text-preview";
 
 const DELIM_LABEL: Record<string, string> = { ";": "semicolon", ",": "comma", "\t": "tab", "|": "vertical bar" };
 
@@ -54,18 +51,8 @@ export default function TextPreview({
 	const table = useMemo(() => {
 		if (!loaded || !tabular) return null;
 		const delimiter = detectDelimiter(loaded.text);
-		const parsed = parseCsv(loaded.text, delimiter, MAX_ROWS + 1);
-		const columns = parsed.rows.reduce((m, r) => Math.max(m, r.length), 0);
-		const [header = [], ...body] = parsed.rows;
-		// A column is numeric if all its non-empty cells are: right-aligned.
-		const numeric = Array.from({ length: columns }, (_, c) => {
-			const values = body.map((r) => (r[c] ?? "").trim()).filter(Boolean);
-			return values.length > 0 && values.every((v) => NUMBER.test(v));
-		});
-		// Long text column (labels): wrapped with a minimum width; the others (dates,
-		// codes, amounts) stay on one line.
-		const long = Array.from({ length: columns }, (_, c) => body.some((r) => (r[c] ?? "").length > 40));
-		return { delimiter, header, body: body.slice(0, MAX_ROWS), totalRows: parsed.totalRows - 1, columns, numeric, long };
+		const parsed = parseCsv(loaded.text, delimiter, MAX_TABLE_ROWS + 1);
+		return { delimiter, ...buildTable(parsed.rows, parsed.totalRows) };
 	}, [loaded, tabular]);
 
 	const plain = useMemo(() => {
@@ -133,54 +120,9 @@ export default function TextPreview({
 
 			<div className="min-h-0 flex-1 overflow-auto">
 				{table && asTable ? (
-					<table className="min-w-full border-separate border-spacing-0 text-[13px] tabular-nums">
-						<thead>
-							<tr>
-								<th className="sticky top-0 left-0 z-20 border-r border-b border-neutral-300 bg-neutral-100 px-2 py-1.5 text-right font-normal text-neutral-400">
-									#
-								</th>
-								{Array.from({ length: table.columns }, (_, c) => (
-									<th
-										key={c}
-										className={`sticky top-0 z-10 border-r border-b border-neutral-300 bg-neutral-100 px-3 py-1.5 font-semibold ${table.long[c] ? "min-w-[18rem] max-w-[32rem] whitespace-pre-wrap" : "whitespace-nowrap"} ${table.numeric[c] ? "text-right" : "text-left"}`}
-									>
-										{table.header[c] ?? ""}
-									</th>
-								))}
-							</tr>
-						</thead>
-						<tbody>
-							{table.body.map((row, r) => (
-								// biome-ignore lint/suspicious/noArrayIndexKey: rows of a frozen file
-								<tr key={r} className="even:bg-neutral-50 hover:bg-amber-50">
-									<td className="sticky left-0 border-r border-b border-neutral-200 bg-inherit px-2 py-1 text-right text-neutral-400 select-none">
-										{r + 1}
-									</td>
-									{Array.from({ length: table.columns }, (_, c) => (
-										<td
-											// biome-ignore lint/suspicious/noArrayIndexKey: columns of a frozen file
-											key={c}
-											className={`border-r border-b border-neutral-200 px-3 py-1 align-top ${table.long[c] ? "min-w-[18rem] max-w-[32rem] whitespace-pre-wrap" : "whitespace-nowrap"} ${table.numeric[c] ? "text-right" : ""}`}
-										>
-											{row[c] ?? ""}
-										</td>
-									))}
-								</tr>
-							))}
-						</tbody>
-					</table>
+					<DataTable table={table} downloadUrl={downloadUrl} />
 				) : (
 					<pre className="min-w-max p-4 font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words">{plain}</pre>
-				)}
-				{table && asTable && table.totalRows > table.body.length && (
-					<div className="border-t border-neutral-200 px-4 py-3 text-[13px] text-neutral-600">
-						First {table.body.length.toLocaleString()} rows shown out of {table.totalRows.toLocaleString()}.
-						{downloadUrl && (
-							<a href={downloadUrl} className="ml-2 font-medium text-blue-700 underline">
-								Download the complete file
-							</a>
-						)}
-					</div>
 				)}
 			</div>
 		</div>

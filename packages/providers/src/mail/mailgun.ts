@@ -312,7 +312,7 @@ export class MailgunMailer implements Mailer {
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
-	): Promise<{ success: boolean; MessageId?: string }> {
+	): Promise<{ success: boolean; MessageId?: string; error?: string }> {
 		try {
 			const domain = String(opts.from.split("@")[1] || "").trim();
 
@@ -356,7 +356,8 @@ export class MailgunMailer implements Mailer {
 			return { success: true, MessageId: id };
 		} catch (err) {
 			console.error("mailgun sendEmail error", err);
-			return { success: false };
+			// The cause goes up to the worker (SMTP refusal, network error).
+			return { success: false, error: String((err as any)?.response || (err as any)?.message || String(err)) };
 		}
 	}
 }

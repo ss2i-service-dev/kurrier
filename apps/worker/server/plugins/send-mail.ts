@@ -40,6 +40,7 @@ import {
 	workspaces,
 } from "@db";
 import { createMailer } from "@providers";
+import { mailerFailureOf } from "../../lib/send-outcome";
 import { toArray } from "drizzle-orm/mysql-core";
 import { and, eq, sql } from "drizzle-orm";
 import addressparser from "addressparser";
@@ -526,10 +527,11 @@ export default defineNitroPlugin(async (nitroApp) => {
 					ownAddresses: [mailbox.identity.value],
 					recipients: [data.to, data.cc, data.bcc],
 				});
-			} else if (mailerResponse.error) {
+			} else {
+				// A refusal without a cause stays a failure (lib/send-outcome.ts).
 				return {
 					success: false,
-					error: `Failed to send email: ${mailerResponse.error}`,
+					error: mailerFailureOf(mailerResponse) as string,
 				};
 			}
 			return { success: true };

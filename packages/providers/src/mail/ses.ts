@@ -873,7 +873,7 @@ export class SesMailer implements Mailer {
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
-	): Promise<{ success: boolean; MessageId?: string }> {
+	): Promise<{ success: boolean; MessageId?: string; error?: string }> {
 		// const subject = opts?.subject ?? "Test email";
 		// const body =
 		//     opts?.body ??
@@ -981,7 +981,8 @@ export class SesMailer implements Mailer {
 			};
 		} catch (err) {
 			console.error("SES sendTestEmail error:", err);
-			return { success: false };
+			// The cause goes up to the worker (SMTP refusal, network error).
+			return { success: false, error: String((err as any)?.response || (err as any)?.message || String(err)) };
 		}
 	}
 

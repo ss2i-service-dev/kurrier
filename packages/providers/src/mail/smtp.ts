@@ -151,7 +151,7 @@ export class SmtpMailer implements Mailer {
 			extraHeaders?: Record<string, string>;
 			attachments?: { name: string; content: Blob; contentType: string }[];
 		},
-	): Promise<{ success: boolean; MessageId?: string }> {
+	): Promise<{ success: boolean; MessageId?: string; error?: string }> {
 		try {
 			// convert Blob attachments -> Nodemailer format (Buffer)
 			const attachments = await Promise.all(
@@ -187,7 +187,8 @@ export class SmtpMailer implements Mailer {
 			return { success: true, MessageId: String(info.messageId || "") };
 		} catch (err) {
 			// You can add logging here if desired
-			return { success: false };
+			// The cause goes up to the worker (SMTP refusal, network error).
+			return { success: false, error: String((err as any)?.response || (err as any)?.message || String(err)) };
 		}
 	}
 

@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useMemo } from "react";
-import { CalendarDays, Clock, MapPin, User, CheckCircle, CircleDashed, CircleX } from "lucide-react";
+import { CalendarDays, Clock, MapPin, User, Video, CheckCircle, CircleDashed, CircleX } from "lucide-react";
 import type { CalendarEventEntity, CalendarEventAttendeeEntity, IdentityEntity } from "@db";
 import { ReusableFormButton } from "@/components/common/reusable-form-button";
 import { maybeCalendarInvite, noCalendarInvite, yesCalendarInvite } from "@/lib/actions/calendar";
 import { useModernUi } from "@/components/k/ui-context";
+import { findMeetingUrl, locationIsJustLink, meetingLabel, meetingProvider, openMeeting } from "@/lib/meeting-link";
 
 type Props = {
     calendarEvent: CalendarEventEntity;
@@ -68,6 +69,9 @@ export default function RenderInvite({ calendarEvent, attendees, identity }: Pro
             }`
             : null;
 
+    // Link of the video meeting: in the location first, then in the description.
+    const joinUrl = findMeetingUrl(calendarEvent.location, calendarEvent.description);
+
     const responseLabel = partstatLabel(selfAttendee?.partstat);
     const isPending = (selfAttendee?.partstat || "").toLowerCase() === "needs_action";
 
@@ -115,7 +119,19 @@ export default function RenderInvite({ calendarEvent, attendees, identity }: Pro
                         </div>
                     ) : null}
 
-                    {calendarEvent.location ? (
+                    {joinUrl ? (
+                        <a
+                            href={joinUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(ev) => openMeeting(ev, joinUrl)}
+                            className={`mt-2 inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-[13px] font-medium text-white hover:opacity-90 sm:px-2.5 sm:py-1 sm:text-[12.5px] ${meetingProvider(joinUrl) === "meet" ? "bg-[#1a73e8]" : "bg-[#5b5fc7]"}`}
+                        >
+                            <Video size={14} /> Join the {meetingLabel(joinUrl)} meeting
+                        </a>
+                    ) : null}
+
+                    {calendarEvent.location && !locationIsJustLink(calendarEvent.location, joinUrl) ? (
                         <div className="mt-1 flex items-center gap-1.5 text-sm text-neutral-600 dark:text-neutral-300">
                             <MapPin size={14} />
                             <span className="truncate">{calendarEvent.location}</span>

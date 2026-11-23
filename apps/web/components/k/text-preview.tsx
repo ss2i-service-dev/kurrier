@@ -106,7 +106,7 @@ export default function TextPreview({
 	return (
 		<div
 			aria-label={name}
-			className="flex h-full w-full max-w-[1400px] flex-col overflow-hidden rounded-k bg-white text-neutral-900 shadow-2xl"
+			className="flex h-full w-full flex-col overflow-hidden rounded-k bg-white text-neutral-900 shadow-2xl"
 		>
 			<div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-[12px] text-neutral-600">
 				{table && asTable ? (

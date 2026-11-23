@@ -65,7 +65,7 @@ export default function PptxPreview({
 	}, [url]);
 
 	return (
-		<div className="relative h-full w-full max-w-[1100px]">
+		<div className="relative h-full w-full">
 			<div ref={scrollRef} className="h-full w-full overflow-y-auto rounded-k bg-neutral-800 shadow-2xl">
 				{/* Content managed by the rendering engine, never by React. */}
 				<div ref={hostRef} aria-label={name} className="w-full" />

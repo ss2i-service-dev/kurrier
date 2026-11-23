@@ -212,7 +212,7 @@ export function Viewer({
 			</div>
 
 			{/* Preview */}
-			<div className="relative flex min-h-0 flex-1 items-center justify-center px-16 pb-6">
+			<div className={`relative flex min-h-0 flex-1 items-center justify-center pb-6 ${previewable.length > 1 ? "px-16" : "px-4"}`}>
 				{previewable.length > 1 && (
 					<button
 						type="button"
@@ -260,7 +260,7 @@ export function Viewer({
 							key={current.id}
 							src={current.signedUrl}
 							title={name}
-							className="h-full w-full max-w-[1000px] rounded-k bg-white shadow-2xl"
+							className="h-full w-full rounded-k bg-white shadow-2xl"
 						/>
 					)}
 					{kind === "video" && (

@@ -95,7 +95,7 @@ export default function ZipPreview({ url, name, downloadUrl }: { url: string; na
 	}
 
 	return (
-		<div aria-label={name} className="flex h-full w-full max-w-[900px] flex-col overflow-hidden rounded-k bg-white text-neutral-900 shadow-2xl">
+		<div aria-label={name} className="flex h-full w-full flex-col overflow-hidden rounded-k bg-white text-neutral-900 shadow-2xl">
 			<div className="flex shrink-0 flex-wrap items-center gap-x-3 border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-[12px] text-neutral-600">
 				<span>
 					{files.length.toLocaleString()} file{files.length > 1 ? "s" : ""} · {formatBytes(totalSize)} uncompressed ·

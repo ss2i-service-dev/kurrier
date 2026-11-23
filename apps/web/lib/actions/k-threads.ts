@@ -6,6 +6,7 @@ import { fetchMailboxThreadLabels } from "@/lib/actions/labels";
 import { and, desc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
 import { mailboxThreads } from "@db";
 import { PAGE_SIZE } from "@common/mail-client";
+import { REAL_ATTACHMENT_SQL } from "@common/real-attachments";
 import { rlsClient } from "@/lib/actions/clients";
 
 export async function fetchKThreadPage(identityPublicId: string, mailboxSlug: string, page: number) {
@@ -52,8 +53,8 @@ export async function fetchKUnreadPage(identityPublicId: string, mailboxSlug: st
 /**
  * Threads that have a real attachment. has_attachments (computed by the worker) also
  * counts images embedded in the body (signatures, logos): the list showed a paperclip for
- * a mere signature. Not counted: parts marked inline and images referenced in the body
- * (cid).
+ * a mere signature. Not counted: inline or body-referenced (cid) images; a PDF with a cid
+ * counts. Shared rule: packages/common/src/real-attachments.ts.
  */
 // Server helper, not exported (any export of a "use server" file is a callable action).
 async function fetchKRealAttachmentThreads(threadIds: string[]): Promise<string[]> {
@@ -66,8 +67,7 @@ async function fetchKRealAttachmentThreads(threadIds: string[]): Promise<string[
 			from message_attachments a
 			join messages m on m.id = a.message_id
 			where m.thread_id in (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)})
-			  and not a.is_inline
-			  and not (a.cid is not null and coalesce(a.content_type, '') ilike 'image/%')
+			  and ${sql.raw(REAL_ATTACHMENT_SQL)}
 		`),
 	);
 	return ((res?.rows ?? res ?? []) as any[]).map((r) => String(r.id));

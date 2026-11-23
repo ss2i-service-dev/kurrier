@@ -269,23 +269,25 @@ export default function WebmailListItemMobile({
 						<MailOpen className="h-4 w-4" />
 					</button>
 				)}
-				<button
-					onClick={() => {
-						// The row leaves the list on click, the server follows (see lib/pending-moves).
-						const id = String(mailboxThreadItem.threadId);
-						moveWithUndo({
-							mailboxId: activeMailbox.id,
-							threadIds: [id],
-							message: activeMailbox.kind === "trash" ? "Deleted forever" : "Moved to Trash",
-							run: () => moveToTrash(id, activeMailbox.id, !!mailboxSync, true),
-							failure: "Delete failed",
-						});
-					}}
-					className="rounded p-1 hover:bg-muted"
-					title="Delete"
-				>
-					<Trash2 className="h-4 w-4" />
-				</button>
+				{!(activeMailbox.kind === "drafts" && isSendingDraft(mailboxThreadItem.draftSend)) && (
+					<button
+						onClick={() => {
+							// The row leaves the list on click, the server follows (see lib/pending-moves).
+							const id = String(mailboxThreadItem.threadId);
+							moveWithUndo({
+								mailboxId: activeMailbox.id,
+								threadIds: [id],
+								message: activeMailbox.kind === "trash" ? "Deleted forever" : "Moved to Trash",
+								run: () => moveToTrash(id, activeMailbox.id, !!mailboxSync, true),
+								failure: "Delete failed",
+							});
+						}}
+						className="rounded p-1 hover:bg-muted"
+						title="Delete"
+					>
+						<Trash2 className="h-4 w-4" />
+					</button>
+				)}
 			</div>
 		</li>
 	);

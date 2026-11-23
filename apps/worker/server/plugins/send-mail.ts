@@ -11,8 +11,12 @@ import {
 	composeMessage,
 	formatQuoteDate,
 	generateSnippet,
+	imapDraftIdOfJob,
 	quoteOverrideOf,
 	quoteScopeOf,
+	rehydrateActionOf,
+	scheduledJobOf,
+	scheduledPendingSend,
 	setDraftSendState,
 	upsertMailboxThreadItem,
 	type QuoteOverride,
@@ -42,7 +46,7 @@ import {
 import { createMailer } from "@providers";
 import { mailerFailureOf } from "../../lib/send-outcome";
 import { toArray } from "drizzle-orm/mysql-core";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 import addressparser from "addressparser";
 import { PgTransaction } from "drizzle-orm/pg-core";
 import { getRedis } from "../../lib/get-redis";
@@ -97,15 +101,15 @@ export default defineNitroPlugin(async (nitroApp) => {
 	});
 	worker.on("failed", (job, err) => {
 		console.error(`[send-mail] ${job?.id} failed: ${err?.message}`);
-		// Final failure of a send coming from a draft: the "sending" mark is removed and the
-		// error kept on the draft ("Not sent" badge).
-		const draftMessageId = (job?.data as any)?.draftMessageId;
+		// Final failure of a send coming from a draft (delayed or scheduled): the "sending" mark is
+		// removed and the error kept on the draft ("Not sent" badge).
+		const draftMessageId = imapDraftIdOfJob(job?.name, job?.data as any);
 		if (
-			job?.name === "send-and-reconcile" &&
+			job &&
 			draftMessageId &&
 			job.attemptsMade >= (job.opts?.attempts ?? 1)
 		) {
-			setDraftSendState(String(draftMessageId), {
+			setDraftSendState(draftMessageId, {
 				pendingSend: null,
 				sendError: { message: err?.message ?? "Sending failed", at: new Date().toISOString() },
 			}).catch((e: any) =>
@@ -113,6 +117,99 @@ export default defineNitroPlugin(async (nitroApp) => {
 			);
 		}
 	});
+
+	// Scheduled sends survive a worker restart or a Redis loss: each "scheduled" row gets its job
+	// back (jobId = row, adding it again has no effect), with the sending identity in the data
+	// (access check of "Cancel"). A row left in "sending" for more than 10 minutes is only
+	// reported.
+	const rehydrateScheduled = async () => {
+		const { sendMailQueue } = await getRedis();
+		const rows = await db
+			.select()
+			.from(draftMessages)
+			.where(eq(draftMessages.status, "scheduled"));
+		let added = 0;
+		// The send mark of the draft is only set if the row is still "scheduled" (a cancel between
+		// the read and here must not leave a mark).
+		const stillScheduled = async (rowId: string) => {
+			const [r] = await db
+				.select({ status: draftMessages.status })
+				.from(draftMessages)
+				.where(eq(draftMessages.id, rowId))
+				.limit(1);
+			return r?.status === "scheduled";
+		};
+		for (const row of rows) {
+			try {
+				const job = scheduledJobOf(row);
+				const existing = await sendMailQueue.getJob(row.id);
+				const action = rehydrateActionOf(existing ? await existing.getState() : null);
+				if (action === "skip") {
+					// Job completed while the row stayed "scheduled": never replayed (double send).
+					console.warn(`[send-mail] scheduled ${row.id}: job completed but row still scheduled, left as is`);
+					continue;
+				}
+				if (action === "fail") {
+					// Job failed without the row following: the row becomes "failed" (no more recovery
+					// nor mark), the error stays on the draft ("Not sent" badge).
+					const message = existing?.failedReason || "Scheduled send failed";
+					const failed = await db
+						.update(draftMessages)
+						.set({
+							status: "failed",
+							payload: { ...row.payload, __error: message },
+							updatedAt: new Date(),
+						})
+						.where(and(eq(draftMessages.id, row.id), eq(draftMessages.status, "scheduled")))
+						.returning({ id: draftMessages.id });
+					if (failed.length && job.data.imapDraftId) {
+						await setDraftSendState(job.data.imapDraftId, {
+							pendingSend: null,
+							sendError: { message, at: new Date().toISOString() },
+						});
+					}
+					continue;
+				}
+				if (action === "keep") {
+					if (!(existing!.data as any)?.identityId) await existing!.updateData(job.data);
+				} else {
+					await sendMailQueue.add(job.name, job.data, job.opts);
+					added++;
+				}
+				// Send mark of the draft (missing on sends scheduled before this change), set once the
+				// job is actually added.
+				if (job.data.imapDraftId) {
+					if (await stillScheduled(row.id)) {
+						await setDraftSendState(job.data.imapDraftId, {
+							pendingSend: scheduledPendingSend(row),
+						});
+					} else if (action === "add") {
+						await (await sendMailQueue.getJob(row.id))?.remove().catch(() => {});
+					}
+				}
+			} catch (e: any) {
+				console.error(`[send-mail] scheduled ${row.id} not restored:`, e?.message ?? e);
+			}
+		}
+		const stuck = await db
+			.select({ id: draftMessages.id })
+			.from(draftMessages)
+			.where(
+				and(
+					eq(draftMessages.status, "sending"),
+					lt(draftMessages.updatedAt, new Date(Date.now() - 10 * 60_000)),
+				),
+			);
+		if (stuck.length) {
+			console.warn(
+				`[send-mail] ${stuck.length} draft_messages row(s) in "sending" for over 10 min: ${stuck.map((r) => r.id).join(", ")}`,
+			);
+		}
+		console.log(`[send-mail] scheduled sends: ${rows.length} pending, ${added} job(s) restored`);
+	};
+	rehydrateScheduled().catch((e: any) =>
+		console.error("[send-mail] scheduled restore failed:", e?.message ?? e),
+	);
 
 	const getOriginalMessage = async (decodedForm: Record<any, any>) => {
 		const [message] = await db
@@ -191,7 +288,11 @@ export default defineNitroPlugin(async (nitroApp) => {
 		if (claimed.length === 0) return;
 
 		try {
-			await send(draft.payload);
+			// A refusal of the provider returned as a value (not thrown) counts as a failure.
+			const result = await send(draft.payload);
+			if (result && (result as any).success === false) {
+				throw new Error(String((result as any).error ?? "Sending failed"));
+			}
 
 			await db
 				.update(draftMessages)
@@ -229,6 +330,7 @@ export default defineNitroPlugin(async (nitroApp) => {
 						ownerId: ident.ownerId,
 						identityId: ident.id,
 						draftMessageId: String(decodedForm.draftMessageId),
+						afterSend: true,
 					});
 				}
 			} catch (err: any) {

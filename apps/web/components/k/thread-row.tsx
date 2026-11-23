@@ -324,19 +324,22 @@ export default function KThreadRow({
 						</KIconButton>
 					)}
 					<SnoozeMail mailboxThreadId={item.threadId} activeMailboxId={activeMailbox.id} />
-					{activeMailbox.kind !== "archive" && (
+					{/* A draft whose send is pending is neither archived nor deleted: cancel the send first. */}
+					{!sending && activeMailbox.kind !== "archive" && (
 						<KIconButton size="sm" label="Archive" onClick={() => mailActions.archive(item.threadId, activeMailbox.id, smtp, isUnread ? 1 : 0)}>
 							<Archive />
 						</KIconButton>
 					)}
-					<KIconButton
-						size="sm"
-						tone="danger"
-						label={isTrash ? "Delete permanently" : "Delete"}
-						onClick={() => mailActions.trash(item.threadId, activeMailbox.id, smtp, isTrash, isUnread ? 1 : 0)}
-					>
-						<Trash2 />
-					</KIconButton>
+					{!sending && (
+						<KIconButton
+							size="sm"
+							tone="danger"
+							label={isTrash ? "Delete permanently" : "Delete"}
+							onClick={() => mailActions.trash(item.threadId, activeMailbox.id, smtp, isTrash, isUnread ? 1 : 0)}
+						>
+							<Trash2 />
+						</KIconButton>
+					)}
 				</div>
 			)}
 		</li>

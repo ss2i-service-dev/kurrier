@@ -6,8 +6,10 @@ import { Clock, Paperclip, Trash } from "lucide-react";
 import dayjs from "dayjs";
 import { ReusableFormButton } from "@/components/common/reusable-form-button";
 import { deleteScheduledDraft } from "@/lib/actions/mailbox";
-import { useModernUi } from "@/components/k/ui-context";
+import { useHour24, useModernUi } from "@/components/k/ui-context";
+import { formatScheduledWhen } from "@common/schedule-send";
 import { KEmptyState } from "@/components/k/section";
+import { useLocalTz } from "@/components/mailbox/default/draft-send-status";
 
 type DraftMessageRow = {
 	id: string;
@@ -31,23 +33,14 @@ type ScheduledListProps = {
 	onCancel?: (draft: DraftMessageRow) => void;
 };
 
-function formatDateLabel(input?: string | number | Date) {
-	if (!input) return "";
-
+// tz = time zone of the browser (useLocalTz); null before mount: no time, so the server render
+// (server time zone) and the first client render stay identical.
+function formatDateLabel(input: string | number | Date | undefined, tz: string | null, hour24: boolean) {
+	if (!input || tz === null) return "";
 	const d = dayjs(input);
 	if (!d.isValid()) return "";
-
-	const now = dayjs();
-
-	if (d.isSame(now, "day")) {
-		return d.format("h:mm A");
-	}
-
-	if (d.isSame(now, "year")) {
-		return d.format("MMM D, h:mm A");
-	}
-
-	return d.format("MMM D, YYYY, h:mm A");
+	// Weekday and time (same formatting as the editor and the banner).
+	return formatScheduledWhen(d.toDate(), tz, new Date(), hour24);
 }
 
 function getToLabel(payload: Record<string, any>) {
@@ -85,8 +78,12 @@ function hasAttachments(payload: Record<string, any>) {
 }
 
 function ScheduledListItem({ draft }: { draft: DraftMessageRow }) {
+	const tz = useLocalTz();
+	const hour24 = useHour24();
 	const scheduledLabel = formatDateLabel(
 		draft.scheduledAt ?? draft.updatedAt ?? draft.createdAt ?? Date.now(),
+		tz,
+		hour24,
 	);
 	const toLabel = getToLabel(draft.payload);
 	const subject = getSubject(draft.payload);
@@ -138,12 +135,11 @@ function ScheduledListItem({ draft }: { draft: DraftMessageRow }) {
 
 // Row of the modern interface (same data, same delete action).
 function KScheduledItem({ draft }: { draft: DraftMessageRow }) {
+	const tz = useLocalTz();
+	const hour24 = useHour24();
 	const when = draft.scheduledAt ?? draft.updatedAt ?? draft.createdAt;
 	const d = when ? new Date(when) : null;
-	const whenLabel =
-		d && !Number.isNaN(d.getTime())
-			? d.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
-			: "";
+	const whenLabel = d && !Number.isNaN(d.getTime()) && tz !== null ? formatScheduledWhen(d, tz, new Date(), hour24) : "";
 	const toLabel = getToLabel(draft.payload);
 	const subject = getSubject(draft.payload);
 	const preview = getPreview(draft.payload);

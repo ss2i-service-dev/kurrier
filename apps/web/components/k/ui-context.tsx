@@ -10,12 +10,23 @@ import KShortcutsConfig from "@/components/k/shortcuts-config";
 import { KOpenPrefsConfig } from "@/components/k/reader-tabs-bar";
 
 const KUiContext = createContext(false);
+// Times in 24-hour format (Settings > General, pref24HourTime), read by the root layout.
+const KHour24Context = createContext(false);
 
-export function KUiProvider({ modern, children }: { modern: boolean; children: React.ReactNode }) {
+export function KUiProvider({
+	modern,
+	hour24 = false,
+	children,
+}: {
+	modern: boolean;
+	hour24?: boolean;
+	children: React.ReactNode;
+}) {
 	// Signed-in pages (workspace) only.
 	const inApp = (usePathname() ?? "").includes("/dashboard");
 	return (
 		<KUiContext.Provider value={modern}>
+			<KHour24Context.Provider value={hour24}>
 			{/* New messages: checked every 20 s and the list refreshed (both
 			    interfaces); sound and tab badge in the modern interface. */}
 			{inApp && <KNewMailNotifier modern={modern} />}
@@ -24,6 +35,7 @@ export function KUiProvider({ modern, children }: { modern: boolean; children: R
 			{/* Thread opening: internal tabs (Settings > Opening mail). */}
 			{inApp && modern && <KOpenPrefsConfig />}
 			{children}
+			</KHour24Context.Provider>
 		</KUiContext.Provider>
 	);
 }
@@ -31,4 +43,9 @@ export function KUiProvider({ modern, children }: { modern: boolean; children: R
 /** true in the modern interface, false in the classic one. */
 export function useModernUi() {
 	return useContext(KUiContext);
+}
+
+/** true when times are shown in 24-hour format (pref24HourTime), false for the locale default. */
+export function useHour24() {
+	return useContext(KHour24Context);
 }

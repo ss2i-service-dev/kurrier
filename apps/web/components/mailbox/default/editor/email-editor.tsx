@@ -36,6 +36,8 @@ import {
 	touchAlive,
 	writeBackup,
 } from "@/lib/draft-backup";
+import { formatScheduledWhen } from "@common/schedule-send";
+import { useHour24 } from "@/components/k/ui-context";
 
 export type EmailEditorHandle = {
 	focus: () => void;
@@ -139,6 +141,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 		const textEditorRef = useRef<TextEditorHandle>(null);
 		const formRef = useRef<HTMLFormElement>(null);
 		const router = useRouter();
+		const hour24 = useHour24();
 
 		useImperativeHandle(
 			ref,
@@ -552,6 +555,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				const pending = (formState.data ?? {}) as {
 					pendingSendId?: string;
 					undoMs?: number;
+					scheduledAt?: string;
 				};
 				if (pending.pendingSendId) {
 					startUndoWindow(pending.pendingSendId, pending.undoMs ?? 30_000);
@@ -559,6 +563,14 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				}
 				dropBackup();
 				handleClose();
+				if (pending.scheduledAt) {
+					// Scheduled send: the draft stays in Drafts (pending send section).
+					toast.success(`Scheduled for ${formatScheduledWhen(pending.scheduledAt, undefined, new Date(), hour24)}`, {
+						description: "You can cancel it from Drafts or Scheduled.",
+					});
+					router.refresh();
+					return;
+				}
 				toast.success("Success", {
 					description: formState.message,
 				});

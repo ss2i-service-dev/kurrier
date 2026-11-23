@@ -2,60 +2,92 @@
 import type { DraftSendState } from "@common";
 import type { DraftTimes } from "@common/draft-send";
 import { useRouter } from "next/navigation";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { IconSend } from "@tabler/icons-react";
+import { isScheduledMark } from "@common/draft-send";
 import { cancelPendingSend, sendPendingNow } from "@/lib/actions/mailbox";
-import { useModernUi } from "@/components/k/ui-context";
+import { useHour24, useModernUi } from "@/components/k/ui-context";
+import { SEND_REFRESH_MS, sendLabel, sendPhaseOf, sendTrackingOf } from "@/lib/send-phase";
 
-// Send state of a draft (pendingSend / sendError marks of meta.draft). A send whose time
-// passed more than 3 minutes ago while the draft is still there has an unknown state: we
-// stop refreshing indefinitely.
-export const SEND_UNKNOWN_AFTER_MS = 3 * 60_000;
-export const SEND_REFRESH_MS = 3_000;
+// Send state of a draft (pendingSend / sendError marks of meta.draft). Phases and labels live
+// in lib/send-phase.ts (pure, tested): "scheduled" beyond 2 minutes of waiting, a countdown
+// below, "unknown" once the send time is more than 3 minutes past.
+export {
+	SCHEDULED_AFTER_MS,
+	SEND_REFRESH_MS,
+	SEND_UNKNOWN_AFTER_MS,
+	sendLabel,
+	sendPhaseOf,
+	sendTrackingOf,
+	type SendPhase,
+} from "@/lib/send-phase";
 
-export type SendPhase = "countdown" | "sending" | "unknown";
-
-export function sendPhaseOf(sendAt: string, now: number): SendPhase {
-	const at = new Date(sendAt).getTime();
-	if (Number.isNaN(at) || now - at > SEND_UNKNOWN_AFTER_MS) return "unknown";
-	return at > now ? "countdown" : "sending";
+// Time zone of the browser, read after mount (null before: the server render and the first
+// client render are identical).
+export function useLocalTz() {
+	const [tz, setTz] = useState<string | null>(null);
+	useEffect(() => setTz(Intl.DateTimeFormat().resolvedOptions().timeZone), []);
+	return tz;
 }
 
-// Local clock (1 s) while the send is in progress.
-export function useNow(active: boolean) {
+// Clock of a tracked send: a one-second tick during the countdown and the send; nothing while
+// it is scheduled (a single wake-up when the countdown starts) nor when the state is unknown.
+export function useSendClock(sendAt: string | null | undefined) {
 	const [now, setNow] = useState(() => Date.now());
+	const [wakes, setWakes] = useState(0);
+	const phase = sendAt ? sendPhaseOf(sendAt, now) : "unknown";
 	useEffect(() => {
-		if (!active) return;
+		if (!sendAt || phase === "unknown") return;
 		setNow(Date.now());
+		if (phase === "scheduled") {
+			// setTimeout is capped at ~24 days: beyond that, wake up and re-arm.
+			const wait = Math.min(
+				Math.max(0, (sendTrackingOf([sendAt], Date.now()).wakeAt ?? Date.now()) - Date.now()) + 50,
+				2 ** 31 - 1,
+			);
+			const t = setTimeout(() => {
+				setNow(Date.now());
+				setWakes((n) => n + 1);
+			}, wait);
+			return () => clearTimeout(t);
+		}
 		const t = setInterval(() => setNow(Date.now()), 1000);
 		return () => clearInterval(t);
-	}, [active]);
+	}, [sendAt, phase, wakes]);
 	return now;
 }
 
-// Refreshes the page (router.refresh) every 3 s while a send is tracked.
-export function useSendRefresh(active: boolean) {
+// Refreshes the page (router.refresh) every 3 s while a countdown or a send is tracked
+// (`active`), and once when a scheduled send enters its countdown (`wakeAt`). A scheduled
+// send triggers no periodic refresh.
+export function useSendRefresh(active: boolean, wakeAt: number | null = null) {
 	const router = useRouter();
+	const [wakes, setWakes] = useState(0);
+	// Wake-up already handled: a re-arm (wakes) does not refresh twice for the same moment.
+	const firedFor = useRef<number | null>(null);
 	useEffect(() => {
 		if (!active) return;
 		const t = setInterval(() => router.refresh(), SEND_REFRESH_MS);
 		return () => clearInterval(t);
 	}, [active, router]);
+	useEffect(() => {
+		if (wakeAt === null || firedFor.current === wakeAt) return;
+		const wait = Math.min(Math.max(0, wakeAt - Date.now()) + 50, 2 ** 31 - 1);
+		const t = setTimeout(() => {
+			if (Date.now() >= wakeAt) {
+				firedFor.current = wakeAt;
+				router.refresh();
+			}
+			setWakes((n) => n + 1);
+		}, wait);
+		return () => clearTimeout(t);
+	}, [wakeAt, router, wakes]);
 }
 
-// True if any of the given states is a send that is still tracked (not an unknown state).
-export function anySendTracked(states: (DraftSendState | null | undefined)[], now = Date.now()) {
-	return states.some(
-		(s) => s?.pendingSend && sendPhaseOf(s.pendingSend.sendAt, now) !== "unknown",
-	);
-}
-
-export function sendLabel(sendAt: string, now: number) {
-	const phase = sendPhaseOf(sendAt, now);
-	if (phase === "unknown") return "Sending status unknown";
-	if (phase === "sending") return "Sending…";
-	const s = Math.max(1, Math.ceil((new Date(sendAt).getTime() - now) / 1000));
-	return `Sending in ${s}s`;
+// Tracking of a list of drafts: fast refresh and wake-up of scheduled sends.
+export function useSendListRefresh(states: (DraftSendState | null | undefined)[]) {
+	const { fast, wakeAt } = sendTrackingOf(states.map((s) => s?.pendingSend?.sendAt), Date.now());
+	useSendRefresh(fast, wakeAt);
 }
 
 // "Undo" / "Send now" buttons; onUndone runs after an undo, then the page is refreshed.
@@ -63,10 +95,13 @@ export function SendActions({
 	jobId,
 	onUndone,
 	size = "sm",
+	cancelOnly = false,
 }: {
 	jobId: string;
 	onUndone?: () => void;
 	size?: "xs" | "sm";
+	// Unknown state of a scheduled send: only cancelling is offered.
+	cancelOnly?: boolean;
 }) {
 	const modern = useModernUi();
 	const router = useRouter();
@@ -92,19 +127,21 @@ export function SendActions({
 			>
 				Undo
 			</button>
-			<button
-				type="button"
-				disabled={busy}
-				className={cls}
-				onClick={async () => {
-					setBusy(true);
-					await sendPendingNow(jobId);
-					setBusy(false);
-					router.refresh();
-				}}
-			>
-				Send now
-			</button>
+			{!cancelOnly && (
+				<button
+					type="button"
+					disabled={busy}
+					className={cls}
+					onClick={async () => {
+						setBusy(true);
+						await sendPendingNow(jobId);
+						setBusy(false);
+						router.refresh();
+					}}
+				>
+					Send now
+				</button>
+			)}
 		</span>
 	);
 }
@@ -117,17 +154,21 @@ export const isSendingDraft = (state: DraftSendState | null | undefined) =>
 // Badge for a row of the Drafts list.
 export function DraftSendBadge({ state }: { state: DraftSendState | null | undefined }) {
 	const modern = useModernUi();
+	const hour24 = useHour24();
 	const pending = state?.pendingSend ?? null;
-	const now = useNow(!!pending);
+	const now = useSendClock(pending?.sendAt);
+	const tz = useLocalTz();
 	if (pending) {
 		const phase = sendPhaseOf(pending.sendAt, now);
 		return (
 			<span className="inline-flex shrink-0 items-center gap-1.5">
 				<span className={`inline-flex items-center gap-1 whitespace-nowrap px-1.5 py-0.5 text-xs font-semibold ${modern ? "rounded-k-sm bg-k-accent-soft text-k-accent-soft-ink" : "rounded bg-sky-600 text-white"}`}>
 					<IconSend size={12} aria-hidden />
-					{sendLabel(pending.sendAt, now)}
+					{sendLabel(pending.sendAt, now, tz, hour24)}
 				</span>
-				{phase !== "unknown" && <SendActions jobId={pending.jobId} size="xs" />}
+				{(phase !== "unknown" || isScheduledMark(pending)) && (
+					<SendActions jobId={pending.jobId} size="xs" cancelOnly={phase === "unknown"} />
+				)}
 			</span>
 		);
 	}
@@ -156,32 +197,43 @@ export function DraftSendingBanner({
 	onOpenEditor: () => void;
 }) {
 	const modern = useModernUi();
-	const now = useNow(true);
+	const hour24 = useHour24();
+	const now = useSendClock(pendingSend.sendAt);
+	const tz = useLocalTz();
 	const phase = sendPhaseOf(pendingSend.sendAt, now);
-	useSendRefresh(phase !== "unknown");
+	const tracking = sendTrackingOf([pendingSend.sendAt], now);
+	useSendRefresh(tracking.fast, tracking.wakeAt);
 	return (
 		<div className={`mt-3 border p-4 text-sm ${modern ? "rounded-k border-k-line-strong bg-k-warn-soft text-k-ink" : "rounded-lg border-amber-300 bg-amber-50 text-amber-900"}`}>
 			<div className="font-medium">
 				{phase === "unknown"
 					? "Sending status unknown"
-					: "This message is being sent"}
+					: phase === "scheduled"
+						? "This message is scheduled"
+						: "This message is being sent"}
 			</div>
 			<div className="mt-1 text-xs">
 				{phase === "unknown"
 					? "No result was received for this send. Check the Sent folder before sending again."
-					: sendLabel(pendingSend.sendAt, now)}
+					: sendLabel(pendingSend.sendAt, now, tz, hour24)}
 			</div>
 			<div className="mt-3">
 				{phase !== "unknown" ? (
 					<SendActions jobId={pendingSend.jobId} onUndone={onUndone} />
 				) : (
-					<button
-						type="button"
-						className={modern ? "k-focus rounded-k-sm border border-k-line-strong bg-k-surface px-3 py-1 text-[13px] text-k-ink-2 transition-colors hover:bg-k-hover hover:text-k-ink" : "rounded border px-3 py-1 text-sm hover:bg-amber-100"}
-						onClick={onOpenEditor}
-					>
-						Open editor
-					</button>
+					<span className="inline-flex flex-wrap items-center gap-2">
+						{/* Scheduled send in an unknown state: the row may still be "scheduled". */}
+						{isScheduledMark(pendingSend) && (
+							<SendActions jobId={pendingSend.jobId} onUndone={onUndone} cancelOnly />
+						)}
+						<button
+							type="button"
+							className={modern ? "k-focus rounded-k-sm border border-k-line-strong bg-k-surface px-3 py-1 text-[13px] text-k-ink-2 transition-colors hover:bg-k-hover hover:text-k-ink" : "rounded border px-3 py-1 text-sm hover:bg-amber-100"}
+							onClick={onOpenEditor}
+						>
+							Open editor
+						</button>
+					</span>
 				)}
 			</div>
 		</div>

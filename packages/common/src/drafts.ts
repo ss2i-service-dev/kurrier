@@ -14,7 +14,14 @@ import { addressObjToList } from "./mail-client";
 
 export { addressObjToList };
 export * from "./draft-send";
-import { draftTimesOf, mergeDraftMeta, type DraftPendingSend, type DraftSendError } from "./draft-send";
+import {
+	DRAFT_PENDING_ERROR,
+	draftTimesOf,
+	mergeDraftMeta,
+	pendingSendAlive,
+	type DraftPendingSend,
+	type DraftSendError,
+} from "./draft-send";
 
 /**
  * Drafts, database layer (shared by the web app and the worker).
@@ -257,6 +264,11 @@ export async function upsertDraftRow(input: DraftInput) {
 			)[0] as DraftRow | undefined) ?? null)
 		: null;
 	if (input.draftMessageId && !existing) throw new Error("Draft not found");
+	// A pending send carries a copy of the content; changing the draft behind its back would be
+	// lost. Cancel the send first (which clears the mark).
+	if (existing && pendingSendAlive(draftMetaOf(existing)?.pendingSend)) {
+		throw new Error(DRAFT_PENDING_ERROR);
+	}
 
 	// The sender (From) changed identity: the draft changes Drafts folder. Start again from
 	// a new row and the caller deletes the old IMAP version (`replaced`).
@@ -518,9 +530,15 @@ export function draftImapRef(
 export async function deleteDraftRow(opts: {
 	ownerId: string;
 	draftMessageId: string;
+	// Cleanup after a successful send (the draft leaves with the message): the "pending send"
+	// guard does not apply.
+	afterSend?: boolean;
 }): Promise<DraftImapRef | null> {
 	const row = await getDraftRow(opts);
 	if (!row) return null;
+	if (!opts.afterSend && pendingSendAlive(draftMetaOf(row)?.pendingSend)) {
+		throw new Error(DRAFT_PENDING_ERROR);
+	}
 	const [box] = await db
 		.select()
 		.from(mailboxes)

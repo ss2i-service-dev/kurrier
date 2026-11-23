@@ -13,3 +13,4 @@ export * from "./message-move";
 export * from "./move-uids";
 export * from "./real-attachments";
 export * from "./address-field";
+export * from "./schedule-send";

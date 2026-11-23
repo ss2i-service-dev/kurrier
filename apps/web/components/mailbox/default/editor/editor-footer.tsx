@@ -63,6 +63,8 @@ export default function EditorFooter({
 		? draftMeta.attachments
 		: [];
 
+	// Scheduled moment ("Fri, Nov 13, 8:00 AM"), shown on the Send button.
+	const [scheduledLabel, setScheduledLabel] = useState<string | null>(null);
 	const [includeSignature, setIncludeSignature] = useState(
 		draftMeta ? draftMeta.includeSignature !== false : true,
 	);
@@ -438,9 +440,9 @@ export default function EditorFooter({
 						title={modern ? "Send (Ctrl+Enter)" : undefined}
 						className={modern ? "!rounded-l-[10px] !rounded-r-[3px] !px-4" : "!rounded-l-4xl !rounded-r-xs"}
 					>
-						{"Send"}
+						{scheduledLabel ? `Scheduled · ${scheduledLabel}` : "Send"}
 					</Button>
-					<ScheduleSend />
+					<ScheduleSend onLabelChange={setScheduledLabel} />
 				</div>
 
 				{modern ? (

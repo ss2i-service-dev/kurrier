@@ -60,3 +60,27 @@ export function draftTimesOf(row: {
 	const savedAt = meta?.savedAt ?? iso(row.updatedAt) ?? iso(row.date) ?? createdAt;
 	return { createdAt, savedAt };
 }
+
+// "Pending send" guard. A draft whose send is pending (undo delay or scheduled send) is not
+// silently changed or deleted: the send carries a copy of the content, a change would be lost
+// without the user knowing.
+export const DRAFT_PENDING_ERROR = "This draft is scheduled; cancel the scheduled send first";
+// Undo countdown with no outcome for 3 minutes: unknown state, the mark no longer locks.
+export const PENDING_STALE_MS = 3 * 60_000;
+
+// A scheduled send has the draft_messages row as jobId; an undo countdown, "undo-send-<uuid>".
+export const isScheduledMark = (pending: DraftPendingSend | null | undefined) =>
+	!!pending?.jobId && !pending.jobId.startsWith("undo-send-");
+
+export function pendingSendAlive(
+	pending: DraftPendingSend | null | undefined,
+	now: number = Date.now(),
+): boolean {
+	if (!pending) return false;
+	const at = Date.parse(pending.sendAt);
+	if (Number.isNaN(at)) return false;
+	// A scheduled send stays alive as long as its mark exists (the time may be past if the
+	// worker is stopped): only the send, a final failure and a cancel clear it.
+	if (isScheduledMark(pending)) return true;
+	return at > now - PENDING_STALE_MS;
+}

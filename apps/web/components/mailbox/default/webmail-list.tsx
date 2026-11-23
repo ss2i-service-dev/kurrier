@@ -18,7 +18,7 @@ import WebmailListItemMobile from "@/components/mailbox/default/webmail-list-ite
 import { usePathname } from "next/navigation";
 import {use} from "react";
 import { useHiddenThreads } from "@/lib/pending-moves";
-import { anySendTracked, isSendingDraft, useSendRefresh } from "@/components/mailbox/default/draft-send-status";
+import { isSendingDraft, useSendListRefresh } from "@/components/mailbox/default/draft-send-status";
 import { IconSend } from "@tabler/icons-react";
 
 type WebListProps = {
@@ -89,8 +89,8 @@ export default function WebmailList({
 									/>
 								);
 
-	// While a draft of the list is being sent, the list keeps refreshing.
-	useSendRefresh(anySendTracked(mailboxThreads.map((t) => t.draftSend)));
+	// While a draft of the list is being sent or scheduled, the list keeps refreshing.
+	useSendListRefresh(mailboxThreads.map((t) => t.draftSend));
 
 	return (
 		<div className={onThread ? "hidden" : ""} data-k-mail-list="">

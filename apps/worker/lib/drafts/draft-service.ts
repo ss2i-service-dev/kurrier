@@ -19,9 +19,12 @@
  *     otherwise through the `draft:delete` job). Permanent deletion, no trip through the
  *     trash: that is what mail clients (Gmail, Thunderbird, Roundcube) do for a draft.
  *   sendDraft({ ownerId, identityId, draftMessageId, delayMs?, senderUserId? })
- *     -> { pendingSendId, undoMs }
+ *     -> { pendingSendId, undoMs, scheduledAt? }
  *     Same path as the composer (`send-and-reconcile` job, delayed and cancellable); the
- *     draft is deleted by send-mail.ts once the send succeeds.
+ *     draft is deleted by send-mail.ts once the send succeeds. With `sendAt` (scheduled
+ *     send): a "scheduled" draft_messages row plus a delayed `send-scheduled-draft` job, like
+ *     the composer's "Schedule send" menu; the draft carries the pendingSend mark until then
+ *     (cancellable from the web interface).
  *
  * Jobs (smtp-worker queue, one at a time, so never two concurrent APPENDs):
  *   draft:sync   { draftMessageId }   -> syncDraftToImap
@@ -48,13 +51,17 @@ import {
 	draftDomain,
 	draftMetaOf,
 	draftSendPayload,
+	pendingSendAlive,
+	scheduledJobOf,
+	scheduledPendingSend,
+	validateScheduledAt,
 	draftSyncJobOptions,
 	getDraftRow,
 	listDraftRows,
 	setDraftSendState,
 	upsertDraftRow,
 } from "@common";
-import { db, identities, mailboxes, messages } from "@db";
+import { db, draftMessages, identities, mailboxes, messages } from "@db";
 import { getServerEnv } from "@schema";
 import { and, eq, sql } from "drizzle-orm";
 import type { ImapFlow } from "imapflow";
@@ -170,7 +177,13 @@ export async function getDraft(opts: {
 }
 
 export async function deleteDraft(
-	opts: { ownerId: string; identityId: string; draftMessageId: string },
+	opts: {
+		ownerId: string;
+		identityId: string;
+		draftMessageId: string;
+		// Cleanup after a successful send: the "pending send" guard does not apply.
+		afterSend?: boolean;
+	},
 	imapInstances?: Map<string, ImapFlow>,
 ) {
 	const ref = await deleteDraftRow(opts);
@@ -185,12 +198,77 @@ export async function sendDraft(opts: {
 	identityId: string;
 	draftMessageId: string;
 	delayMs?: number;
+	// Scheduled send: send time (checked by the caller, checked again here).
+	sendAt?: Date;
 	senderUserId?: string | null;
 }) {
 	const payload = await draftSendPayload(opts);
 	if (payload.identityId !== opts.identityId)
 		throw new Error("Draft not found");
+	// A send already pending (undo delay or scheduled) is not doubled; a mark stale for more than
+	// 3 minutes (unknown state in the interface) no longer blocks.
+	const row = await getDraftRow(opts);
+	if (pendingSendAlive(row ? draftMetaOf(row)?.pendingSend : null)) {
+		throw new Error("This draft already has a send in progress; cancel it first.");
+	}
 	const { sendMailQueue } = await getRedis();
+	if (opts.sendAt) {
+		const check = validateScheduledAt(opts.sendAt);
+		if (!check.ok) {
+			throw new Error(
+				check.reason === "past" ? "send_at is in the past." : "send_at is not a valid date.",
+			);
+		}
+		const [identity] = await db
+			.select({ workspaceId: identities.workspaceId })
+			.from(identities)
+			.where(eq(identities.id, payload.identityId));
+		if (!identity) throw new Error("Identity not found");
+		const [created] = await db
+			.insert(draftMessages)
+			.values({
+				ownerId: opts.ownerId,
+				workspaceId: identity.workspaceId,
+				identityId: payload.identityId,
+				mailboxId: payload.mailboxId,
+				status: "scheduled",
+				scheduledAt: check.at,
+				payload,
+			})
+			.returning({ id: draftMessages.id, scheduledAt: draftMessages.scheduledAt });
+		const job = scheduledJobOf({
+			id: created.id,
+			identityId: payload.identityId,
+			scheduledAt: created.scheduledAt,
+			payload,
+		});
+		try {
+			await sendMailQueue.add(job.name, job.data, job.opts);
+		} catch (e) {
+			// Without a job, the row would only leave at the next worker start: it is removed.
+			await db.delete(draftMessages).where(eq(draftMessages.id, created.id));
+			throw e;
+		}
+		try {
+			await setDraftSendState(opts.draftMessageId, {
+				pendingSend: scheduledPendingSend(created),
+				sendError: null,
+			});
+		} catch (e) {
+			// Without a mark, the draft would stay editable and the send invisible: the job and the
+			// row are removed rather than leaving a scheduled send without a mark.
+			await (await sendMailQueue.getJob(created.id))?.remove().catch(() => {});
+			await db.delete(draftMessages).where(eq(draftMessages.id, created.id));
+			throw new Error(
+				`Scheduling failed, nothing was scheduled: ${(e as Error)?.message ?? e}`,
+			);
+		}
+		return {
+			pendingSendId: created.id,
+			undoMs: job.opts.delay,
+			scheduledAt: check.at.toISOString(),
+		};
+	}
 	const delay = opts.delayMs ?? UNDO_SEND_MS;
 	const job = await sendMailQueue.add("send-and-reconcile", payload, {
 		jobId: `undo-send-${crypto.randomUUID()}`,
@@ -204,7 +282,7 @@ export async function sendDraft(opts: {
 		},
 		sendError: null,
 	});
-	return { pendingSendId: String(job.id), undoMs: delay };
+	return { pendingSendId: String(job.id), undoMs: delay, scheduledAt: undefined };
 }
 
 // ---------------------------------------------------------------------------

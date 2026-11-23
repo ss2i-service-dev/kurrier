@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { Inter, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import { interfaceMode } from "@/lib/actions/interface-pref";
+import { hour24Enabled } from "@/lib/actions/hour-format";
 import { KUiProvider } from "@/components/k/ui-context";
 import "dayjs/locale/fr";
 import "./globals.css";
@@ -75,6 +76,7 @@ export default async function RootLayout({
 	const publicConfig = getPublicEnv();
 	// Interface chosen by the user (classic by default).
 	const modern = (await interfaceMode()) === "modern";
+	const hour24 = await hour24Enabled();
 	const { theme: mantineTheme, colorScheme } = createMantineTheme({
 		theme,
 		mode,
@@ -104,7 +106,7 @@ export default async function RootLayout({
 							theme={mantineTheme}
 							defaultColorScheme={colorScheme}
 						>
-							<KUiProvider modern={modern}>
+							<KUiProvider modern={modern} hour24={hour24}>
 								<ModalsProvider>{children}</ModalsProvider>
 							</KUiProvider>
 						</MantineProvider>

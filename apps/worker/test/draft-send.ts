@@ -4,8 +4,10 @@
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/draft-send.ts
 import assert from "node:assert/strict";
 import {
+	DRAFT_PENDING_ERROR,
 	draftSendStateOf,
 	mergeDraftMeta,
+	pendingSendAlive,
 	type DraftSendFields,
 } from "../../../packages/common/src/draft-send";
 
@@ -52,6 +54,28 @@ test("first write without previous meta", () => {
 test("draftSendStateOf reads both markers", () => {
 	assert.deepEqual(draftSendStateOf({ pendingSend, sendError }), { pendingSend, sendError });
 	assert.deepEqual(draftSendStateOf(null), { pendingSend: null, sendError: null });
+});
+
+// Guard: a draft with a pending send is neither edited nor deleted behind its back.
+test("pendingSendAlive: running countdown, scheduled, stale", () => {
+	const now = Date.parse("2026-11-12T10:00:00.000Z");
+	const countdown = (offsetMs: number) => ({ jobId: "undo-send-abc", sendAt: new Date(now + offsetMs).toISOString() });
+	assert.equal(pendingSendAlive(null, now), false);
+	assert.equal(pendingSendAlive(undefined, now), false);
+	assert.equal(pendingSendAlive(countdown(30_000), now), true);
+	assert.equal(pendingSendAlive(countdown(-2 * 60_000), now), true);
+	// Countdown with no result for more than 3 minutes: unknown state, no longer blocks.
+	assert.equal(pendingSendAlive(countdown(-4 * 60_000), now), false);
+	// Scheduled send (jobId = draft_messages row): alive as long as the mark exists, even past
+	// its time (worker stopped): only cancelling or sending clears it.
+	const scheduled = (offsetMs: number) => ({ jobId: "5c1e0f6e-1111-4222-8333-444455556666", sendAt: new Date(now + offsetMs).toISOString() });
+	assert.equal(pendingSendAlive(scheduled(24 * 3600_000), now), true);
+	assert.equal(pendingSendAlive(scheduled(-3600_000), now), true);
+	assert.equal(pendingSendAlive({ jobId: "x", sendAt: "not a date" }, now), false);
+});
+
+test("refusal message of the guard", () => {
+	assert.equal(DRAFT_PENDING_ERROR, "This draft is scheduled; cancel the scheduled send first");
 });
 
 if (failures) {

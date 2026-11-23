@@ -56,6 +56,10 @@ async function identityFor(identityPublicId: string) {
 	return identity ?? null;
 }
 
+// The "pending send" guard (packages/common/src/draft-send.ts) throws a message meant for the
+// editor: it is shown as is.
+const draftErrorMessage = (err: any, fallback: string) => err?.message ?? fallback;
+
 export async function saveDraft(
 	payload: DraftFormPayload,
 ): Promise<SaveDraftResult> {
@@ -106,7 +110,7 @@ export async function saveDraft(
 			createdAt: saved.createdAt,
 		};
 	} catch (err: any) {
-		return { error: err?.message ?? "Draft could not be saved." };
+		return { error: draftErrorMessage(err, "Draft could not be saved.") };
 	}
 }
 
@@ -142,10 +146,12 @@ export async function discardDraft(
 	const identity = await identityFor(identityPublicId);
 	if (!identity)
 		return { deleted: false as const, error: "Identity not found." };
-	const ref = await deleteDraftRow({
-		ownerId: identity.ownerId,
-		draftMessageId,
-	});
+	let ref: Awaited<ReturnType<typeof deleteDraftRow>>;
+	try {
+		ref = await deleteDraftRow({ ownerId: identity.ownerId, draftMessageId });
+	} catch (err: any) {
+		return { deleted: false as const, error: draftErrorMessage(err, "Draft could not be deleted.") };
+	}
 	if (!ref) return { deleted: false as const };
 	const { smtpQueue } = await getRedis();
 	await smtpQueue.add(DRAFT_DELETE_JOB, ref, draftDeleteJobOptions());

@@ -45,8 +45,9 @@ import { isSignedIn } from "@/lib/actions/auth";
 import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
-import { extractListUnsubscribe, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, type DraftSendState, type DraftTimes } from "@common";
+import { extractListUnsubscribe, imapDraftIdOfJob, pendingSendAlive, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
+import { saveDraft } from "@/lib/actions/drafts";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
 import dayjs from "dayjs";
 import {fetchWorkspace} from "@/lib/actions/workspace";
@@ -448,8 +449,17 @@ export async function sendMail(
 	}
 	if (decodedForm.draftMessageId) {
 		const draftId = await ownedDraftId(String(decodedForm.draftMessageId));
-		if (draftId) decodedForm.draftMessageId = draftId;
-		else delete decodedForm.draftMessageId;
+		if (draftId) {
+			decodedForm.draftMessageId = draftId;
+			// A draft whose send is already pending (undo delay or scheduled) is neither sent a
+			// second time nor scheduled again: the send is canceled first.
+			if (pendingSendAlive((await draftSendStateOfMessage(draftId)).pendingSend)) {
+				return {
+					success: false,
+					error: "This draft already has a pending send. Cancel it first.",
+				};
+			}
+		} else delete decodedForm.draftMessageId;
 	}
 
 	if (toArray(decodedForm.to as any).length === 0) {
@@ -473,27 +483,25 @@ export async function sendMail(
 		? String(decodedForm.scheduledAt)
 		: "";
 	if (scheduledAtRaw) {
-		const d = dayjs(scheduledAtRaw);
-		if (!d.isValid()) {
-			return { success: false, error: "Invalid scheduled time." };
+		// A time more than one minute in the past is refused (the mail would leave right away,
+		// which the user did not ask for).
+		const check = validateScheduledAt(scheduledAtRaw);
+		if (!check.ok) {
+			return {
+				success: false,
+				error:
+					check.reason === "past"
+						? "The scheduled send time has already passed. Choose a time in the future."
+						: "Invalid scheduled send time.",
+			};
 		}
 
-		const identityId = await rls(async (tx) => {
-			const [identity] = await tx
-				.select({
-					identityId: mailboxes.identityId,
-				})
-				.from(mailboxes)
-				.where(eq(mailboxes.id, decodedForm.mailboxId));
-			return identity?.identityId;
-		});
-
 		const parsed = DraftMessageInsertSchema.safeParse({
-			identityId,
+			identityId: identity.id,
 			mailboxId: decodedForm.mailboxId,
 			payload: decodedForm,
 			status: "scheduled",
-			scheduledAt: d.toDate(),
+			scheduledAt: check.at,
 		});
 
 		if (!parsed.success) {
@@ -519,18 +527,39 @@ export async function sendMail(
 		}
 
 		const { sendMailQueue } = await getRedis();
-		const delay = Math.max(
-			0,
-			Number(new Date(row.scheduledAt)) - Number(new Date()),
+		const job = scheduledJobOf(
+			{ id: row.id, identityId: identity.id, scheduledAt: row.scheduledAt, payload: decodedForm },
 		);
-
-		await sendMailQueue.add(
-			"send-scheduled-draft",
-			{ draftMessageId: row.id },
-			{ jobId: row.id, delay },
-		);
+		try {
+			await sendMailQueue.add(job.name, job.data, job.opts);
+		} catch (e) {
+			// Without a job, the row would only leave at the next worker start: it is removed.
+			await rls((tx) => tx.delete(draftMessages).where(eq(draftMessages.id, row.id)));
+			console.error("[send] scheduling enqueue failed", e);
+			return { success: false, error: "Failed to schedule your mail." };
+		}
+		// The source draft carries the send mark (pending section of Drafts, the banner replaces
+		// the editor when opened, no change silently lost).
+		if (!(await markDraftScheduled(job.data.imapDraftId, scheduledPendingSend(row)))) {
+			// No scheduled send without a mark: the draft would stay editable and the send
+			// invisible. The job and the row are removed.
+			try {
+				await (await sendMailQueue.getJob(row.id))?.remove();
+			} catch {
+				// job already taken: removing the row below keeps it from leaving
+			}
+			await rls((tx) => tx.delete(draftMessages).where(eq(draftMessages.id, row.id)));
+			return { success: false, error: "Failed to schedule your mail." };
+		}
 		revalidatePath("/dashboard/mail");
-		return { success: true, data: { draftMessageId: row.id } };
+		return {
+			success: true,
+			message: "Message scheduled",
+			data: {
+				draftMessageId: row.id,
+				scheduledAt: new Date(row.scheduledAt).toISOString(),
+			},
+		};
 	}
 
 	// Undo send. The job goes out with a delay: the interface offers "Undo" (job removal)
@@ -556,18 +585,34 @@ export async function sendMail(
 	};
 }
 
-// The draft is only touched if it is visible to the user (RLS).
+// The draft is only touched if it is visible to the user: RLS and sending identity of the
+// folder (join mailboxes -> identities, like assertMessageAccess).
 async function ownedDraftId(draftMessageId: string) {
-	if (!draftMessageId) return null;
+	if (!isUuid(draftMessageId)) return null;
 	const rls = await rlsClient();
 	const [row] = await rls((tx) =>
 		tx
 			.select({ id: messages.id })
 			.from(messages)
+			.innerJoin(mailboxes, eq(messages.mailboxId, mailboxes.id))
+			.innerJoin(identities, eq(mailboxes.identityId, identities.id))
 			.where(and(eq(messages.id, draftMessageId), eq(messages.draft, true)))
 			.limit(1),
 	);
 	return row?.id ?? null;
+}
+
+// Send state (meta.draft) of a draft already checked by ownedDraftId.
+async function draftSendStateOfMessage(draftId: string) {
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({ metaData: messages.metaData })
+			.from(messages)
+			.where(eq(messages.id, draftId))
+			.limit(1),
+	);
+	return draftSendStateOf((row?.metaData as any)?.draft ?? null);
 }
 
 async function markDraftPending(
@@ -590,6 +635,25 @@ async function markDraftPending(
 	}
 }
 
+// Scheduled send: same mark, set with the chosen time (jobId = draft_messages row). False if the
+// mark could not be set (the caller then removes the job and the row); true as well when there
+// is no source draft (message written without a saved draft).
+async function markDraftScheduled(
+	draftMessageId: string | null,
+	pendingSend: { jobId: string; sendAt: string },
+) {
+	if (!draftMessageId) return true;
+	try {
+		const id = await ownedDraftId(String(draftMessageId));
+		if (!id) return false;
+		await setDraftSendState(id, { pendingSend, sendError: null });
+		return true;
+	} catch (e) {
+		console.error("[send] scheduled mark failed", e);
+		return false;
+	}
+}
+
 // A pending send is only touched if its sending identity is visible to the user (RLS);
 // otherwise everything behaves as if the job did not exist.
 async function ownedPendingSend(pendingSendId: string) {
@@ -603,16 +667,111 @@ async function ownedPendingSend(pendingSendId: string) {
 	return visible ? job : null;
 }
 
-// "Undo" of a send still pending. Returns the form if the job was removed; if it has
-// already gone (or is being sent), nothing more can be done.
+// draft_messages row of a scheduled send, as seen by the user: RLS (workspace) and visible
+// sending identity (the RLS of a workspace sees all its rows). Null otherwise.
+async function scheduledRowOf(rowId: string) {
+	if (!isUuid(rowId)) return null;
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({
+				id: draftMessages.id,
+				identityId: draftMessages.identityId,
+				status: draftMessages.status,
+				scheduledAt: draftMessages.scheduledAt,
+				payload: draftMessages.payload,
+			})
+			.from(draftMessages)
+			.where(eq(draftMessages.id, rowId))
+			.limit(1),
+	);
+	if (!row?.identityId) return null;
+	const identity = await assertIdentityAccess({ id: row.identityId }).catch(() => null);
+	return identity ? { ...row, identity } : null;
+}
+
+// Cancel of a scheduled send: the draft_messages row goes from "scheduled" to "canceled" in a
+// single conditional UPDATE (RLS), which settles the race with the worker (it only claims
+// "scheduled"), then the job is removed. Null if the send has already left or is in progress.
+async function cancelScheduledRow(rowId: string) {
+	const seen = await scheduledRowOf(rowId);
+	if (!seen) return null;
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.update(draftMessages)
+			.set({ status: "canceled", updatedAt: new Date() })
+			.where(and(eq(draftMessages.id, rowId), eq(draftMessages.status, "scheduled")))
+			.returning({ id: draftMessages.id, payload: draftMessages.payload }),
+	);
+	if (!row) return null;
+	try {
+		const { sendMailQueue } = await getRedis();
+		await (await sendMailQueue.getJob(rowId))?.remove();
+	} catch {
+		// Job already taken: it will do nothing, the row is no longer "scheduled".
+	}
+	return { ...row, identity: seen.identity };
+}
+
+// The content of a canceled scheduled send (draft_messages row) goes back into the IMAP draft:
+// nothing typed is lost, even if the source draft was changed or deleted in the meantime. The
+// send mark is cleared first (otherwise the guard refuses the save). With onlyIfMissing, an
+// existing draft is left as is (only its mark is cleared) and only a missing draft is
+// recreated.
+async function restoreDraftFromRow(
+	row: { payload: Record<string, any>; identity: Record<string, any> },
+	opts: { onlyIfMissing?: boolean } = {},
+) {
+	const p = row.payload ?? {};
+	const existing = await ownedDraftId(String(p.draftMessageId ?? ""));
+	if (existing) {
+		await setDraftSendState(existing, { pendingSend: null });
+		if (opts.onlyIfMissing) return existing;
+	}
+	const saved = await saveDraft({
+		identityPublicId: String(row.identity.publicId),
+		draftMessageId: existing,
+		to: p.to,
+		cc: p.cc,
+		bcc: p.bcc,
+		subject: p.subject,
+		html: p.html,
+		text: p.text,
+		mode: p.mode,
+		originalMessageId: p.originalMessageId,
+		attachments: p.attachments,
+		includeSignature: p.includeSignature,
+		quoteScope: p.quoteScope,
+		quoteMode: p.quoteMode,
+		quoteHtml: p.quoteHtml,
+	});
+	if (saved.error) throw new Error(saved.error);
+	return saved.draftMessageId;
+}
+
+// "Undo" of a send still pending. Returns the form if the job was removed; if it has already
+// gone (or is being sent), nothing more can be done. A scheduled send whose Redis job is gone
+// (purge, missed recovery) is canceled through its draft_messages row (jobId = row id); the
+// content goes back into the draft.
 export async function cancelPendingSend(pendingSendId: string) {
 	const job = await ownedPendingSend(pendingSendId);
-	if (!job) return { cancelled: false as const };
 	try {
+		if (!job || job.name === SCHEDULED_JOB) {
+			const row = await cancelScheduledRow(String(pendingSendId));
+			if (!row) return { cancelled: false as const };
+			try {
+				await restoreDraftFromRow(row);
+			} catch (e) {
+				// The canceled row keeps the content; the draft stays readable, without a mark.
+				console.error("[send] restore of scheduled content failed", e);
+			}
+			return { cancelled: true as const };
+		}
 		if ((await job.getState()) !== "delayed") return { cancelled: false as const };
 		await job.remove();
 		try {
-			const id = await ownedDraftId(String((job.data as any)?.draftMessageId ?? ""));
+			const id = await ownedDraftId(imapDraftIdOfJob(job.name, job.data));
 			if (id) await setDraftSendState(id, { pendingSend: null });
 		} catch (e) {
 			console.error("[send] pendingSend clear failed", e);
@@ -623,13 +782,26 @@ export async function cancelPendingSend(pendingSendId: string) {
 	}
 }
 
-// "Send now": the pending job goes out immediately.
+// "Send now": the pending job goes out immediately. The mark (sendAt = now) is only set once the
+// job is promoted or added again: a failure does not suggest a send that left. Redis job gone
+// for a scheduled send: it is added again without delay from the row.
 export async function sendPendingNow(pendingSendId: string) {
 	const job = await ownedPendingSend(pendingSendId);
-	if (!job) return;
 	try {
-		if ((await job.getState()) === "delayed") await job.promote();
-		const id = await ownedDraftId(String((job.data as any)?.draftMessageId ?? ""));
+		let imapDraftId = "";
+		if (job) {
+			if ((await job.getState()) !== "delayed") return;
+			await job.promote();
+			imapDraftId = imapDraftIdOfJob(job.name, job.data);
+		} else {
+			const row = await scheduledRowOf(String(pendingSendId));
+			if (!row || row.status !== "scheduled") return;
+			const re = scheduledJobOf({ ...row, scheduledAt: new Date() });
+			const { sendMailQueue } = await getRedis();
+			await sendMailQueue.add(re.name, re.data, { ...re.opts, delay: 0 });
+			imapDraftId = re.data.imapDraftId ?? "";
+		}
+		const id = await ownedDraftId(imapDraftId);
 		if (id)
 			await setDraftSendState(id, {
 				pendingSend: { jobId: pendingSendId, sendAt: new Date().toISOString() },
@@ -1732,19 +1904,20 @@ export const moveToFolder = async (
 
 
 
-export const fetchScheduledDraftCounts = async () => {
+// "Scheduled" counter of the sidebar: only the id and the identity are read (the content of the
+// messages has no business in the HTML of the page), identity visible to the user.
+export type ScheduledDraftCount = { id: string; identityId: string };
+
+export const fetchScheduledDraftCounts = async (): Promise<ScheduledDraftCount[]> => {
 	const rls = await rlsClient();
 
-	const rows = await rls((tx) =>
+	return await rls((tx) =>
 		tx
-			.select()
+			.select({ id: draftMessages.id, identityId: identities.id })
 			.from(draftMessages)
-			.where(
-				eq(draftMessages.status, "scheduled")
-			)
+			.innerJoin(identities, eq(draftMessages.identityId, identities.id))
+			.where(eq(draftMessages.status, "scheduled")),
 	);
-
-	return rows;
 };
 
 
@@ -1776,11 +1949,27 @@ export async function deleteScheduledDraft(
 ): Promise<FormState> {
 	return handleAction(async () => {
 		const decodedForm = decode(formData) as Record<string, unknown>;
+		const rowId = String(decodedForm.draftId);
 		const rls = await rlsClient();
+		// Job removed and row set to "canceled" (RLS: the row must be visible), then the source
+		// draft becomes an editable draft again (send mark cleared).
+		const row = await cancelScheduledRow(rowId);
+		if (!row) {
+			return { success: false, error: "This message has already left or is being sent." };
+		}
+		// The row may be the only copy of the message (source draft deleted or never saved): it is
+		// only deleted once an IMAP draft is found or recreated.
+		try {
+			await restoreDraftFromRow(row, { onlyIfMissing: true });
+		} catch (e) {
+			console.error("[send] draft restore before delete failed", e);
+			return {
+				success: false,
+				error: "Send canceled, but the draft could not be recreated: the message is kept.",
+			};
+		}
 		await rls(async (tx) => {
-			await tx
-				.delete(draftMessages)
-				.where(eq(draftMessages.id, String(decodedForm.draftId)));
+			await tx.delete(draftMessages).where(eq(draftMessages.id, rowId));
 		});
 
 		revalidatePath("/dashboard/mail");

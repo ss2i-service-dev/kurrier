@@ -156,9 +156,12 @@ export async function validateApiKeyToken(token: string) {
 }
 
 
+// ss2i (controle d'acces, GHSA-cvh9-93mg-xvc9) : `workspaceId`, celui de la cle API, borne
+// aussi l'identite a ce workspace (webhooks) ; sans lui, le comportement d'avant.
 export async function validateIdentityOwnership(opts: {
 	identityId: string;
 	ownerId: string;
+	workspaceId?: string;
 }) {
 
 	const [identity] = await db
@@ -168,6 +171,9 @@ export async function validateIdentityOwnership(opts: {
 			and(
 				eq(identities.id, opts.identityId),
 				eq(identities.ownerId, opts.ownerId),
+				opts.workspaceId === undefined
+					? undefined
+					: eq(identities.workspaceId, opts.workspaceId),
 			),
 		)
 		.limit(1);

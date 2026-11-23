@@ -5,8 +5,9 @@ import {and, eq} from "drizzle-orm";
 
 export default defineEventHandler(async (event) => {
 
-	const { ownerId } = await validateApiKey(event);
+	const { apiKey, ownerId } = await validateApiKey(event);
 	const id = getRouterParam(event, "id");
+	// ss2i (controle d'acces, GHSA-cvh9-93mg-xvc9) : dans le workspace de la cle seulement.
 	const [webhook] = await db
 		.select()
 		.from(webhooks)
@@ -14,6 +15,7 @@ export default defineEventHandler(async (event) => {
 			and(
 				eq(webhooks.id, String(id)),
 				eq(webhooks.ownerId, ownerId),
+				eq(webhooks.workspaceId, apiKey.workspaceId),
 			),
 		)
 		.limit(1);

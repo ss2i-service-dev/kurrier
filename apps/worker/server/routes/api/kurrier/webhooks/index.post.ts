@@ -9,7 +9,7 @@ import { db, WebhookCreateSchema, WebhookInsertEntity, webhooks } from "@db";
 
 export default defineEventHandler(async (event) => {
 
-	const { ownerId } = await validateApiKey(event);
+	const { apiKey, ownerId } = await validateApiKey(event);
 	const body = await readBody(event).catch(() => ({}));
 	const parsed = WebhookCreateSchema.safeParse(body);
 	if (!parsed.success) {
@@ -31,14 +31,16 @@ export default defineEventHandler(async (event) => {
 			"Field `events` must have at least one event",
 		);
 	}
-	// ss2i (controle d'acces) : identite obligatoire, a la cle API ; le webhook prend son
-	// workspace. Sans identite, le worker l'appelait pour tout le courrier entrant.
+	// ss2i (controle d'acces) : identite obligatoire, a la cle API et dans le workspace de la
+	// cle (GHSA-cvh9-93mg-xvc9) ; le webhook prend son workspace. Sans identite, le worker
+	// l'appelait pour tout le courrier entrant.
 	if (!data.identityId) {
 		return apiError(400, "MISSING_IDENTITY", "Field `identityId` is required");
 	}
 	const identity = await validateIdentityOwnership({
 		identityId: data.identityId,
 		ownerId,
+		workspaceId: apiKey.workspaceId,
 	});
 	// Adresse publique seulement (reverifiee a chaque envoi, lib/webhooks/message.received.ts).
 	const url = await assertPublicUrl(String(data.url), { allowHttp: true }).catch(() => null);

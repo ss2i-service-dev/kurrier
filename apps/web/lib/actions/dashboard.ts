@@ -1348,11 +1348,19 @@ export async function addWebhook(
 ): Promise<FormState> {
 	return handleAction(async () => {
 		const data = decode(formData);
+		const user = await assertSignedIn();
 		// ss2i (controle d'acces) : un webhook est rattache a une identite visible ; sans
 		// identite, le worker l'appelait pour tout le courrier entrant de toutes les boites.
 		const identity = await assertIdentityAccess({ id: String(data.identityId ?? "") }).catch(() => null);
 		if (!identity) {
 			return { success: false, error: "Choose an identity for this webhook." };
+		}
+		// ss2i (controle d'acces, GHSA-cvh9-93mg-xvc9) : et dont on est proprietaire. Une
+		// identite visible peut etre de domaine, partagee avec le workspace ou d'un collegue dont
+		// on est membre : son courrier entrant partait vers l'URL d'un autre, meme apres la fin
+		// du partage (le worker ne declenche plus que les webhooks du proprietaire).
+		if (identity.ownerId !== user.id) {
+			return { success: false, error: "Webhooks can only be added to your own identities." };
 		}
 		// Adresse publique seulement (le worker la reverifie a chaque envoi).
 		const url = await assertPublicUrl(String(data.url ?? ""), { allowHttp: true }).catch(() => null);

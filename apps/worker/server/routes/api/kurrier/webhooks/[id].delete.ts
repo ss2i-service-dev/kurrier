@@ -9,22 +9,25 @@ import {and, eq} from "drizzle-orm";
 
 export default defineEventHandler(async (event) => {
 
-	const { ownerId } = await validateApiKey(event);
+	const { apiKey, ownerId } = await validateApiKey(event);
 	const id = getRouterParam(event, "id");
 	if (!id) {
 		return apiError(400, "INVALID_WEBHOOK_ID", "Webhook id is required");
 	}
+	// ss2i (controle d'acces, GHSA-cvh9-93mg-xvc9) : dans le workspace de la cle seulement.
+	const scope = (webhookId: string) =>
+		and(eq(webhooks.id, webhookId), eq(webhooks.ownerId, ownerId), eq(webhooks.workspaceId, apiKey.workspaceId));
 	const [existing] = await db
 		.select()
 		.from(webhooks)
-		.where(and(eq(webhooks.id, String(id)), eq(webhooks.ownerId, ownerId)))
+		.where(scope(String(id)))
 		.limit(1);
 	if (!existing) {
 		return apiError(404, "WEBHOOK_NOT_FOUND", "Webhook not found");
 	}
 	await db
 		.delete(webhooks)
-		.where(and(eq(webhooks.id, existing.id), eq(webhooks.ownerId, ownerId)));
+		.where(scope(existing.id));
 	return apiSuccess({
 		id: existing.id,
 		deleted: true,

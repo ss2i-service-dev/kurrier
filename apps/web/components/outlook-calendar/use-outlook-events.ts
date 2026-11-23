@@ -4,17 +4,30 @@
 // si la copie a plus de 60 s ; requetes identiques partagees (grille, barre laterale). Outlook
 // reste la source : relecture toutes les 60 s quand l'onglet est visible, au retour sur
 // l'onglet, et apres chaque ecriture (version de agenda-store).
-import { useCallback, useEffect, useRef, useState } from "react";
+//
+// Une lecture par groupe (sourceGroups : agendas de la boite ensemble, chaque collegue a part),
+// affichee des qu'elle arrive : un collegue lent ne retient plus le reste de la grille
+// (23/11/2026, droits de partage relus jusqu'a 20 s a froid).
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CalendarEvent } from "@common/outlook-calendar";
 import type { SourceRef } from "@/lib/actions/outlook-calendar";
-import { FRESH_MS, cachedEvents, eventsKey, invalidateEvents, loadEvents } from "@/components/outlook-calendar/agenda-api";
+import { FRESH_MS, cachedEvents, eventsKey, invalidateEvents, loadEvents, sourceGroups } from "@/components/outlook-calendar/agenda-api";
 
 export function useOutlookEvents(identityPublicId: string | undefined, from: string, days: number, sources?: SourceRef[], version = 0, tz?: string) {
 	const key = identityPublicId ? eventsKey(identityPublicId, from, days, sources, tz) : "";
-	const [events, setEvents] = useState<CalendarEvent[]>(() => (key ? (cachedEvents(key)?.events ?? []) : []));
+	// biome-ignore lint/correctness/useExhaustiveDependencies: la cle resume les sources
+	const groups = useMemo(() => sourceGroups(sources), [key]);
+	const groupKeys = useMemo(
+		() => (identityPublicId ? groups.map((g) => eventsKey(identityPublicId, from, days, g, tz)) : []),
+		[identityPublicId, groups, from, days, tz],
+	);
+	const fromCache = (keys: string[]) => keys.flatMap((k) => cachedEvents(k)?.events ?? []);
+	const allCached = (keys: string[]) => keys.length > 0 && keys.every((k) => !!cachedEvents(k));
+
+	const [events, setEvents] = useState<CalendarEvent[]>(() => fromCache(groupKeys));
 	const [loading, setLoading] = useState(false);
 	// Une lecture (ou une copie en cache) est arrivee pour cette periode : avant, « aucun evenement » ne veut rien dire.
-	const [loaded, setLoaded] = useState(() => !!key && !!cachedEvents(key));
+	const [loaded, setLoaded] = useState(() => allCached(groupKeys));
 	const [error, setError] = useState<string | null>(null);
 	const req = useRef(0);
 	const sourcesRef = useRef(sources);
@@ -28,35 +41,52 @@ export function useOutlookEvents(identityPublicId: string | undefined, from: str
 				setError(null);
 				return;
 			}
-			const hit = cachedEvents(key);
-			if (hit) setEvents(hit.events);
-			if (hit && !force && Date.now() - hit.at < FRESH_MS) {
-				setError(hit.errors?.join(" ") ?? null);
-				return;
-			}
 			const id = ++req.current;
-			setLoading(true);
-			void loadEvents(identityPublicId, from, days, sourcesRef.current, tz).then((res) => {
-				if (id !== req.current) return;
-				setLoading(false);
-				setLoaded(true);
-				if (!res.ok) {
-					setError(res.error);
+			const errors: (string | null)[] = groups.map(() => null);
+			const showErrors = () => {
+				const list = errors.filter((e): e is string => !!e);
+				setError(list.length ? list.join(" ") : null);
+			};
+			setEvents(fromCache(groupKeys));
+			let pending = 0;
+			groups.forEach((group, i) => {
+				const hit = cachedEvents(groupKeys[i]);
+				if (hit && !force && Date.now() - hit.at < FRESH_MS) {
+					errors[i] = hit.errors?.join(" ") ?? null;
 					return;
 				}
-				setError(res.errors?.join(" ") ?? null);
-				setEvents(res.events);
+				pending++;
+				void loadEvents(identityPublicId, from, days, group, tz).then((res) => {
+					if (id !== req.current) return;
+					pending--;
+					errors[i] = res.ok ? (res.errors?.join(" ") ?? null) : res.error;
+					// Groupe en echec : sa derniere copie connue reste affichee.
+					setEvents(fromCache(groupKeys));
+					showErrors();
+					if (!pending) {
+						setLoading(false);
+						setLoaded(true);
+					}
+				});
 			});
+			showErrors();
+			if (pending) setLoading(true);
+			else {
+				setLoading(false);
+				setLoaded(true);
+			}
 		},
-		[identityPublicId, key, from, days, tz],
+		// biome-ignore lint/correctness/useExhaustiveDependencies: fromCache ne lit que le cache
+		[identityPublicId, groups, groupKeys, from, days, tz],
 	);
 
 	useEffect(() => {
-		if (!cachedEvents(key)) {
-			setEvents([]);
+		if (!allCached(groupKeys)) {
+			setEvents(fromCache(groupKeys));
 			setLoaded(false);
 		}
 		load(false);
+		// biome-ignore lint/correctness/useExhaustiveDependencies: relu a chaque changement de periode ou d'agendas
 	}, [key, load]);
 
 	// Ecriture ailleurs sur la page : relecture forcee.
@@ -73,15 +103,18 @@ export function useOutlookEvents(identityPublicId: string | undefined, from: str
 		const tick = () => document.visibilityState === "visible" && load(true);
 		const t = setInterval(tick, FRESH_MS);
 		const onFocus = () => {
-			const hit = cachedEvents(key);
-			if (!hit || Date.now() - hit.at > 15_000) load(true);
+			const stale = groupKeys.some((k) => {
+				const hit = cachedEvents(k);
+				return !hit || Date.now() - hit.at > 15_000;
+			});
+			if (stale) load(true);
 		};
 		window.addEventListener("focus", onFocus);
 		return () => {
 			clearInterval(t);
 			window.removeEventListener("focus", onFocus);
 		};
-	}, [key, load]);
+	}, [groupKeys, load]);
 
 	const reload = useCallback(() => {
 		if (identityPublicId) invalidateEvents(identityPublicId);

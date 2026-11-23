@@ -10,6 +10,7 @@
 import { and, eq } from "drizzle-orm";
 import { identities } from "@db";
 import { getServerEnv } from "@schema";
+import { cachedRole, forgetRole } from "@/lib/calendar-role-cache";
 import {
 	AgendaError,
 	type AgendaEvent,
@@ -122,16 +123,12 @@ async function boxAddress(identityPublicId: string): Promise<string> {
 	return address;
 }
 
-// Droit sur l'agenda d'un collegue, relu sur Graph au plus toutes les 30 minutes (calendarPermissions
-// repond en 2 s environ : c'etait l'essentiel du temps d'ouverture de l'agenda).
-const roles = new Map<string, { at: number; role: CalendarRole }>();
+// Droit sur l'agenda d'un collegue : calendarPermissions repond en 1 a 20 s (mesure du 23/11),
+// c'etait l'essentiel du temps d'ouverture de l'agenda. Garde dans Redis et relu en
+// arriere-plan au-dela de 30 min (lib/calendar-role-cache.ts).
 async function roleFor(cfg: GraphConfig | null, owner: string, me: string): Promise<CalendarRole> {
-	const k = `${me}>${owner}`;
-	const hit = roles.get(k);
-	if (hit && Date.now() - hit.at < 30 * 60_000) return hit.role;
-	const role = demo.on() ? demo.role(owner, me) : await calendarRole(cfg as GraphConfig, owner, me);
-	roles.set(k, { at: Date.now(), role });
-	return role;
+	if (demo.on()) return demo.role(owner, me);
+	return cachedRole<CalendarRole>(`${me}>${owner}`, () => calendarRole(cfg as GraphConfig, owner, me));
 }
 
 const EMAIL_RE = /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/;
@@ -249,7 +246,7 @@ export async function checkColleagueCalendar(input: { identityPublicId: string; 
 		const owner = String(input.address ?? "").trim().toLowerCase();
 		if (!EMAIL_RE.test(owner)) throw new AgendaError("Adresse invalide.");
 		if (owner === me) throw new AgendaError("C'est votre propre agenda.");
-		roles.delete(`${me}>${owner}`);
+		await forgetRole(`${me}>${owner}`);
 		const role = await resolve(me, { kind: "colleague", owner }).then((r) => r.role);
 		return {
 			ok: true,

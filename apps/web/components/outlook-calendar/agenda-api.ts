@@ -31,7 +31,11 @@ export async function agendaRead<T>(op: "sources" | "events" | "reminders", payl
 export type EventsEntry = { at: number; events: CalendarEvent[]; errors?: string[] };
 
 const STORE_KEY = "ss2i.agenda.cache.v1";
-const MAX_ENTRIES = 40;
+// Une entree par groupe d'agendas (boite, chaque collegue) et par periode : 7 groupes sur la
+// periode affichee et ses deux voisines, plus la barre laterale, depassaient les 40 d'avant.
+const MAX_ENTRIES = 160;
+// sessionStorage (5 Mo environ) : seules les plus recentes y sont recopiees.
+const MAX_STORED = 80;
 export const FRESH_MS = 60_000;
 
 const refKey = (s: SourceRef) => (s.kind === "own" ? `own:${s.calendarId ?? "default"}` : `colleague:${s.owner}`);
@@ -58,7 +62,7 @@ function persist() {
 	clearTimeout(saveTimer);
 	saveTimer = setTimeout(() => {
 		try {
-			const entries = [...cache.entries()].slice(-MAX_ENTRIES);
+			const entries = [...cache.entries()].slice(-MAX_STORED);
 			sessionStorage.setItem(STORE_KEY, JSON.stringify(entries));
 		} catch {}
 	}, 300);
@@ -103,11 +107,25 @@ export function loadEvents(
 	return p;
 }
 
+/**
+ * Lectures separees : les agendas de la boite ensemble, chaque collegue a part. Un collegue
+ * lent (droits de partage relus sur Graph, jusqu'a 20 s a froid le 23/11) ne retient plus
+ * les evenements de la boite ni ceux des autres collegues.
+ */
+export function sourceGroups(sources: SourceRef[] | undefined): (SourceRef[] | undefined)[] {
+	if (!sources) return [undefined];
+	const own = sources.filter((s) => s.kind === "own");
+	const colleagues = sources.filter((s) => s.kind !== "own");
+	return [...(own.length ? [own] : []), ...colleagues.map((c) => [c])];
+}
+
 /** Periode voisine lue d'avance (fleches instantanees), sans rien afficher. */
 export function prefetchEvents(identityPublicId: string, from: string, days: number, sources: SourceRef[] | undefined, tz: string | undefined) {
-	const hit = cachedEvents(eventsKey(identityPublicId, from, days, sources, tz));
-	if (hit && Date.now() - hit.at < FRESH_MS) return;
-	void loadEvents(identityPublicId, from, days, sources, tz);
+	for (const group of sourceGroups(sources)) {
+		const hit = cachedEvents(eventsKey(identityPublicId, from, days, group, tz));
+		if (hit && Date.now() - hit.at < FRESH_MS) continue;
+		void loadEvents(identityPublicId, from, days, group, tz);
+	}
 }
 
 // --- Agendas (sources) -------------------------------------------------------

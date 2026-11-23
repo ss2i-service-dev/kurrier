@@ -20,28 +20,40 @@ const norm = (v?: string | null) =>
  * folders of reasonable size.
  *
  * Call with the folder lock held. Returns real UID -> id of the `messages` row.
+ *
+ * `absent`, if given, receives the rows whose absence from the folder is proven: neither at
+ * their UID, nor by SEARCH, nor in the COMPLETE read of the folder envelopes (readable
+ * folder, at most SCAN_LIMIT messages, read without error). A row merely "not found"
+ * (folder too big, read error) is not in it.
  */
 const SCAN_LIMIT = 5000;
 
 export async function resolveUids(
 	client: ImapFlow,
 	rows: UidRow[],
+	absent?: Set<string>,
 ): Promise<Map<number, string>> {
 	const resolved = new Map<number, string>();
 
 	// Folder envelopes, read once and only if SEARCH returned nothing.
+	// scanComplete: the whole folder was read (or it is empty), absence is proven.
 	let scanned: Map<string, number[]> | undefined;
+	let scanComplete = false;
 	const scan = async () => {
 		if (scanned) return scanned;
 		scanned = new Map();
 		const box = client.mailbox;
-		const exists = box && typeof box === "object" ? Number(box.exists ?? 0) : 0;
-		if (!exists || exists > SCAN_LIMIT) return scanned;
-		for await (const m of client.fetch("1:*", { uid: true, envelope: true })) {
-			const key = norm(m.envelope?.messageId);
-			if (!key) continue;
-			scanned.set(key, [...(scanned.get(key) ?? []), m.uid]);
+		if (!box || typeof box !== "object") return scanned;
+		const exists = Number(box.exists ?? 0);
+		if (exists > SCAN_LIMIT) return scanned;
+		if (exists > 0) {
+			for await (const m of client.fetch("1:*", { uid: true, envelope: true })) {
+				const key = norm(m.envelope?.messageId);
+				if (!key) continue;
+				scanned.set(key, [...(scanned.get(key) ?? []), m.uid]);
+			}
 		}
+		scanComplete = true;
 		return scanned;
 	};
 
@@ -83,8 +95,9 @@ export async function resolveUids(
 			uids = (await scan().catch(() => undefined))?.get(wanted) ?? [];
 		}
 		if (!uids.length) {
+			if (scanComplete) absent?.add(row.id);
 			console.warn(
-				`[imap:resolve-uids] message ${row.id} not found in the folder (database uid ${row.uid}), skipped`,
+				`[imap:resolve-uids] message ${row.id} not found in the folder (database uid ${row.uid}${scanComplete ? ", folder read in full" : ""}), skipped`,
 			);
 			continue;
 		}

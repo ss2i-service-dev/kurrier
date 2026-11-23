@@ -423,6 +423,36 @@ async function main() {
 		assert(!!(await threadRow(t8.id, f.inbox.id)) && !!(await threadRow(t8.id, trash.id)), "stale UID: thread split, one row per folder");
 	}
 
+	// 6 bis. Messages already deleted from the server (absent from the source, read in full:
+	//    folder of fewer than 5,000 messages) but still in the database. They are no longer put
+	//    back in the source (they came back at every "empty the spam"): they stay at the
+	//    destination without a UID, the rest of the batch goes, the job succeeds.
+	{
+		const f = await createUserFixture("move-ghost");
+		const trash = await trashOf(f);
+		await syncRow(f, f.inbox.id, 300);
+		await syncRow(f, trash.id, 0);
+		const g = `<ghost-${Date.now()}@x>`;
+		const p = `<present-${Date.now()}@x>`;
+		const imap = new FakeStalwart({
+			INBOX: { uidNext: 301, msgs: [[201, p]] },
+			"Deleted Items": { uidNext: 1, msgs: [] },
+		});
+		const tg = await thread(f, f.inbox.id, [{ mid: g, uid: 200 }]);
+		const tp = await thread(f, f.inbox.id, [{ mid: p, uid: 201 }]);
+		let error: unknown = null;
+		await moveMail(job([tg.id, tp.id], f.inbox.id, true), on(f, imap)).catch((e) => (error = e));
+		assert(error === null, `message deleted from the server: the job does not throw (${error})`);
+		const [rg] = await msgRows(tg.ids);
+		assert(
+			rg.mailboxId === trash.id && (rg.metaData as any).imap.uid === undefined,
+			"message deleted from the server: left at the destination without a UID, not put back in the source",
+		);
+		const [rp] = await msgRows(tp.ids);
+		assert(rp.mailboxId === trash.id && (rp.metaData as any).imap.uid === 1, "the other thread of the batch left (UID 1)");
+		assert(!(await threadRow(tg.id, f.inbox.id)), "no source row left for the thread deleted from the server");
+	}
+
 	// 7. Same Message-ID already in the destination folder (unique index mailbox_id + message_id):
 	//    the source row is deleted, the IMAP copy goes anyway, the cursor counts it.
 	{

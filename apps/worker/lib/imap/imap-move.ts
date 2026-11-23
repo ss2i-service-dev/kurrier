@@ -364,14 +364,29 @@ async function moveGroupOnImap(
 		);
 	}
 	try {
-		const wanted = await resolveUids(client, rows);
+		const absent = new Set<string>();
+		const wanted = await resolveUids(client, rows, absent);
 		for (const [uid, id] of wanted) if (!srcUid.has(id)) srcUid.set(id, uid);
+
+		// Absence from the source PROVEN (folder read in full): the message is no longer on the
+		// server (deleted from another client, Gmail emptying its Spam), only the database still
+		// had it. Putting it back in the source made it come back at every "empty the spam" and
+		// the job failed endlessly: it stays at the destination without a UID, like a message
+		// that was sent but arrived nowhere (step 5).
+		const gone = rows.filter((r) => !srcUid.has(r.id) && absent.has(r.id));
+		if (gone.length) {
+			gone.forEach((r) => settled.add(r.id));
+			console.warn(
+				`[mail:move] ${gone.length} message(s) absent from ${srcPath} (folder read in full, ${tag}): already deleted from the server, left at the destination without a UID`,
+				gone.slice(0, 20).map((r) => r.id),
+			);
+		}
 
 		// Never sent in the MOVE: resolveUids did not find them in the source (stale UID that
 		// Stalwart cannot find: empty SEARCH HEADER, scan bounded to 5,000 messages; or read
-		// error). The server did not move them: put back in the source in the database, without
-		// re-reading their database UID, which may designate another message.
-		const notSent = rows.filter((r) => !srcUid.has(r.id));
+		// error). The server may not have moved them: put back in the source in the database,
+		// without re-reading their database UID, which may designate another message.
+		const notSent = rows.filter((r) => !srcUid.has(r.id) && !absent.has(r.id));
 		if (notSent.length) {
 			const back = notSent.filter((r) => !isDup(r.id));
 			reverted += await revertToSource(back.map((r) => ({ id: r.id, uid: r.uid })), srcPath, ctx);

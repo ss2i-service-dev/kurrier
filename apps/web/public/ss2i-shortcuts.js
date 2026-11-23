@@ -103,6 +103,33 @@
 
   const dansUnMail = () => /\/threads\/[^/]+/.test(window.location.pathname);
 
+  // Mail ouvert : chaque message a sa barre (Archive, Delete, Archiver pour...). Le raccourci vise
+  // celle du message en cours de lecture, pas la premiere du fil : Maj+A ouvrait le menu sur le
+  // premier message, tout en haut d'un fil long, hors de vue (Samuel le 23/11/2026).
+  // tops : haut de chaque barre dans l'ordre du fil ; haut / bas : zone visible sous la barre du
+  // haut collante. Rend la barre visible la plus haute, sinon la derniere au-dessus de l'ecran (le
+  // message dont on lit le corps), sinon la premiere ; -1 sans barre.
+  const choisirBarreLue = (tops, haut, bas) => {
+    let dessus = -1;
+    for (let i = 0; i < tops.length; i++) {
+      if (tops[i] >= haut && tops[i] < bas) return i;
+      if (tops[i] < haut) dessus = i;
+    }
+    return dessus >= 0 ? dessus : tops.length ? 0 : -1;
+  };
+  const barreDuMessageLu = (marque) => {
+    const boutons = Array.from(document.querySelectorAll(`button[data-ss2i-shortcut="${marque}"]`)).filter(visible);
+    const haut = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ss2i-mail-header-h")) || 0;
+    const i = choisirBarreLue(boutons.map((b) => b.getBoundingClientRect().top), haut, window.innerHeight);
+    const bouton = i >= 0 ? boutons[i] : null;
+    // Barre hors de l'ecran : ramenee juste sous la barre du haut, sinon le menu s'ouvre hors de vue.
+    if (bouton) {
+      const r = bouton.getBoundingClientRect();
+      if (r.top < haut || r.bottom > window.innerHeight) window.scrollBy({ top: r.top - haut - 8, behavior: "instant" });
+    }
+    return bouton;
+  };
+
   // Dans un mail ouvert : le bouton de la barre du message, marque data-ss2i-shortcut
   // (email-renderer.tsx), present sur chaque message ; repli sur le bouton libelle (nouvelle
   // interface). Pas le bouton texte du bas seul : il n'est rendu que sous le dernier message,
@@ -115,7 +142,7 @@
     if (dansUnMail()) {
       const barre = libelle === "Delete" ? "open-delete" : "open-archive";
       if (nouvelle() && ACTIONS_K[libelle] && cliquerK(ACTIONS_K[libelle])) return true;
-      const bouton = Array.from(document.querySelectorAll(`button[data-ss2i-shortcut="${barre}"]`)).find(visible);
+      const bouton = barreDuMessageLu(barre);
       if (bouton) {
         bouton.click();
         return true;
@@ -136,8 +163,9 @@
   // Menu ou fenetre deja ouvert : leur clavier leur appartient, rien ne se passe.
   const archiverPour = () => {
     if (document.querySelector('[role="menu"], [role="dialog"]')) return false;
-    const marque = dansUnMail() ? "open-archive-for" : "selection-archive-for";
-    const cible = Array.from(document.querySelectorAll(`button[data-ss2i-shortcut="${marque}"]`)).find(visible);
+    const cible = dansUnMail()
+      ? barreDuMessageLu("open-archive-for")
+      : Array.from(document.querySelectorAll('button[data-ss2i-shortcut="selection-archive-for"]')).find(visible);
     if (!cible || cible.disabled) return false;
     cible.click();
     rendreLeFocusAuMenu(8);

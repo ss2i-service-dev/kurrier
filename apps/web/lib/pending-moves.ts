@@ -1,6 +1,7 @@
 "use client";
 import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
+import { closeTabs } from "@/components/k/reader-tabs";
 
 // Threads removed from the display on click (trash, archive, move, permanent deletion),
 // without waiting for the worker. Without this, nothing moved on screen while the jobs
@@ -28,6 +29,8 @@ export function hideThreads(mailboxId: string, threadIds: string[], archive = fa
 	const until = Date.now() + TTL_MS;
 	threadIds.forEach((id) => pending.set(key(mailboxId, id), { until, archive }));
 	publish();
+	// A thread archived, deleted or moved also leaves the internal tabs.
+	closeTabs(threadIds.map(String));
 }
 
 export function showThreads(mailboxId: string, threadIds: string[]) {

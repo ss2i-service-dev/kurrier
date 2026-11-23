@@ -7,6 +7,7 @@ import React, { createContext, useContext } from "react";
 import { usePathname } from "next/navigation";
 import KNewMailNotifier from "@/components/k/new-mail-notifier";
 import KShortcutsConfig from "@/components/k/shortcuts-config";
+import { KOpenPrefsConfig } from "@/components/k/reader-tabs-bar";
 
 const KUiContext = createContext(false);
 
@@ -20,6 +21,8 @@ export function KUiProvider({ modern, children }: { modern: boolean; children: R
 			{inApp && <KNewMailNotifier modern={modern} />}
 			{/* Custom keyboard shortcuts (Settings > Keyboard shortcuts). */}
 			{inApp && <KShortcutsConfig />}
+			{/* Thread opening: internal tabs (Settings > Opening mail). */}
+			{inApp && modern && <KOpenPrefsConfig />}
 			{children}
 		</KUiContext.Provider>
 	);

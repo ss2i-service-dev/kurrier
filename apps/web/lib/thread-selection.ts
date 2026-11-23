@@ -35,6 +35,8 @@ export function toggleThreadSelection<T extends Partial<ThreadSelectionState>>(
 // row (native browser selection). Blocking the mouse press with Shift prevents text
 // selection without preventing the click; without Shift, nothing changes (selectable
 // text, thread drag and drop).
-export function preventShiftTextSelection(e: { shiftKey: boolean; preventDefault: () => void }) {
-	if (e.shiftKey) e.preventDefault();
+export function preventShiftTextSelection(e: { shiftKey: boolean; button?: number; preventDefault: () => void }) {
+	// Middle click too: no autoscroll on a row (it opens in a tab on auxclick, see
+	// components/k/thread-row.tsx).
+	if (e.shiftKey || e.button === 1) e.preventDefault();
 }

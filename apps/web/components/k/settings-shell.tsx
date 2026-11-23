@@ -4,7 +4,7 @@
 import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Ban, Cog, Filter, Keyboard, Reply } from "lucide-react";
+import { AppWindow, Ban, Cog, Filter, Keyboard, Reply } from "lucide-react";
 import MobileNavButton from "@/components/k/mobile-nav-button";
 
 export default function KSettingsShell({
@@ -26,6 +26,7 @@ export default function KSettingsShell({
 		{ href: `${base}/autoreply`, label: "Auto-reply", icon: Reply },
 		{ href: `${base}/blocked`, label: "Blocked senders", icon: Ban },
 		{ href: `${base}/shortcuts`, label: "Keyboard shortcuts", icon: Keyboard },
+		{ href: `${base}/open`, label: "Opening mail", icon: AppWindow },
 	];
 	const current = (pathname ?? "").replace(/\/$/, "");
 

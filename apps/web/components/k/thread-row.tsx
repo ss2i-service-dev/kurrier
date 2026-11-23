@@ -29,6 +29,8 @@ import { correspondents, listDate } from "@/components/k/format";
 import { kHref } from "@/components/k/href";
 import { arrivedSinceRead, closeCompose, mailActions, setActiveThread, useMailStore } from "@/components/k/mail-store";
 import { refreshRowHover, useRowHot } from "@/components/k/row-hover";
+import { resolveRowOpen } from "@/components/k/open-prefs";
+import { getOpenPrefs, openTab, rememberSubject, tabFor } from "@/components/k/reader-tabs";
 
 type Props = {
 	item: FetchMailboxThreadsResult[number];
@@ -120,11 +122,30 @@ export default function KThreadRow({
 	};
 
 
+	// Subject kept to name the internal tab if the thread is opened in one.
+	rememberSubject(String(item.threadId), subjectForDisplay(item.subject, stripPrefixes) || "(no subject)");
+
 	const openThread = (e: React.MouseEvent) => {
 		// Selection mode (as in the classic interface): a click ticks instead of opening.
-		if (selecting) {
+		if (selecting && e.button === 0 && !e.ctrlKey && !e.metaKey) {
 			toggleSelection(e.shiftKey);
 			return;
+		}
+		// Opening follows the setting (Settings > Opening mail, open-prefs.ts): browser
+		// tab (middle click or Ctrl/Cmd+click by default), internal tab (option), or the
+		// thread alone (click, original behaviour).
+		const how = resolveRowOpen(getOpenPrefs(), e);
+		if (!how) return;
+		if (how === "browser") {
+			window.open(threadUrl, "_blank", "noopener");
+			return;
+		}
+		if (how === "tab") {
+			// Middle click on a row while a thread is already displayed: the tab opens
+			// in the background, as in a browser.
+			const background = e.button === 1 && /\/threads\/[^/]+/.test(window.location.pathname);
+			openTab(tabFor(String(item.threadId), new URL(threadUrl, window.location.origin).pathname));
+			if (background) return;
 		}
 		if (isOnSnoozedPage) {
 			window.location.href = threadUrl;
@@ -173,6 +194,13 @@ export default function KThreadRow({
 	return (
 		<li
 			onMouseDown={preventShiftTextSelection}
+			onAuxClick={(e) => {
+				if (e.button !== 1) return;
+				// Middle click on a button of the row (star, actions): nothing.
+				if ((e.target as Element).closest?.("button, a, input, [role='menu']")) return;
+				e.preventDefault();
+				openThread(e);
+			}}
 			role="listitem"
 			data-thread-id={item.threadId}
 			aria-current={isActive ? "true" : undefined}

@@ -21,6 +21,7 @@ import { upsertMailboxThreadItem } from "@common";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { ImapFlow } from "imapflow";
 import { moveMail } from "../lib/imap/imap-move";
+import { dueExpiredThreads } from "../lib/mail-expiry";
 import { deltaFetch } from "../lib/imap/imap-delta-fetch";
 
 type Fixture = Awaited<ReturnType<typeof createUserFixture>>;
@@ -37,6 +38,7 @@ class FakeStalwart {
 	existsOverride: number | null = null; // "too big" folder: resolveUids does not scan
 	onLock?: (path: string) => Promise<void>;
 	onMove?: () => Promise<void>;
+	flagged = new Set<string>(); // Message-ID carrying \Flagged (set from another client)
 	moves = 0;
 	selected = "";
 	folders = new Map<string, Folder>();
@@ -90,7 +92,7 @@ class FakeStalwart {
 			yield {
 				uid,
 				envelope: { messageId: mid ?? undefined },
-				flags: new Set<string>(["\\Seen"]),
+				flags: new Set<string>(mid && this.flagged.has(mid) ? ["\\Seen", "\\Flagged"] : ["\\Seen"]),
 				internalDate: new Date(),
 				size: 10,
 				source: Buffer.from(`Message-ID: ${mid}\r\nSubject: x\r\n\r\nbody`),
@@ -137,7 +139,7 @@ async function trashOf(f: Fixture) {
 	return row;
 }
 
-async function folderOf(f: Fixture, kind: "archive" | "spam", name: string) {
+async function folderOf(f: Fixture, kind: "archive" | "spam" | "custom", name: string) {
 	const [row] = await db
 		.insert(mailboxes)
 		.values({
@@ -146,7 +148,7 @@ async function folderOf(f: Fixture, kind: "archive" | "spam", name: string) {
 			identityId: f.identity.id,
 			kind,
 			name,
-			slug: kind,
+			slug: kind === "custom" ? name.toLowerCase() : kind,
 			isDefault: false,
 			metaData: { imap: { path: name } },
 		})
@@ -245,6 +247,38 @@ const job = (threadIds: string[], mailboxId: string, moveImap: boolean) => ({
 	op: "trash" as const,
 	moveImap,
 });
+
+// Archive for a chosen duration: Trash job posted by mail:expire-tick.
+const expiryJob = (threadIds: string[], mailboxId: string, moveImap: boolean) => ({ ...job(threadIds, mailboxId, moveImap), expiry: true });
+
+const expOf = async (threadId: string, mailboxId: string) => (await threadRow(threadId, mailboxId))?.expiresAt ?? null;
+
+const setExp = (threadId: string, mailboxId: string, at: Date | null) =>
+	db
+		.update(mailboxThreads)
+		.set({ expiresAt: at })
+		.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, mailboxId)));
+
+// One more message in an existing thread, folder thread row recomputed.
+async function addMsg(f: Fixture, mailboxId: string, threadId: string, mid: string, uid: number | null = null, path = "INBOX") {
+	const [m] = await db
+		.insert(messages)
+		.values({
+			ownerId: f.user.id,
+			workspaceId: f.workspace.id,
+			mailboxId,
+			threadId,
+			messageId: mid,
+			subject: `thread ${mid}`,
+			text: "corps",
+			date: new Date(),
+			seen: false,
+			metaData: uid === null ? {} : { imap: { uid, mailboxPath: path } },
+		} as any)
+		.returning();
+	await upsertMailboxThreadItem(m.id);
+	return m.id;
+}
 
 async function main() {
 	// 1. Trash requested as "database only" by a page without sync state, synced folder:
@@ -693,6 +727,267 @@ async function main() {
 			rb.mailboxId === f.inbox.id && (await typeOf(tb.ids[0])) === "object" && (rb.metaData as any)?.imap?.mailboxPath === "INBOX" && imap.folders.get("INBOX")!.msgs.has(211),
 			`meta null, not moved by the server: put back in the Inbox, object meta (${JSON.stringify(rb.metaData)})`,
 		);
+	}
+
+	// 14. Archive for a chosen duration: the expiry travels in the job (op archive, expiresAt) and
+	//     moveMail writes it on the arrival row, in the move's transaction; any other move writes
+	//     NULL. The Trash job posted by the tick (expiry: true) checks the expiry again when it runs.
+	const X = new Date(Date.now() + 30 * 86_400_000);
+	const PAST = new Date(Date.now() - 3_600_000);
+	const same = (a: Date | null, b: Date) => !!a && a.getTime() === b.getTime();
+	{
+		const f = await createUserFixture("expiry-archive");
+		const archive = await folderOf(f, "archive", "Archive");
+		const custom = await folderOf(f, "custom", "Projects");
+		const tag = Date.now();
+
+		// a) simple path
+		const ta = await thread(f, f.inbox.id, [{ mid: `<exp-a-${tag}@x>`, uid: null }]);
+		await moveMail({ ...job([ta.id], f.inbox.id, false), op: "archive", expiresAt: X.toISOString() }, new Map());
+		assert(same(await expOf(ta.id, archive.id), X), `a) archive with an expiry, simple path: Archive row at the expiry (${await expOf(ta.id, archive.id)})`);
+
+		// b) plain archive of a thread whose source row carried an expiry
+		const tb = await thread(f, f.inbox.id, [{ mid: `<exp-b-${tag}@x>`, uid: null }]);
+		await setExp(tb.id, f.inbox.id, X);
+		await moveMail({ ...job([tb.id], f.inbox.id, false), op: "archive" }, new Map());
+		assert(!!(await threadRow(tb.id, archive.id)) && (await expOf(tb.id, archive.id)) === null, "b) archive without an expiry: Archive row without an expiry, even if the source carried one");
+
+		// c) collision: the thread already has its row in Archive (Gmail "All Mail" case)
+		const tc = await thread(f, archive.id, [{ mid: `<exp-c0-${tag}@x>`, uid: null }]);
+		await addMsg(f, f.inbox.id, tc.id, `<exp-c1-${tag}@x>`);
+		await moveMail({ ...job([tc.id], f.inbox.id, false), op: "archive", expiresAt: X.toISOString() }, new Map());
+		const rc = await threadRow(tc.id, archive.id);
+		assert(rc?.messageCount === 2 && same(rc.expiresAt, X) && !(await threadRow(tc.id, f.inbox.id)), `c) collision: arrival row merged, at the expiry (${rc?.messageCount}, ${rc?.expiresAt})`);
+
+		// c2) invalid or past date: plain archive
+		const tc2 = await thread(f, f.inbox.id, [{ mid: `<exp-c2-${tag}@x>`, uid: null }]);
+		await moveMail({ ...job([tc2.id], f.inbox.id, false), op: "archive", expiresAt: PAST.toISOString() }, new Map());
+		assert(!!(await threadRow(tc2.id, archive.id)) && (await expOf(tc2.id, archive.id)) === null, "c2) past expiry: archive without an expiry");
+
+		// d) move out of Archive (custom folder, then back to the Inbox)
+		const td = await thread(f, archive.id, [{ mid: `<exp-d-${tag}@x>`, uid: null }]);
+		await setExp(td.id, archive.id, X);
+		await moveMail({ threadId: td.id, threadIds: [td.id], mailboxId: archive.id, op: "move", toMailboxId: custom.id, moveImap: false, expiresAt: X.toISOString() }, new Map());
+		assert(!!(await threadRow(td.id, custom.id)) && (await expOf(td.id, custom.id)) === null, "d) move to a custom folder: expiry NULL (expiresAt ignored outside Archive)");
+		const td2 = await thread(f, archive.id, [{ mid: `<exp-d2-${tag}@x>`, uid: null }]);
+		await setExp(td2.id, archive.id, X);
+		await moveMail({ threadId: td2.id, threadIds: [td2.id], mailboxId: archive.id, op: "move", toMailboxId: f.inbox.id, moveImap: false }, new Map());
+		assert(!!(await threadRow(td2.id, f.inbox.id)) && (await expOf(td2.id, f.inbox.id)) === null, "d) unarchive: Inbox row without an expiry");
+
+		// f) trigger: star on a row with an expiry, expiry written on a starred row
+		const tf = await thread(f, archive.id, [{ mid: `<exp-f-${tag}@x>`, uid: null }]);
+		await setExp(tf.id, archive.id, X);
+		await db.update(mailboxThreads).set({ starred: true }).where(and(eq(mailboxThreads.threadId, tf.id), eq(mailboxThreads.mailboxId, archive.id)));
+		assert((await expOf(tf.id, archive.id)) === null, "f) star set: expiry NULL");
+		await setExp(tf.id, archive.id, X);
+		assert((await expOf(tf.id, archive.id)) === null, "f) expiry written on a starred row: stays NULL");
+
+		// g) message of the same thread in the Inbox: Archive row expiry cleared;
+		//    a message of the thread in Sent does not clear it
+		const tg = await thread(f, archive.id, [{ mid: `<exp-g-${tag}@x>`, uid: null }]);
+		await setExp(tg.id, archive.id, X);
+		await addMsg(f, f.sent.id, tg.id, `<exp-g-sent-${tag}@x>`);
+		assert(same(await expOf(tg.id, archive.id), X), "g) message of the thread in Sent: expiry kept");
+		await addMsg(f, f.inbox.id, tg.id, `<exp-g-inbox-${tag}@x>`);
+		assert((await expOf(tg.id, archive.id)) === null, "g) message of the thread in the Inbox: Archive row expiry NULL");
+	}
+
+	// 14 e) MOVE refused by the server during an archive with an expiry: row back in the source,
+	//     without an expiry (Inbox source, and custom folder source, where the Inbox does not clear it).
+	for (const src of ["Inbox", "Projects"] as const) {
+		const f = await createUserFixture(`expiry-refuse-${src}`);
+		const archive = await folderOf(f, "archive", "Archive");
+		const from = src === "Inbox" ? f.inbox : await folderOf(f, "custom", "Projects");
+		const path = src === "Inbox" ? "INBOX" : "Projects";
+		await syncRow(f, from.id, 20);
+		await syncRow(f, archive.id, 9);
+		const mid = `<exp-e-${src}-${Date.now()}@x>`;
+		const imap = new FakeStalwart({ [path]: { uidNext: 21, msgs: [[11, mid]] }, Archive: { uidNext: 10, msgs: [] } });
+		imap.refuseMove = true;
+		const te = await thread(f, from.id, [{ mid, uid: 11, path }]);
+		await expectThrow(
+			() => moveMail({ ...job([te.id], from.id, true), op: "archive", expiresAt: X.toISOString() }, on(f, imap)),
+			/not moved over IMAP/,
+			`e) ${src}: MOVE refused, the job fails`,
+		);
+		const back = await threadRow(te.id, from.id);
+		assert(!!back && back.expiresAt === null && !(await threadRow(te.id, archive.id)), `e) ${src}: row back in the source, expiry NULL (${back?.expiresAt})`);
+	}
+
+	// 14 h) tick job (expiry: true) on a due thread: in Trash, over IMAP too, expiry NULL;
+	//     messageIds ignored (the whole thread leaves).
+	{
+		const f = await createUserFixture("expiry-due");
+		const archive = await folderOf(f, "archive", "Archive");
+		const trash = await trashOf(f);
+		await syncRow(f, archive.id, 50);
+		await syncRow(f, trash.id, 0);
+		const m1 = `<exp-h1-${Date.now()}@x>`;
+		const m2 = `<exp-h2-${Date.now()}@x>`;
+		const imap = new FakeStalwart({ Archive: { uidNext: 51, msgs: [[40, m1], [41, m2]] }, "Deleted Items": { uidNext: 1, msgs: [] } });
+		const th = await thread(f, archive.id, [{ mid: m1, uid: 40, path: "Archive" }, { mid: m2, uid: 41, path: "Archive" }]);
+		await setExp(th.id, archive.id, PAST);
+		await moveMail({ ...expiryJob([th.id], archive.id, true), messageIds: [th.ids[0]] }, on(f, imap));
+		const rows = await msgRows(th.ids);
+		assert(rows.length === 2 && rows.every((r) => r.mailboxId === trash.id), "h) due thread: all its messages in Trash (messageIds ignored)");
+		assert(imap.folders.get("Archive")!.msgs.size === 0 && imap.folders.get("Deleted Items")!.msgs.size === 2, "h) due thread: moved over IMAP");
+		const tr = await threadRow(th.id, trash.id);
+		assert(!!tr && tr.expiresAt === null && !(await threadRow(th.id, archive.id)), `h) due thread: Trash row, expiry NULL (${tr?.expiresAt})`);
+	}
+
+	// 14 i) tick job on a thread whose expiry was cleared, is in the future, has a sister Inbox row,
+	//     or whose source is not Archive: nothing moves.
+	{
+		const f = await createUserFixture("expiry-not-due");
+		const archive = await folderOf(f, "archive", "Archive");
+		const trash = await trashOf(f);
+		const tag = Date.now();
+		const cleared = await thread(f, archive.id, [{ mid: `<exp-i1-${tag}@x>`, uid: null }]);
+		const future = await thread(f, archive.id, [{ mid: `<exp-i2-${tag}@x>`, uid: null }]);
+		await setExp(future.id, archive.id, X);
+		const sister = await thread(f, archive.id, [{ mid: `<exp-i3-${tag}@x>`, uid: null }]);
+		const sisterInbox = await addMsg(f, f.inbox.id, sister.id, `<exp-i3-inbox-${tag}@x>`);
+		await setExp(sister.id, archive.id, PAST);
+		await moveMail(expiryJob([cleared.id, future.id, sister.id], archive.id, false), new Map());
+		const rows = await msgRows([...cleared.ids, ...future.ids, ...sister.ids]);
+		assert(rows.every((r) => r.mailboxId === archive.id), "i) cleared expiry, future, or sister Inbox row: nothing leaves");
+		const [si] = await msgRows([sisterInbox]);
+		assert(si.mailboxId === f.inbox.id, "i) the thread's Inbox message stays in the Inbox");
+		assert(
+			!(await threadRow(cleared.id, trash.id)) && !(await threadRow(future.id, trash.id)) && !(await threadRow(sister.id, trash.id)),
+			"i) no row in Trash",
+		);
+		const inboxDue = await thread(f, f.inbox.id, [{ mid: `<exp-i4-${tag}@x>`, uid: null }]);
+		await setExp(inboxDue.id, f.inbox.id, PAST);
+		await moveMail(expiryJob([inboxDue.id], f.inbox.id, false), new Map());
+		const [ri] = await msgRows(inboxDue.ids);
+		assert(ri.mailboxId === f.inbox.id, "i) source other than Archive: nothing leaves");
+	}
+
+	// 14 j) tick job, MOVE refused then partial: the Archive row keeps its expiry (otherwise the
+	//     replayed job would find nothing and the thread would stay in Archive without an expiry, with
+	//     no trace), and the replayed job finishes the work.
+	{
+		const f = await createUserFixture("expiry-retry");
+		const archive = await folderOf(f, "archive", "Archive");
+		const trash = await trashOf(f);
+		await syncRow(f, archive.id, 50);
+		await syncRow(f, trash.id, 0);
+		const m1 = `<exp-j1-${Date.now()}@x>`;
+		const m2 = `<exp-j2-${Date.now()}@x>`;
+		const imap = new FakeStalwart({ Archive: { uidNext: 51, msgs: [[40, m1], [41, m2]] }, "Deleted Items": { uidNext: 1, msgs: [] } });
+		const tj = await thread(f, archive.id, [{ mid: m1, uid: 40, path: "Archive" }, { mid: m2, uid: 41, path: "Archive" }]);
+		await setExp(tj.id, archive.id, PAST);
+		imap.refuseMove = true;
+		await expectThrow(() => moveMail(expiryJob([tj.id], archive.id, true), on(f, imap)), /2 message\(s\) not moved over IMAP/, "j) MOVE refused: the job fails");
+		assert(same(await expOf(tj.id, archive.id), PAST), `j) MOVE refused: the Archive row keeps its expiry (${await expOf(tj.id, archive.id)})`);
+		imap.refuseMove = false;
+		imap.skipOnMove.add(41);
+		await expectThrow(() => moveMail(expiryJob([tj.id], archive.id, true), on(f, imap)), /1 message\(s\) not moved over IMAP/, "j) partial MOVE: the job fails");
+		assert(same(await expOf(tj.id, archive.id), PAST), `j) partial MOVE: the recomputed Archive row keeps its expiry (${await expOf(tj.id, archive.id)})`);
+		assert((await expOf(tj.id, trash.id)) === null, "j) partial MOVE: the Trash row has no expiry");
+		imap.skipOnMove.clear();
+		await moveMail(expiryJob([tj.id], archive.id, true), on(f, imap));
+		const rows = await msgRows(tj.ids);
+		assert(rows.every((r) => r.mailboxId === trash.id) && !(await threadRow(tj.id, archive.id)), "j) replayed job: the thread is in Trash");
+	}
+
+	// 14 k) star set while the tick job runs (between the check and the transaction, where the
+	//     worker waits for the IMAP connection): the transaction checks again under lock, nothing leaves.
+	{
+		const f = await createUserFixture("expiry-race");
+		const archive = await folderOf(f, "archive", "Archive");
+		const trash = await trashOf(f);
+		const tk = await thread(f, archive.id, [{ mid: `<exp-k-${Date.now()}@x>`, uid: null }]);
+		await setExp(tk.id, archive.id, PAST);
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		let held!: () => void;
+		const holding = new Promise<void>((r) => (held = r));
+		const star = db.transaction(async (tx) => {
+			await tx.update(mailboxThreads).set({ starred: true }).where(and(eq(mailboxThreads.threadId, tk.id), eq(mailboxThreads.mailboxId, archive.id)));
+			held();
+			await gate;
+		});
+		await holding;
+		const mv = moveMail(expiryJob([tk.id], archive.id, false), new Map());
+		let waited = false;
+		for (let i = 0; i < 100 && !waited; i++) {
+			const [w] = await db.execute(sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`);
+			waited = Number((w as any)?.n) > 0;
+			if (!waited) await new Promise((r) => setTimeout(r, 50));
+		}
+		assert(waited, "k) the job waits for the lock on the starred row");
+		release();
+		await star;
+		await mv;
+		const [rk] = await msgRows(tk.ids);
+		assert(rk.mailboxId === archive.id && !(await threadRow(tk.id, trash.id)), "k) star set during the job: the thread stays in Archive");
+	}
+
+	// 14 l) star set outside kurrier (phone, Gmail web) on an already archived thread: IDLE only
+	//     follows the INBOX, the database ignores it. The tick job reads the flags before the MOVE:
+	//     a thread with a \Flagged message stays in Archive, starred, without an expiry, without
+	//     failing the job; the other threads leave. All threads starred: no MOVE.
+	{
+		const f = await createUserFixture("expiry-flagged");
+		const archive = await folderOf(f, "archive", "Archive");
+		const trash = await trashOf(f);
+		await syncRow(f, archive.id, 50);
+		await syncRow(f, trash.id, 0);
+		const m1 = `<exp-l1-${Date.now()}@x>`;
+		const m2 = `<exp-l2-${Date.now()}@x>`;
+		const m3 = `<exp-l3-${Date.now()}@x>`;
+		const m0 = `<exp-l0-${Date.now()}@x>`; // database only: absent from the server
+		const imap = new FakeStalwart({ Archive: { uidNext: 51, msgs: [[40, m1], [41, m2], [42, m3]] }, "Deleted Items": { uidNext: 1, msgs: [] } });
+		imap.flagged.add(m2);
+		const tl = await thread(f, archive.id, [{ mid: m1, uid: 40, path: "Archive" }, { mid: m2, uid: 41, path: "Archive" }, { mid: m0, uid: 39, path: "Archive" }]);
+		const tm = await thread(f, archive.id, [{ mid: m3, uid: 42, path: "Archive" }]);
+		await setExp(tl.id, archive.id, PAST);
+		await setExp(tm.id, archive.id, PAST);
+		await moveMail(expiryJob([tl.id, tm.id], archive.id, true), on(f, imap));
+		const rl = await msgRows(tl.ids);
+		assert(rl.length === 3 && rl.every((r) => r.mailboxId === archive.id), "l) thread starred elsewhere: its messages stay in Archive in the database, the one absent from the server too");
+		assert(rl.find((r) => r.messageId === m2)?.flagged === true && rl.find((r) => r.messageId === m1)?.flagged === false, "l) thread starred elsewhere: the \\Flagged message is starred in the database, the other is not");
+		const kept = await threadRow(tl.id, archive.id);
+		assert(!!kept && kept.starred === true && kept.expiresAt === null, `l) thread starred elsewhere: Archive row starred, expiry NULL (${kept?.starred} ${kept?.expiresAt})`);
+		assert(!(await threadRow(tl.id, trash.id)), "l) thread starred elsewhere: no row in Trash");
+		const sv = imap.folders.get("Archive")!.msgs;
+		assert(sv.get(40) === m1 && sv.get(41) === m2 && sv.size === 2, "l) thread starred elsewhere: nothing of this thread moved over IMAP");
+		const [rm] = await msgRows(tm.ids);
+		assert(rm.mailboxId === trash.id && [...imap.folders.get("Deleted Items")!.msgs.values()].includes(m3), "l) the other thread of the batch goes to Trash, over IMAP too");
+
+		// Every thread of the batch starred elsewhere: no MOVE sent, the job succeeds.
+		const m4 = `<exp-l4-${Date.now()}@x>`;
+		imap.folders.get("Archive")!.msgs.set(43, m4);
+		imap.flagged.add(m4);
+		const tn = await thread(f, archive.id, [{ mid: m4, uid: 43, path: "Archive" }]);
+		await setExp(tn.id, archive.id, PAST);
+		const before = imap.moves;
+		await moveMail(expiryJob([tn.id], archive.id, true), on(f, imap));
+		assert(imap.moves === before, `l) all threads starred: no MOVE (${imap.moves - before})`);
+		const rn = await threadRow(tn.id, archive.id);
+		assert(!!rn && rn.starred === true && rn.expiresAt === null && !(await threadRow(tn.id, trash.id)), "l) all threads starred: thread in Archive, starred, expiry NULL");
+		// The next tick no longer picks it up.
+		assert((await dueExpiredThreads(db, { now: new Date(), mailboxId: archive.id })).every((t) => t.threadId !== tn.id && t.threadId !== tl.id), "l) starred threads: no longer due for the tick");
+
+		// Rollback: thread starred elsewhere and an unstarred thread, MOVE refused. Only the second
+		// counts in the job failure and keeps its expiry; the first is starred, without an expiry.
+		const m5 = `<exp-l5-${Date.now()}@x>`;
+		const m6 = `<exp-l6-${Date.now()}@x>`;
+		imap.folders.get("Archive")!.msgs.set(44, m5);
+		imap.folders.get("Archive")!.msgs.set(45, m6);
+		imap.flagged.add(m5);
+		const tp = await thread(f, archive.id, [{ mid: m5, uid: 44, path: "Archive" }]);
+		const tq = await thread(f, archive.id, [{ mid: m6, uid: 45, path: "Archive" }]);
+		await setExp(tp.id, archive.id, PAST);
+		await setExp(tq.id, archive.id, PAST);
+		imap.refuseMove = true;
+		await expectThrow(() => moveMail(expiryJob([tp.id, tq.id], archive.id, true), on(f, imap)), /1 message\(s\) not moved over IMAP/, "l) MOVE refused: only the unstarred thread fails the job");
+		imap.refuseMove = false;
+		const rp = await threadRow(tp.id, archive.id);
+		assert(!!rp && rp.starred === true && rp.expiresAt === null && !(await threadRow(tp.id, trash.id)), "l) MOVE refused: thread starred elsewhere in Archive, starred, expiry NULL");
+		assert(same(await expOf(tq.id, archive.id), PAST) && !(await threadRow(tq.id, trash.id)), `l) MOVE refused: the other thread comes back to Archive with its expiry (${await expOf(tq.id, archive.id)})`);
 	}
 }
 

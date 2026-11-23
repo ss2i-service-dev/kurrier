@@ -1,9 +1,10 @@
 import { db, mailboxes, mailboxSync, messages, mailboxThreads } from "@db";
 import { upsertMailboxThreadItem } from "@common";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { ImapFlow } from "imapflow";
 import { initSmtpClient } from "./imap-client";
 import {
+	parseExpiry,
 	planMessageMove,
 	cursorAtTop,
 	destCursorAfterMove,
@@ -15,6 +16,7 @@ import {
 	type DestEnvelope,
 } from "@common";
 import { resolveUids, type UidRow } from "./imap-resolve-uids";
+import { dueExpiredThreads } from "../mail-expiry";
 
 type MoveJob = {
 	threadId: string;
@@ -31,12 +33,21 @@ type MoveJob = {
 	// message in the source folder moves entirely. Without it (all existing callers), the whole
 	// thread moves. `messageId` stays ignored.
 	messageIds?: string[];
+	// Archive for a chosen duration: ISO expiry of an archive (op archive), written on the
+	// destination row only if the destination folder is the archive and the date is valid (see
+	// parseExpiry); `expiry` marks the Trash job posted by mail:expire-tick.
+	expiresAt?: string | null;
+	expiry?: boolean;
 };
+
+// Tick job: the expiry changed between the check at the start and the transaction.
+class ExpiryChanged extends Error {}
 
 export const moveMail = async (
 	data: MoveJob,
 	imapInstances: Map<string, ImapFlow>,
-) => {
+	expiryRetry = 0,
+): Promise<void> => {
 	const {
 		threadId,
 		threadIds: batchIds,
@@ -45,7 +56,7 @@ export const moveMail = async (
 		toMailboxId,
 	} = data;
 
-	const ids = (batchIds?.length ? batchIds : [threadId]).map(String).filter(Boolean);
+	let ids = (batchIds?.length ? batchIds : [threadId]).map(String).filter(Boolean);
 	if (!ids.length) return;
 
 	// Source mailbox
@@ -54,6 +65,16 @@ export const moveMail = async (
 		.from(mailboxes)
 		.where(eq(mailboxes.id, fromMailboxId));
 	if (!srcMailbox) return;
+
+	// Tick job: only the threads still due leave (starred, back in the Inbox, expiry cleared or
+	// pushed back since the tick: nothing), entirely (messageIds ignored). Checked again under
+	// lock in the transaction.
+	const now = new Date();
+	if (data.expiry) {
+		if (srcMailbox.kind !== "archive" || op !== "trash") return;
+		ids = (await dueExpiredThreads(db, { now, mailboxId: fromMailboxId, threadIds: ids })).map((t) => t.threadId);
+		if (!ids.length) return;
+	}
 
 	// Destination mailbox
 	let destMailboxRow: typeof mailboxes.$inferSelect | undefined;
@@ -97,6 +118,10 @@ export const moveMail = async (
 	// "Trash -> Trash" (Delete clicked from the trash) has nothing to move.
 	if (destMailboxRow.id === fromMailboxId) return;
 
+	// Expiry of the destination row, written in the move's transaction; any other move (or an
+	// invalid, past date) writes NULL.
+	const exp = destMailboxRow.kind === "archive" ? parseExpiry(data.expiresAt, new Date()) : null;
+
 	const destPath: string =
 		(destMailboxRow.metaData as any)?.imap?.path ?? destMailboxRow.name;
 
@@ -118,7 +143,7 @@ export const moveMail = async (
 	if (threadMsgs.length === 0) return;
 
 	// Message granularity: only the requested messages are moved.
-	const plan = data.messageIds?.length
+	const plan = data.messageIds?.length && !data.expiry
 		? planMessageMove(threadMsgs, data.messageIds)
 		: null;
 	if (plan && !plan.messageIds.length) return;
@@ -178,7 +203,8 @@ export const moveMail = async (
 	// move is put back in the source folder in the database (moveGroupOnImap), instead of
 	// letting the database lie.
 	const dupIds = new Set<string>();
-	await db.transaction(async (tx) => {
+	const srcExpiry = new Map<string, Date>();
+	const expiryChanged = await db.transaction(async (tx) => {
 		// Copy already present at the destination (same Message-ID: message sent to self, Sent
 		// copy already filed there): the unique index (mailbox_id, message_id) would make the whole
 		// job fail. The source row is deleted in the database, the destination copy stands for it;
@@ -237,13 +263,26 @@ export const moveMail = async (
 						),
 			);
 
+		// Tick job: expiry checked again under lock, after the messages (same lock order as the
+		// star on the web side: messages, then threads). Starred, message arrived in the Inbox or
+		// expiry changed since the start of the job: everything is rolled back and the job starts
+		// over, its start keeps only what is still due. The expiry read back is used to put it on
+		// the Archive row again if the server refuses the MOVE (resettleThread).
+		if (data.expiry) {
+			const still = await dueExpiredThreads(tx, { now, mailboxId: fromMailboxId, threadIds: ids, forUpdate: true });
+			if (still.length !== ids.length) throw new ExpiryChanged();
+			for (const t of still) srcExpiry.set(t.threadId, t.expiresAt);
+		}
+
 		if (plan) {
 			// Thread summaries are per folder: the destination's are recomputed, the source's too
 			// (partial thread) or deleted (thread moved entirely).
-			for (const threadId of [...plan.fullThreadIds, ...plan.partialThreadIds]) {
+			const touched = [...plan.fullThreadIds, ...plan.partialThreadIds];
+			for (const threadId of touched) {
 				await refreshThreadIn(tx, threadId, destMailboxRow.id);
 				await refreshThreadIn(tx, threadId, fromMailboxId);
 			}
+			await setArrivalExpiry(tx, touched, destMailboxRow.id, exp);
 			return;
 		}
 
@@ -270,6 +309,7 @@ export const moveMail = async (
 				.set({
 					mailboxId: destMailboxRow.id,
 					mailboxSlug: op === "move" ? (destMailboxRow.slug ?? "custom") : op,
+					expiresAt: exp,
 					updatedAt: new Date(),
 				})
 				.where(
@@ -289,7 +329,18 @@ export const moveMail = async (
 		for (const t of new Set([...clash, ...dupThreads])) {
 			await refreshThreadIn(tx, t, destMailboxRow.id);
 		}
-	});
+		await setArrivalExpiry(tx, [...clash], destMailboxRow.id, exp);
+	}).then(
+		() => false,
+		(err) => {
+			if (err instanceof ExpiryChanged) return true;
+			throw err;
+		},
+	);
+	if (expiryChanged) {
+		if (expiryRetry >= 3) throw new Error(`[mail:move] expiries changed during the job (${fromMailboxId}): nothing moved, replayed later`);
+		return moveMail(data, imapInstances, expiryRetry + 1);
+	}
 
 	if (!moveImap) return;
 	if (!byPath.size || !client) {
@@ -306,6 +357,8 @@ export const moveMail = async (
 		movingIds: new Set(toMove.map((m) => m.id)),
 		dupIds,
 		threadOf: new Map(toMove.map((m) => [m.id, m.threadId])),
+		srcExpiry,
+		expiry: !!data.expiry,
 	};
 	let reverted = 0;
 	for (const g of byPath.values()) reverted += await moveGroupOnImap(client, g, ctx);
@@ -335,6 +388,9 @@ type MoveCtx = {
 	// in the transaction, nothing to put back in the source.
 	dupIds: Set<string>;
 	threadOf: Map<string, string>;
+	// Tick job: expiry of each thread in the source Archive.
+	srcExpiry: Map<string, Date>;
+	expiry: boolean;
 };
 
 /**
@@ -359,7 +415,8 @@ async function moveGroupOnImap(
 	g: { path: string; rows: UidRow[] },
 	ctx: MoveCtx,
 ): Promise<number> {
-	const { path: srcPath, rows } = g;
+	const srcPath = g.path;
+	let rows = g.rows;
 	const tag = `${ctx.src.identityId} ${srcPath} -> ${ctx.destPath}`;
 	const rowById = new Map(rows.map((r) => [r.id, r]));
 	const isDup = (id: string) => ctx.dupIds.has(id);
@@ -386,6 +443,32 @@ async function moveGroupOnImap(
 		const absent = new Set<string>();
 		const wanted = await resolveUids(client, rows, absent);
 		for (const [uid, id] of wanted) if (!srcUid.has(id)) srcUid.set(id, uid);
+
+		// Tick job, star set outside the app (phone, Gmail web) on an already archived thread. IDLE
+		// only follows the INBOX and the sync only reads new UIDs: the database does not know it.
+		// Flags are read here, under the lock, before the MOVE: a thread with a \Flagged message
+		// does not leave, none of its messages (found or not); it is put back in the source in the
+		// database, starred, without expiry, and does not count as a failure of the job. Empty
+		// batch afterwards: no MOVE. Read error: catch, everything is put back.
+		if (ctx.expiry && wanted.size) {
+			const starIds = [...(await flaggedAt(client, [...wanted.keys()]))].map((u) => wanted.get(u)!);
+			const keep = new Set(starIds.map((id) => ctx.threadOf.get(id)));
+			if (keep.size) {
+				const kept = rows.filter((r) => keep.has(ctx.threadOf.get(r.id)));
+				await revertToSource(
+					kept.filter((r) => !isDup(r.id)).map((r) => ({ id: r.id, uid: srcUid.get(r.id) ?? (absent.has(r.id) ? 0 : r.uid) })),
+					srcPath,
+					ctx,
+					starIds,
+				);
+				for (const [uid, id] of wanted) if (keep.has(ctx.threadOf.get(id))) wanted.delete(uid);
+				rows = rows.filter((r) => !keep.has(ctx.threadOf.get(r.id)));
+				console.warn(
+					`[mail:move] ${keep.size} thread(s) starred on the server (\\Flagged) in ${srcPath} (${tag}): expiry cleared, left in the source, starred in the database`,
+					[...keep].slice(0, 20),
+				);
+			}
+		}
 
 		// Absence from the source PROVEN (folder read in full): the message is no longer on the
 		// server (deleted from another client, Gmail emptying its Spam), only the database still
@@ -579,6 +662,18 @@ async function readArrived(
 	return [...out].map(([uid, messageId]) => ({ uid, messageId }));
 }
 
+// UIDs of the selected folder that carry \Flagged.
+async function flaggedAt(client: ImapFlow, uids: number[]) {
+	const out = new Set<number>();
+	const list = [...new Set(uids.map(Number))].filter((u) => u > 0);
+	for (const part of chunks(list, 500)) {
+		for await (const m of client.fetch(part.join(","), { uid: true, flags: true }, { uid: true })) {
+			if (m.flags?.has("\\Flagged")) out.add(Number(m.uid));
+		}
+	}
+	return out;
+}
+
 // UID -> normalized Message-ID, for UIDs of the open folder (absent: not in the Map).
 async function envelopesAt(client: ImapFlow, uids: number[]) {
 	const out = new Map<number, string>();
@@ -657,10 +752,13 @@ async function setUids(pairs: Array<[string, number]>, mailboxId: string) {
 
 // Puts back in the source folder, in the database, messages the server did not move
 // (source path and UID), then recomputes the thread rows of both folders.
+// starIds (tick job): messages \Flagged on the server, starred in the database in the same
+// transaction, then their thread (the trigger clears the expiry), without taking the expiry again.
 async function revertToSource(
 	items: Array<{ id: string; uid: number }>,
 	srcPath: string,
 	ctx: MoveCtx,
+	starIds: string[] = [],
 ): Promise<number> {
 	if (!items.length) return 0;
 	let n = 0;
@@ -686,8 +784,21 @@ async function revertToSource(
 			`);
 			n += (res as unknown as unknown[]).length;
 		}
+		// Messages before the thread row: same lock order as the web side star.
+		if (starIds.length) {
+			await tx.update(messages).set({ flagged: true, updatedAt: new Date() }).where(inArray(messages.id, starIds));
+		}
+		const starred = [...new Set(starIds.map((id) => ctx.threadOf.get(id)))].filter(Boolean) as string[];
 		const threadIds = [...new Set(items.map((it) => ctx.threadOf.get(it.id)))].filter(Boolean) as string[];
-		for (const t of threadIds) await resettleThread(tx, t, ctx.dest, ctx.src);
+		for (const t of threadIds) {
+			await resettleThread(tx, t, ctx.dest, ctx.src, starred.includes(t) ? null : (ctx.srcExpiry.get(t) ?? null));
+		}
+		if (starred.length) {
+			await tx
+				.update(mailboxThreads)
+				.set({ starred: true, updatedAt: new Date() })
+				.where(and(inArray(mailboxThreads.threadId, starred), eq(mailboxThreads.mailboxId, ctx.src.id)));
+		}
 	});
 	return n;
 }
@@ -717,6 +828,7 @@ async function resettleThread(
 	threadId: string,
 	from: typeof mailboxes.$inferSelect,
 	to: typeof mailboxes.$inferSelect,
+	expiresAt: Date | null = null,
 ) {
 	const has = async (mailboxId: string) =>
 		(
@@ -735,11 +847,36 @@ async function resettleThread(
 	if (!toRow && !(await has(from.id))) {
 		await tx
 			.update(mailboxThreads)
-			.set({ mailboxId: to.id, mailboxSlug: to.slug ?? null, updatedAt: new Date() })
+			.set({ mailboxId: to.id, mailboxSlug: to.slug ?? null, expiresAt: null, updatedAt: new Date() })
 			.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, from.id)));
 	}
 	await refreshThreadIn(tx, threadId, to.id);
 	await refreshThreadIn(tx, threadId, from.id);
+	// Tick job refused or partial: the row that came back (or was recreated) in the Archive takes
+	// its expiry again, otherwise the replayed job would find nothing to do and the thread would
+	// stay in the Archive without an expiry. Any other return: no expiry.
+	if (expiresAt) {
+		await tx
+			.update(mailboxThreads)
+			.set({ expiresAt })
+			.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, to.id)));
+	}
+}
+
+// Expiry of the destination rows that were recomputed (clash, message granularity): the job's,
+// otherwise none.
+async function setArrivalExpiry(tx: any, threadIds: string[], mailboxId: string, exp: Date | null) {
+	if (!threadIds.length) return;
+	await tx
+		.update(mailboxThreads)
+		.set({ expiresAt: exp })
+		.where(
+			and(
+				inArray(mailboxThreads.threadId, threadIds),
+				eq(mailboxThreads.mailboxId, mailboxId),
+				exp ? undefined : isNotNull(mailboxThreads.expiresAt),
+			),
+		);
 }
 
 // deltaFetch cursor of the destination folder (see cursorAtTop / destCursorAfterMove): read

@@ -6,7 +6,7 @@
 //   node_modules/.bin/tsx --tsconfig apps/worker/tsconfig.json apps/worker/test/thread-links.ts
 import { assert } from "./mcp-test-env";
 import { createUserFixture } from "./mcp-fixtures";
-import { db, mailboxThreads, messages, threads } from "@db";
+import { db, mailboxes, mailboxThreads, messages, threads } from "@db";
 import { and, eq, inArray } from "drizzle-orm";
 import { simpleParser } from "mailparser";
 import { storeMessageInThread } from "../lib/message-payload-parser";
@@ -134,6 +134,21 @@ async function main() {
 		refused = true;
 	}
 	assert(refused, "merge_threads refuses two owners");
+
+	// 7. Archive for a chosen duration: a merge cancels the expiry of the merged thread (safe
+	//    direction: the thread is kept, nothing goes to Trash).
+	const [arch] = await db
+		.insert(mailboxes)
+		.values({ ownerId: a.user.id, workspaceId: a.workspace.id, identityId: a.identity.id, kind: "archive", name: "Archive", slug: "archive", isDefault: false })
+		.returning();
+	const [P, R] = [id("exp-p"), id("exp-r")];
+	await ingest(a, arch.id, raw({ id: R, subject: "Re: expiry", inReplyTo: P, refs: [P], date: "Tue, 03 Nov 2026 11:00:00 +0000" }), true);
+	const [rRow] = await db.select().from(messages).where(and(eq(messages.ownerId, a.user.id), eq(messages.messageId, R)));
+	await db.update(mailboxThreads).set({ expiresAt: new Date(Date.now() + 30 * 86_400_000) }).where(eq(mailboxThreads.threadId, rRow.threadId));
+	const placedP = await ingest(a, arch.id, raw({ id: P, subject: "expiry", date: "Tue, 03 Nov 2026 10:00:00 +0000" }), true);
+	assert(placedP?.merged === true, "expiry: the parent arrives after the reply, the two threads merge");
+	const expRows = await db.select().from(mailboxThreads).where(eq(mailboxThreads.threadId, placedP!.threadId));
+	assert(expRows.length === 1 && expRows[0].messageCount === 2 && expRows[0].expiresAt === null, `expiry: Archive row of the merged thread without an expiry (${expRows.map((r) => r.expiresAt)})`);
 }
 
 main()

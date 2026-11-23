@@ -224,6 +224,15 @@ export async function upsertMailboxThreadItem(
 			},
 		});
 
+	// A message of the thread in the Inbox (reply received, unarchive) clears the expiry of its
+	// rows for this identity: the thread is back.
+	if (mbx.kind === "inbox") {
+		await dbh.execute(sql`
+			update mailbox_threads set expires_at = null
+			where thread_id = ${msg.threadId}::uuid and identity_id = ${mbx.identityId}::uuid and expires_at is not null
+		`);
+	}
+
 	// A sent reply bumps the thread in the other folders it lives in (Inbox, custom
 	// folders), as Gmail and Outlook do. Without it the message only counts for Sent
 	// and the thread keeps its place in the list. Also applies to a reply sent from

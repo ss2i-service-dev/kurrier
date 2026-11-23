@@ -72,5 +72,8 @@ export async function mergeLinkedThreads(
 	);
 	const moved = Number((res as any).rows?.[0]?.moved ?? (res as any)[0]?.moved ?? 0);
 	if (moved < 0) throw new Error(`[thread-links] target ${target} not found under lock`);
+	// A merged thread receives messages the user did not mean to expire: expiry cleared (the
+	// thread is kept).
+	await tx.execute(sql`update mailbox_threads set expires_at = null where thread_id = ${target}::uuid and expires_at is not null`);
 	return { threadId: target, merged: true };
 }

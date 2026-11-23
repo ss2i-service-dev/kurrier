@@ -792,6 +792,10 @@ export const mailboxThreads = pgTable(
 			null,
 		),
 
+		// community_009: expiry of an archived thread, at that date it goes to Trash. Set only
+		// by mail:move (op archive), cleared by moveMail, the starred trigger and the INBOX upsert.
+		expiresAt: timestamp("expires_at", { withTimezone: true }),
+
 		workspaceId: uuid("workspace_id")
 			.references(() => workspaces.id)
 			.notNull()
@@ -835,6 +839,9 @@ export const mailboxThreads = pgTable(
 
 		index("ix_mbth_mailbox_snoozed_until").on(t.mailboxId, t.snoozedUntil),
 		index("ix_mbth_mailbox_unsnoozed_at").on(t.mailboxId, t.unsnoozedAt),
+		index("ix_mbth_expires_at")
+			.on(t.expiresAt)
+			.where(sql`${t.expiresAt} is not null`),
 		pgPolicy("mailbox_threads_select", {
 			for: "select",
 			to: "kurrier",

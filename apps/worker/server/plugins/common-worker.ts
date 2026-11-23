@@ -7,6 +7,7 @@ import { kvDel, kvGet, kvSet } from "@common";
 import { processWebhook } from "../../lib/webhooks/message.received";
 import { and, isNull, lte } from "drizzle-orm";
 import { processRules } from "../../lib/rules/rules-processor";
+import { runExpiryTick } from "../../lib/mail-expiry";
 
 export default defineNitroPlugin(async (nitroApp) => {
 	const connection = (await getRedis()).connection;
@@ -66,6 +67,16 @@ export default defineNitroPlugin(async (nitroApp) => {
 
 					return { success: true };
 				}
+				// Archived threads with a chosen duration that reached their date: one mail:move
+				// job (Trash) per folder, in the smtp-worker queue.
+				case "mail:expire-tick": {
+					const { smtpQueue } = await getRedis();
+					const res = await runExpiryTick({
+						now: new Date(),
+						enqueue: (name, data, opts) => smtpQueue.add(name, data, opts),
+					});
+					return { success: true, ...res };
+				}
 				default:
 					return { success: true };
 			}
@@ -88,6 +99,18 @@ export default defineNitroPlugin(async (nitroApp) => {
 		{ override: true },
 	);
 
+	await scheduler.upsertJobScheduler(
+		"expire-tick-scheduler",
+		{ every: 15 * 60 * 1000 },
+		"mail:expire-tick",
+		{},
+		{
+			removeOnComplete: true,
+			removeOnFail: false,
+			attempts: 1,
+		},
+		{ override: true },
+	);
 
 	await scheduler.upsertJobScheduler(
 		"billing-sync-scheduler",

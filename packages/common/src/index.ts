@@ -16,3 +16,4 @@ export * from "./address-field";
 export * from "./schedule-send";
 export * from "./outbox-state";
 export * from "./outbox";
+export * from "./thread-expiry";

@@ -63,6 +63,7 @@ import {
 import {GetObjectCommand, PutObjectCommand} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { s3 } from "@/lib/create-s3-client";
+import { attachmentUrls } from "@/lib/attachment-links";
 
 let typeSenseClient: Client | null = null;
 function getTypeSenseClient(): Client {
@@ -324,14 +325,9 @@ export const fetchMessageAttachments = cache(async (messageId: string) => {
 	return { attachments: attachmentsList };
 });
 
-// Content-Disposition attachment with an ASCII fallback name and a UTF-8 name (RFC 6266).
-function attachmentDisposition(filename: string | null | undefined) {
-	const name = (filename || "piece-jointe").replace(/[\r\n"\\]/g, "_");
-	const ascii = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7e]/g, "_");
-	const utf8 = encodeURIComponent(name).replace(/['()*!]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-	return `attachment; filename="${ascii}"; filename*=UTF-8''${utf8}`;
-}
-
+// Stable links, signed at click time by /api/attachments/<id> (lib/attachment-links.ts).
+// Only the images referenced by cid: keep an S3 URL: the body of the message is rendered
+// apart and must load them without going through the session of the application.
 export async function getSignedUrlsForMessage(messageId: string) {
 	const { S3_BUCKET } = getServerEnv();
 	const rls = await rlsClient();
@@ -342,32 +338,17 @@ export async function getSignedUrlsForMessage(messageId: string) {
 			.where(eq(messageAttachments.messageId, messageId)),
 	);
 	const results = await Promise.all(
-		attachments.map(async (attachment) => {
-			const command = new GetObjectCommand({
-				Bucket: S3_BUCKET!,
-				Key: attachment.path!,
-			});
-
-			const url = await getSignedUrl(s3, command, { expiresIn: 300 });
-			// Second URL for the download arrow. The S3 URL is on another origin, the
-			// download attribute of <a> is ignored there: only a Content-Disposition
-			// attachment forces saving to Downloads instead of opening.
-			const downloadUrl = await getSignedUrl(
-				s3,
-				new GetObjectCommand({
-					Bucket: S3_BUCKET!,
-					Key: attachment.path!,
-					ResponseContentDisposition: attachmentDisposition(attachment.filenameOriginal),
-				}),
-				{ expiresIn: 300 },
-			);
-
-			return {
-				...attachment,
-				signedUrl: url,
-				downloadUrl,
-			};
-		}),
+		attachments.map(async (attachment) => ({
+			...attachment,
+			...attachmentUrls(attachment),
+			inlineUrl: attachment.cid
+				? await getSignedUrl(
+						s3,
+						new GetObjectCommand({ Bucket: S3_BUCKET!, Key: attachment.path! }),
+						{ expiresIn: 300 },
+					)
+				: undefined,
+		})),
 	);
 	return results;
 }

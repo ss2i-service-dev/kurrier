@@ -39,6 +39,8 @@ export type MessageAttachmentWithUrl = MessageAttachmentEntity & {
 	signedUrl: string;
 	// URL signed with Content-Disposition attachment (direct download).
 	downloadUrl?: string;
+	// Direct S3 URL of an image referenced by cid: in the body of the message.
+	inlineUrl?: string;
 };
 
 function getScrollParent(el: HTMLElement): HTMLElement {

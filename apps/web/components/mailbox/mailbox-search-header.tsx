@@ -25,7 +25,7 @@ async function MailboxSearchHeader({params}: {params: Promise<Record<string, str
     const identityLabel = identity?.value;
 
     // ss2i : une seule ligne sur mobile (marges reduites), hauteur publiee pour les barres collees dessous.
-    return <header className={"bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b px-3 py-2 md:p-4 z-50"}>
+    return <header data-ss2i-mail-header="" className={"bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b px-3 py-2 md:p-4 z-50"}>
         <MailHeaderHeight />
         <SidebarTrigger className="-ml-1" />
         <Separator

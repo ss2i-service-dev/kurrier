@@ -15,19 +15,28 @@ import React, { useLayoutEffect, useRef, useState } from "react";
 export default function ThreadPane({ threadKey, children }: { threadKey: string; children: React.ReactNode }) {
 	const anchor = useRef<HTMLDivElement>(null);
 	const pane = useRef<HTMLDivElement>(null);
-	const [box, setBox] = useState<{ left: number; width: number } | null>(null);
+	const [box, setBox] = useState<{ left: number; width: number; top: number } | null>(null);
 
 	// Position et largeur de la colonne principale, relevees sur un repere dans le flux.
+	// Haut du panneau = bas reel de la barre du haut, pas sa hauteur : un bandeau au-dessus
+	// (rappel d'agenda « Commence maintenant ») la decale, et le haut du mail passait dessous
+	// (Samuel le 23/11). Bandeau ferme ou ouvert : body change de taille, le panneau se recale.
 	useLayoutEffect(() => {
 		const el = anchor.current;
 		if (!el) return;
+		const header = document.querySelector("[data-ss2i-mail-header]");
 		const measure = () => {
 			const r = el.getBoundingClientRect();
-			setBox((b) => (b && b.left === r.left && b.width === r.width ? b : { left: r.left, width: r.width }));
+			const top = Math.max(0, header ? header.getBoundingClientRect().bottom : 0);
+			setBox((b) =>
+				b && b.left === r.left && b.width === r.width && b.top === top ? b : { left: r.left, width: r.width, top },
+			);
 		};
 		measure();
 		const ro = new ResizeObserver(measure);
 		ro.observe(el);
+		ro.observe(document.body);
+		if (header) ro.observe(header);
 		window.addEventListener("resize", measure);
 		return () => {
 			ro.disconnect();
@@ -63,7 +72,7 @@ export default function ThreadPane({ threadKey, children }: { threadKey: string;
 				ref={pane}
 				tabIndex={-1}
 				data-ss2i-thread-pane=""
-				style={box ? { left: box.left, width: box.width } : { left: 0, right: 0 }}
+				style={box ? { left: box.left, width: box.width, top: box.top } : { left: 0, right: 0 }}
 				className="fixed bottom-0 top-[var(--ss2i-mail-header-h,0px)] z-30 overflow-y-auto overscroll-contain bg-background outline-none"
 			>
 				{children}

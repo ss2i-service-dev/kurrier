@@ -57,6 +57,14 @@ test("ThreadSlot : panneau fixe a defilement propre en mode masque", () => {
 	assert.match(pane, /ResizeObserver/, "le panneau suit la largeur de la colonne (barre laterale)");
 });
 
+test("panneau cale sous le bas reel de la barre du haut, bandeau de rappel d'agenda compris (Samuel le 23/11)", () => {
+	const pane = read("components/mailbox/default/thread-pane.tsx");
+	assert.match(read("components/mailbox/mailbox-search-header.tsx"), /data-ss2i-mail-header=""/);
+	assert.match(pane, /querySelector\("\[data-ss2i-mail-header\]"\)/);
+	assert.match(pane, /getBoundingClientRect\(\)\.bottom/, "le haut du panneau suit le bas de la barre, pas sa hauteur");
+	assert.match(pane, /ro\.observe\(document\.body\)/, "bandeau ferme ou ouvert : le panneau se recale");
+});
+
 test("panneau seulement par-dessus une liste montee (chargement direct d'un fil : dans le flux, comme avant)", () => {
 	assert.match(threadSlot, /useListUnderThread\(\) === "hidden" && listMounted/);
 	assert.match(listSlot, /useMarkListMounted\(\)/);

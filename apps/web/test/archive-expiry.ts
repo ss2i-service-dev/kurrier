@@ -184,7 +184,7 @@ test("archive-for.tsx: a selection in the Archive = a single server call", () =>
 test("archive-for.tsx: does not capture the `a` shortcut; bare button: title tooltip, no text", () => {
 	const s = code("components/k/archive-for.tsx");
 	assert.ok(!/data-k-action|action=["{]\s*"?archive/.test(s), 'data-k-action="archive"');
-	assert.ok(!/data-k-shortcut/.test(s), "data-k-shortcut");
+	assert.ok(!/selection-archive"|open-archive"/.test(s), "marks of `a`");
 	assert.ok(!/<KIconButton\b[^>]*\btitle=/.test(s), "the KIconButton already has its tooltip (label)");
 	// keyboard-shortcuts.js falls back on textContent ("Archive..."): the bare button only holds the icon.
 	const bulk = /<button\b[^>]*aria-label=\{label\}[^>]*>([\s\S]*?)<\/button>/.exec(s);
@@ -205,6 +205,55 @@ test("archive-for: next to each \"Archive\" (selection, row, open mail's bar), m
 	]) {
 		assert.match(code(f), /<KArchiveFor\b/, f);
 	}
+});
+
+test("`a` untouched; Shift+A: entry of the catalog, help and script", () => {
+	const c = code("components/k/shortcuts-catalog.ts");
+	assert.match(c, /\{ id: "archive", group: "organize",[^}]*defaults: \["a"\] \}/, "archive stays on `a`");
+	assert.match(c, /\|\s*"archiveFor"/, "ShortcutId archiveFor");
+	assert.match(c, /\{ id: "archiveFor", group: "organize", en: "Archive for[^}]*defaults: \["Shift\+a"\]/, "archiveFor entry, default Shift+a");
+	assert.ok(!/expir/i.test(c), "the catalog does not talk about expiry");
+	const sh = code("public/keyboard-shortcuts.js");
+	assert.match(sh, /\["archive", \["a"\], [^\n]*onMailOrSelection\("Archive"\)\]/, "`a` untouched in the script");
+	assert.match(sh, /\["archiveFor", \["Shift\+a"\], [^\n]*archiveFor\(\)\]/, "Shift+A in the script's table");
+	assert.ok(!/getAttribute\(["']title["']\)|\[title[\]=*^$~|]/.test(sh), "never by title");
+	// The input lock is the one of `a`: the shared handler skips input fields before any action.
+	assert.match(sh, /!hasModifier\(combo\) && inInput\(e\.target\)\) return;/);
+});
+
+test("Shift+A: the menu triggers carry a data-k-shortcut mark, without text nor data-k-action", () => {
+	const s = code("components/k/archive-for.tsx");
+	assert.match(s, /shortcut\?: "open" \| "selection"/, "shortcut prop");
+	assert.match(s, /"data-k-shortcut": `\$\{shortcut\}-archive-for`/, "mark set");
+	assert.ok(!/data-k-action/.test(s), "never data-k-action");
+	for (const [f, mark] of [
+		["components/k/thread-toolbar.tsx", "open"],
+		["components/mailbox/default/email-renderer.tsx", "open"],
+		["components/k/list-header.tsx", "selection"],
+		["components/mailbox/default/mail-list-header.tsx", "selection"],
+	] as const) {
+		const c = code(f);
+		const at = c.indexOf("<KArchiveFor");
+		assert.ok(at >= 0, f);
+		assert.ok(c.slice(at, c.indexOf("/>", at + 40) + 2).includes(`shortcut="${mark}"`), `${f}: shortcut="${mark}"`);
+	}
+	// List rows carry none: `a` does not act there either (a single visible trigger per context).
+	for (const f of ["components/k/thread-row.tsx", "components/mailbox/default/webmail-list-item.tsx"]) {
+		const c = code(f);
+		const at = c.indexOf("<KArchiveFor");
+		assert.ok(!/shortcut=/.test(c.slice(at, c.indexOf("/>", at) + 2)), f);
+	}
+});
+
+test("Shift+A: tooltip \"Archive for... (Shift+A)\" in both interfaces, following the user's setting", () => {
+	const s = code("components/k/archive-for.tsx");
+	assert.match(s, /useShortcutHint\("archiveFor"\)/, "key read from the settings (useShortcutHint)");
+	assert.match(s, /const tip = /, "tooltip label");
+	assert.match(s, /\(\$\{[^}]*\}\)/, "label (key)");
+	assert.match(s, /<button\b[^>]*aria-label=\{label\}[^>]*\btitle=\{tip\}/, "bare button: title={tip}");
+	assert.match(s, /<KIconButton\b[^>]*\bshortcut=\{hint\}/, "KIconButton: key in the tooltip");
+	assert.match(s, /renderTrigger\(\{[^}]*\btip\b/, "renderTrigger receives tip");
+	assert.match(code("components/mailbox/default/email-renderer.tsx"), /renderTrigger=\{\(\{[^)]*\btip\b[^)]*\}\) => \(\s*<Tooltip label=\{tip\}/, "Mantine Tooltip: tip");
 });
 
 test("expiring view: expiring page and sidebar link under \"Snoozed\"", () => {

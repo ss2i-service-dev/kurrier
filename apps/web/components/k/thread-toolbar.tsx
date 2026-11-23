@@ -138,6 +138,7 @@ export default function ThreadToolbar({
 				threadIds={() => [threadId]}
 				starred={() => starred}
 				before={advance}
+				shortcut="open"
 			/>
 			<KIconButton
 				label={activeMailboxKind === "trash" ? "Delete permanently" : "Delete"}

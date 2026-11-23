@@ -334,6 +334,7 @@ function KListHeader({
 								return mailboxThreads.some((t) => ids.has(String(t.threadId)) && t.starred);
 							}}
 							before={clearSelection}
+							shortcut="selection"
 							bulkClassName={bulkBtn}
 						/>
 						<button type="button" onClick={markRead} className={bulkBtn} title="Mark as read">

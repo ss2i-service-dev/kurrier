@@ -498,9 +498,10 @@ function EmailRenderer({
 							threadIds={() => [String(threadId)]}
 							starred={() => !!starred}
 							before={leaveThread}
-							renderTrigger={({ label, disabled, icon }) => (
-								<Tooltip label={label} withArrow>
-									<ActionIcon variant={"subtle"} color={"gray"} aria-label={label} disabled={disabled}>
+							shortcut="open"
+							renderTrigger={({ label, tip, disabled, icon, mark }) => (
+								<Tooltip label={tip} withArrow>
+									<ActionIcon variant={"subtle"} color={"gray"} aria-label={label} disabled={disabled} {...mark}>
 										{icon(18)}
 									</ActionIcon>
 								</Tooltip>

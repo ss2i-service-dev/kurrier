@@ -360,6 +360,7 @@ function MailListHeader({
 								return mailboxThreads.some((t) => ids.has(String(t.threadId)) && t.starred);
 							}}
 							before={clearSelection}
+							shortcut="selection"
 							bulkClassName="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs hover:bg-muted"
 						/>
 						<button

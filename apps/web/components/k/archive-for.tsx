@@ -14,6 +14,7 @@ import { CalendarClock } from "lucide-react";
 import { toast } from "sonner";
 import KIconButton from "@/components/k/icon-button";
 import { mailActions, scheduleRefresh } from "@/components/k/mail-store";
+import { useShortcutHint } from "@/components/k/shortcuts-config";
 import { useModernUi } from "@/components/k/ui-context";
 import { setThreadExpiry } from "@/lib/actions/mailbox";
 import { expiryMenuOptions, pickerDate } from "@/lib/archive-for";
@@ -36,9 +37,15 @@ type Props = {
 	/** Classic interface, open mail's bar: trigger supplied by the caller (Mantine ActionIcon), icon at the wanted size. */
 	renderTrigger?: (t: {
 		label: string;
+		/** Tooltip: label and key (Shift+A) as set by the user. */
+		tip: string;
+		/** Mark read by /keyboard-shortcuts.js (Shift+A): to spread on the trigger. */
+		mark: Record<string, string>;
 		disabled: boolean;
 		icon: (size: number) => React.ReactNode;
 	}) => React.ReactElement;
+	/** Context of Shift+A (/keyboard-shortcuts.js): the open mail or the selection bar; nothing for a list row. */
+	shortcut?: "open" | "selection";
 	size?: "sm" | "md";
 };
 
@@ -52,6 +59,7 @@ export default function KArchiveFor({
 	before,
 	bulkClassName,
 	renderTrigger,
+	shortcut,
 	size = "md",
 }: Props) {
 	// The --k-* tokens only exist in the modern interface: Tailwind grey for the menu date in classic.
@@ -63,6 +71,11 @@ export default function KArchiveFor({
 	const [saving, setSaving] = useState(false);
 	const [options, setOptions] = useState(() => expiryMenuOptions(new Date()));
 	const label = inArchive ? "Expiry..." : "Archive for...";
+	const hint = useShortcutHint("archiveFor");
+	const tip = hint ? `${label} (${hint.replace(/ \+ /g, "+")})` : label;
+	// Mark read by /keyboard-shortcuts.js: Shift+A clicks the trigger of the context (never by
+	// title, never the data-k-action of `a`).
+	const mark: Record<string, string> = shortcut ? { "data-k-shortcut": `${shortcut}-archive-for` } : {};
 
 	// Dates recomputed on opening: the tab stays open for days.
 	const onMenuChange = (opened: boolean) => {
@@ -110,15 +123,17 @@ export default function KArchiveFor({
 	const trigger = renderTrigger ? (
 		renderTrigger({
 			label,
+			tip,
+			mark,
 			disabled: saving,
 			icon: (px) => (saving ? <Loader size={px - 3} color="gray" /> : <CalendarClock size={px} />),
 		})
 	) : bulkClassName ? (
-		<button type="button" aria-label={label} title={label} disabled={saving} className={bulkClassName}>
+		<button type="button" aria-label={label} title={tip} disabled={saving} className={bulkClassName} {...mark}>
 			{icon}
 		</button>
 	) : (
-		<KIconButton size={size} label={label} disabled={saving}>
+		<KIconButton size={size} label={label} shortcut={hint} disabled={saving} {...mark}>
 			{icon}
 		</KIconButton>
 	);

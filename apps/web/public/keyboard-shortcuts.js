@@ -24,6 +24,7 @@
     ["reply", ["r"], "Reply", () => click("Reply")],
     ["forward", ["f"], "Forward", () => click("Forward")],
     ["archive", ["a"], "Archive (open or selected mail)", () => onMailOrSelection("Archive")],
+    ["archiveFor", ["Shift+a"], "Archive for... (open or selected mail)", () => archiveFor()],
     ["selectAll", ["Ctrl+a"], "Select all mail in the list", () => selectAll()],
     ["delete", ["e", "#"], "Delete (open or selected mail)", () => onMailOrSelection("Delete")],
     ["unread", ["u"], "Mark as unread and return to the list", () => markUnread()],
@@ -151,6 +152,29 @@
     ).find((b) => b.offsetParent !== null);
     if (target) target.click();
     return Boolean(target);
+  };
+
+  // "Archive for..." (Shift+a): opens the KArchiveFor menu of the same context as `a`, the open
+  // mail (bar of the message being read) or the selection bar (data-k-shortcut mark set by
+  // KArchiveFor, never by title nor by the data-k-action that `a` keeps). No second menu: the
+  // trigger is clicked. A menu or dialog already open owns its keyboard: nothing happens.
+  const archiveFor = () => {
+    if (document.querySelector('[role="menu"], [role="dialog"]')) return false;
+    const target = inOpenMail()
+      ? barOfReadMessage("open-archive-for")
+      : Array.from(document.querySelectorAll('button[data-k-shortcut="selection-archive-for"]')).find(visible);
+    if (!target || target.disabled) return false;
+    target.click();
+    focusMenu(8);
+    return true;
+  };
+  // Mantine's Menu traps the focus on opening; otherwise (trigger moved, late render) it is put
+  // on the menu: arrows then Enter pick a duration.
+  const focusMenu = (tries) => {
+    const menu = Array.from(document.querySelectorAll('[role="menu"]')).find(visible);
+    if (menu) {
+      if (!menu.contains(document.activeElement)) menu.focus();
+    } else if (tries > 0) setTimeout(() => focusMenu(tries - 1), 40);
   };
 
   // Ctrl+A on a mail list: ticks the "select all" box of the header

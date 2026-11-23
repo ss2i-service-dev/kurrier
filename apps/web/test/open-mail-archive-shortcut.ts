@@ -66,6 +66,28 @@ test("single message thread, or everything below: the only or the first one", ()
 	assert.equal(pick([], 74, 894), -1);
 });
 
+test("script: Shift+A (archiveFor) aims at the bar of the message being read, like a and e", () => {
+	const sh = code("public/keyboard-shortcuts.js");
+	const af = sh.match(/const archiveFor = \(\) => \{([\s\S]*?)\n  \};/);
+	assert.ok(af, "function archiveFor");
+	assert.match(af![1], /barOfReadMessage\("open-archive-for"\)/, "open mail: bar of the message being read");
+	assert.match(af![1], /selection-archive-for/, "selection bar");
+	assert.match(af![1], /inOpenMail\(\)/, "same split as `a`: open mail or selection");
+	assert.match(af![1], /role="menu"/, "does nothing while a menu or dialog is open");
+	assert.match(af![1], /focusMenu\(/, "focus handed to the opened menu");
+	assert.match(sh, /\["archive", \["a"\], [^\n]*onMailOrSelection\("Archive"\)\]/, "`a` untouched");
+	assert.match(sh, /\["archiveFor", \["Shift\+a"\], [^\n]*archiveFor\(\)\]/, "Shift+A in the script's table");
+});
+
+test("message bar: the \"Archive for...\" trigger is marked open-archive-for, on every message", () => {
+	const r = code("components/mailbox/default/email-renderer.tsx");
+	const at = r.indexOf("<KArchiveFor");
+	assert.ok(at > 0, "KArchiveFor in the message bar");
+	const tag = r.slice(at, r.indexOf("renderTrigger", at));
+	assert.match(tag, /shortcut="open"/);
+	assert.match(r.slice(at, at + 900), /\{\.\.\.mark\}/, "mark spread on the ActionIcon");
+});
+
 if (failed) {
 	console.error(`${failed} test(s) failed`);
 	process.exit(1);

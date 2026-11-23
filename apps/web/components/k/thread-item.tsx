@@ -10,6 +10,7 @@ import {
 } from "@/lib/actions/mailbox";
 import { fetchEventPreviewItems } from "@/lib/actions/calendar";
 import { remoteImagesAllowedForContact } from "@/lib/actions/contact-images";
+import { hour24Enabled } from "@/lib/actions/hour-format";
 import { fetchDraftOriginal } from "@/lib/actions/drafts";
 import EmailViewer from "@/components/mailbox/default/email-viewer";
 import RenderInvite from "@/components/mailbox/default/render-invite";
@@ -61,6 +62,7 @@ export default async function KThreadItem({
 		remoteImagesAllowedForContact(getMessageAddress(message, "from")),
 	]);
 	const preview = attachments?.length ? await fetchEventPreviewItems(attachments, identityPublicId) : null;
+	const hour24 = preview?.calendarEvent ? await hour24Enabled() : false;
 	const inlineShownIds = Array.from(inlineImageIdsShownInBody(message.html, attachments));
 	const cidUrls = cidUrlMap(attachments);
 
@@ -80,7 +82,7 @@ export default async function KThreadItem({
 			defaultExpanded={defaultExpanded}
 			invite={
 				preview?.calendarEvent && preview?.attendees && preview?.identity ? (
-					<RenderInvite calendarEvent={preview.calendarEvent} attendees={preview.attendees ?? []} identity={preview.identity} />
+					<RenderInvite calendarEvent={preview.calendarEvent} attendees={preview.attendees ?? []} identity={preview.identity} hour24={hour24} />
 				) : null
 			}
 		>

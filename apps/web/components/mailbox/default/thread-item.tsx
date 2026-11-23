@@ -14,6 +14,7 @@ import { getPublicEnv } from "@schema";
 import { getMessageAddress, getMessageName, avatarName } from "@common/mail-client";
 import { Container } from "@/components/common/containers";
 import RenderInvite from "@/components/mailbox/default/render-invite";
+import { hour24Enabled } from "@/lib/actions/hour-format";
 import {fetchEventPreviewItems} from "@/lib/actions/calendar";
 import { remoteImagesAllowedForContact } from "@/lib/actions/contact-images";
 import { fetchDraftOriginal } from "@/lib/actions/drafts";
@@ -63,6 +64,7 @@ export default async function ThreadItem({
 
 	const attachments = await getSignedUrlsForMessage(message.id)
     const preview = await fetchEventPreviewItems(attachments, identityPublicId)
+    const hour24 = preview?.calendarEvent ? await hour24Enabled() : false;
 	// Inline images already shown in the body are not repeated under the mail; cid: URLs are resolved.
 	const inlineShownIds = Array.from(inlineImageIdsShownInBody(message.html, attachments));
 	const cidUrls = cidUrlMap(attachments);
@@ -87,7 +89,7 @@ export default async function ThreadItem({
 					</div>
 					<div className={"flex-1 min-w-0"}>
                         {preview?.calendarEvent && preview?.attendees && preview?.identity && (
-                            <RenderInvite calendarEvent={preview.calendarEvent} attendees={preview.attendees ?? []} identity={preview.identity}/>
+                            <RenderInvite calendarEvent={preview.calendarEvent} attendees={preview.attendees ?? []} identity={preview.identity} hour24={hour24}/>
                         )}
 
 						<EmailRenderer

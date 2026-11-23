@@ -11,6 +11,7 @@ import SettingsThreadOrder from "@/components/mailbox/settings/settings-thread-o
 import type { ThreadOrder } from "@/lib/actions/thread-order";
 import { setListUnderThread } from "@/lib/actions/list-under-thread";
 import { setStripSubjectPrefixesEnabled } from "@/lib/actions/subject-prefixes";
+import { setHour24Enabled } from "@/lib/actions/hour-format";
 import type { ListUnderThread } from "@/lib/list-under-thread";
 
 
@@ -22,12 +23,14 @@ function SettingsUnreadPanel({
 	threadOrder,
 	listUnderThread,
 	stripPrefixes: initialStrip = false,
+	hour24: initialHour24 = false,
 }: {
 	enabled: boolean;
 	listPreview: ListPreviewMode;
 	threadOrder: ThreadOrder;
 	listUnderThread: ListUnderThread;
 	stripPrefixes?: boolean;
+	hour24?: boolean;
 }) {
 	const [enabled, setEnabled] = useState(initial);
 	const [pending, startTransition] = useTransition();
@@ -36,6 +39,23 @@ function SettingsUnreadPanel({
 	const [listPending, startListTransition] = useTransition();
 	const [strip, setStrip] = useState(initialStrip);
 	const [stripPending, startStripTransition] = useTransition();
+	const [hour24, setHour24] = useState(initialHour24);
+	const [hour24Pending, startHour24Transition] = useTransition();
+
+	// Times of the invitation cards in 24-hour format.
+	const onHour24Change = (next: boolean) => {
+		setHour24(next);
+		startHour24Transition(async () => {
+			const r = await setHour24Enabled(next);
+			if (r?.success === false) {
+				setHour24(!next);
+				toast.error(r.error ?? "Could not save the preference");
+				return;
+			}
+			toast.success(next ? "Times are shown in 24-hour format." : "Times follow the format of your language.");
+			router.refresh();
+		});
+	};
 
 	// Subject without Re:/Fwd: (lists, threads, replies and forwards).
 	const onStripChange = (next: boolean) => {
@@ -114,6 +134,14 @@ function SettingsUnreadPanel({
 				checked={strip}
 				disabled={stripPending}
 				onChange={(e) => onStripChange(e.currentTarget.checked)}
+				mt="md"
+			/>
+			<Switch
+				label={"Times in 24-hour format"}
+				description={"Off by default: the times of an invitation follow the format of your browser language (12 h with AM/PM for most English locales). On: 13:30 instead of 1:30 PM."}
+				checked={hour24}
+				disabled={hour24Pending}
+				onChange={(e) => onHour24Change(e.currentTarget.checked)}
 				mt="md"
 			/>
 			<Switch

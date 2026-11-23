@@ -6,15 +6,18 @@ import type { CalendarEventEntity, CalendarEventAttendeeEntity, IdentityEntity }
 import { ReusableFormButton } from "@/components/common/reusable-form-button";
 import { maybeCalendarInvite, noCalendarInvite, yesCalendarInvite } from "@/lib/actions/calendar";
 import { useModernUi } from "@/components/k/ui-context";
+import { hourOptions } from "@/lib/hour-format";
 import { findMeetingUrl, locationIsJustLink, meetingLabel, meetingProvider, openMeeting } from "@/lib/meeting-link";
 
 type Props = {
     calendarEvent: CalendarEventEntity;
     attendees: CalendarEventAttendeeEntity[];
     identity: IdentityEntity;
+    // Settings > Reading > times in 24-hour format (off: format of the locale).
+    hour24?: boolean;
 };
 
-function fmtRange(startsAt: string, endsAt: string) {
+function fmtRange(startsAt: string, endsAt: string, hour24: boolean) {
     const start = new Date(startsAt);
     const end = new Date(endsAt);
 
@@ -22,14 +25,10 @@ function fmtRange(startsAt: string, endsAt: string) {
         weekday: "short",
         month: "short",
         day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
+        ...hourOptions(hour24),
     });
 
-    const fmtTime = new Intl.DateTimeFormat(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-    });
+    const fmtTime = new Intl.DateTimeFormat(undefined, hourOptions(hour24));
 
     const sameDay =
         start.getFullYear() === end.getFullYear() &&
@@ -49,7 +48,7 @@ function partstatLabel(partstat: string | null | undefined) {
     return null;
 }
 
-export default function RenderInvite({ calendarEvent, attendees, identity }: Props) {
+export default function RenderInvite({ calendarEvent, attendees, identity, hour24 = false }: Props) {
     const modern = useModernUi();
     const selfAttendee = useMemo(() => {
         const me = (identity.value || "").trim().toLowerCase();
@@ -58,7 +57,7 @@ export default function RenderInvite({ calendarEvent, attendees, identity }: Pro
 
     const when = calendarEvent.isAllDay
         ? "All day"
-        : fmtRange(String(calendarEvent.startsAt), String(calendarEvent.endsAt));
+        : fmtRange(String(calendarEvent.startsAt), String(calendarEvent.endsAt), hour24);
 
     const organizer =
         calendarEvent.organizerName || calendarEvent.organizerEmail

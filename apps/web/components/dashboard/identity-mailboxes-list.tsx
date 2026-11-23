@@ -23,6 +23,7 @@ import {
 	FetchMailboxUnreadCountsResult,
 } from "@/lib/actions/mailbox";
 import { MailboxKind } from "@schema";
+import { showsUnreadCount } from "@/lib/folder-unread-counts";
 import {
 	DraftMessageEntity,
 	IdentityEntity,
@@ -293,8 +294,8 @@ export default function IdentityMailboxesList({
 							<Icon className="h-4 w-4 shrink-0" />
 							<span className="truncate">
 								{m.kind === "custom" ? (m.name ?? "Mailbox") : TITLE[m.kind]}
-								{/* No unread count on Archive, it adds nothing */}
-								{m.unread > 0 && m.kind !== "archive" && <span> ({m.unread})</span>}
+								{/* No unread count on Sent, Outbox, Drafts, Archive or Trash (lib/folder-unread-counts.ts) */}
+								{m.unread > 0 && showsUnreadCount(m.kind) && <span> ({m.unread})</span>}
 							</span>
 						</Link>
 

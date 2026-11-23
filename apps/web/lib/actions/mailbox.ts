@@ -27,8 +27,9 @@ import {
 	or,
 	sql,
 	gt,
-	ne,
+	notInArray,
 } from "drizzle-orm";
+import { NO_UNREAD_COUNT_KINDS } from "@/lib/folder-unread-counts";
 import { revalidatePath } from "next/cache";
 import {
 	FormState,
@@ -268,12 +269,12 @@ export const fetchMailboxUnreadCounts = cache(
 					`,
 				})
 				.from(mailboxThreads)
-				// The trash does not display an unread counter.
+				// Sent, Outbox, Drafts, Archive and Trash display no unread counter (lib/folder-unread-counts.ts).
 				.innerJoin(
 					mailboxes,
 					and(
 						eq(mailboxes.id, mailboxThreads.mailboxId),
-						ne(mailboxes.kind, "trash"),
+						notInArray(mailboxes.kind, [...NO_UNREAD_COUNT_KINDS]),
 					),
 				)
 				.where(

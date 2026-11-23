@@ -24,6 +24,7 @@ import {
 	FetchMailboxUnreadCountsResult,
 } from "@/lib/actions/mailbox";
 import { MailboxKind } from "@schema";
+import { showsUnreadCount } from "@/lib/folder-unread-counts";
 import {
 	DraftMessageEntity,
 	IdentityEntity,
@@ -240,8 +241,8 @@ export default function KSidebarNav({
 		const hasChildren = m.children.length > 0;
 		// server counter + immediate adjustment from pending actions (mail-store)
 		const unread = Math.max(0, m.unread + (countAdj.get(m.id)?.delta ?? 0));
-		// no counter on Trash, Sent or Archive (it adds nothing)
-		const showCount = unread > 0 && m.kind !== "trash" && m.kind !== "sent" && m.kind !== "archive";
+		// no counter on Sent, Outbox, Drafts, Archive or Trash
+		const showCount = unread > 0 && showsUnreadCount(m.kind);
 
 		return (
 			<div>

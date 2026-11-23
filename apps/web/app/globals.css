@@ -495,3 +495,12 @@
 [data-k-thread-column] .lg\:min-w-5xl {
 	min-width: 0;
 }
+
+/* Classic interface, new message: the window is bounded to the screen height and its content
+   scrolls; the send bar stays stuck at the bottom of the scrolling area. */
+.compose-scroll .mantine-RichTextEditor-root > .border-t {
+	position: sticky;
+	bottom: 0;
+	z-index: 3;
+	background: var(--background);
+}

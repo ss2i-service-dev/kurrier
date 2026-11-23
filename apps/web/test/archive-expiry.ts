@@ -347,7 +347,7 @@ test("classique, mail ouvert : « Archiver pour… » a cote d'Archive (a), icon
 	assert.match(tag, /starred=\{\(\) => !!starred\}/);
 	assert.match(tag, /before=\{leaveThread\}/, "retour a la liste comme Archive");
 	assert.match(tag, /renderTrigger=/, "ActionIcon Mantine comme ses voisins");
-	assert.match(s, /aria-label="Archive" onClick=\{archiveMessage\}/, "Archive inchange");
+	assert.match(s, /aria-label="Archive" data-ss2i-shortcut="open-archive" onClick=\{archiveMessage\}/, "Archive inchange, marque pour a (test/open-mail-archive-shortcut.ts)");
 	assert.match(s, /\n\s*Archive\n\s*<\/Button>/, "bouton texte « Archive » du bas inchange (repli textContent de a)");
 });
 

@@ -103,12 +103,25 @@
 
   const dansUnMail = () => /\/threads\/[^/]+/.test(window.location.pathname);
 
-  // Dans un mail ouvert : le bouton libelle du mail. Sur la liste : le bouton de la
-  // barre de selection, marque data-ss2i-shortcut (mail-list-header.tsx) et visible
-  // seulement si des mails sont coches ; sans selection, rien ne se passe. Jamais par
-  // title : chaque ligne de la liste a ses propres boutons « Delete » / « Archive ».
+  // Dans un mail ouvert : le bouton de la barre du message, marque data-ss2i-shortcut
+  // (email-renderer.tsx), present sur chaque message ; repli sur le bouton libelle (nouvelle
+  // interface). Pas le bouton texte du bas seul : il n'est rendu que sous le dernier message,
+  // absent quand ce dernier est une reponse encore en Boite d'envoi (Samuel le 23/11).
+  // Sur la liste : le bouton de la barre de selection, marque data-ss2i-shortcut
+  // (mail-list-header.tsx) et visible seulement si des mails sont coches ; sans selection,
+  // rien ne se passe. Jamais par title : chaque ligne de la liste a ses propres boutons
+  // « Delete » / « Archive ».
   const surMailOuSelection = (libelle) => {
-    if (dansUnMail()) return cliquer(libelle);
+    if (dansUnMail()) {
+      const barre = libelle === "Delete" ? "open-delete" : "open-archive";
+      if (nouvelle() && ACTIONS_K[libelle] && cliquerK(ACTIONS_K[libelle])) return true;
+      const bouton = Array.from(document.querySelectorAll(`button[data-ss2i-shortcut="${barre}"]`)).find(visible);
+      if (bouton) {
+        bouton.click();
+        return true;
+      }
+      return cliquer(libelle);
+    }
     const marque = libelle === "Delete" ? "selection-delete" : "selection-archive";
     const cible = Array.from(
       document.querySelectorAll(`button[data-ss2i-shortcut="${marque}"]`)

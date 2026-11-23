@@ -104,7 +104,7 @@ export default async function ThreadItem({
                             mailSubscription={mailSubscription}
 							identityMailboxes={identityMailboxes}
 						>
-							<EmailViewer message={message} remoteImagesAllowed={remoteImagesAllowed} cidUrls={cidUrls} />
+							<EmailViewer message={message} threadIndex={threadIndex} remoteImagesAllowed={remoteImagesAllowed} cidUrls={cidUrls} />
 						</EmailRenderer>
 					</div>
 				</div>

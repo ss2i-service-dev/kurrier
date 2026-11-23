@@ -84,7 +84,7 @@ export default async function KThreadItem({
 				) : null
 			}
 		>
-			<EmailViewer message={message} remoteImagesAllowed={remoteImagesAllowed} cidUrls={cidUrls} adaptTheme />
+			<EmailViewer message={message} threadIndex={threadIndex} remoteImagesAllowed={remoteImagesAllowed} cidUrls={cidUrls} adaptTheme />
 		</KMessage>
 	);
 }

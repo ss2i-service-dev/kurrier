@@ -11,6 +11,7 @@ import { setRemoteImagesForContact } from "@/lib/actions/contact-images";
 import { toast } from "sonner";
 
 import { joinSurrogateEntities } from "@common/html-entities";
+import { hideQuotesByDefault } from "@/lib/quote-visibility";
 
 // Shared with the editable quote (reply-quote-editor) so it renders like the reader.
 export const BASE_CSS = `
@@ -155,8 +156,11 @@ export default function EmailViewer({
 	remoteImagesAllowed = false,
 	cidUrls,
 	adaptTheme = false,
+	threadIndex,
 }: {
 	message: MessageEntity;
+	// Chronological index in the thread (0 = oldest), see lib/quote-visibility.ts.
+	threadIndex?: number;
 	remoteImagesAllowed?: boolean;
 	// Content-ID (without angle brackets, lowercase) -> signed attachment URL.
 	// Resolves inline images left as cid: in the stored HTML.
@@ -175,7 +179,10 @@ export default function EmailViewer({
 		obs.observe(html, { attributes: true, attributeFilter: ["class"] });
 		return () => obs.disconnect();
 	}, [adaptTheme]);
-	const [hideQuotes, setHideQuotes] = useState(true);
+	// Forward or first message of the thread -> quotes unfolded.
+	const [hideQuotes, setHideQuotes] = useState(() =>
+		hideQuotesByDefault({ threadIndex, subject: message.subject, html: message.html, text: message.text }),
+	);
 
 	const [showRemoteImages, setShowRemoteImages] = useState(remoteImagesAllowed);
 	const [hasBlockedImages, setHasBlockedImages] = useState(false);

@@ -9,6 +9,7 @@
 // "subject only" option, archive and delete with Undo (pending-moves).
 import { useStripSubjectPrefixes } from "@/components/mailbox/default/compose-style-context";
 import { subjectForDisplay } from "@common/subject";
+import { formatExpiry } from "@common/thread-expiry";
 import React from "react";
 import { Archive, Mail, MailOpen, Paperclip, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -25,6 +26,7 @@ import { useShowSnippet } from "@/components/mailbox/default/list-preview-contex
 import { DraftSendBadge, DraftTimesLabel, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
 import KAvatar from "@/components/k/avatar";
 import KIconButton from "@/components/k/icon-button";
+import KArchiveFor from "@/components/k/archive-for";
 import { correspondents, listDate } from "@/components/k/format";
 import { kHref } from "@/components/k/href";
 import { arrivedSinceRead, closeCompose, mailActions, setActiveThread, useMailStore } from "@/components/k/mail-store";
@@ -113,6 +115,8 @@ export default function KThreadRow({
 		.replace(/\s+/g, " ")
 		.trim();
 	const snoozed = item.snoozedUntil && new Date(item.snoozedUntil).getTime() > Date.now();
+	// Archived for a chosen duration: the thread goes to Trash on that date.
+	const expiresAt = item.expiresAt ? new Date(item.expiresAt) : null;
 
 	const threadUrl = kHref(`/w/${workspacePublicId}/dashboard/mail/${identityPublicId}/${activeMailbox.slug}/threads/${item.threadId}`);
 
@@ -260,6 +264,14 @@ export default function KThreadRow({
 						<span className="k-row-meta flex items-center gap-1.5 transition-opacity">
 							{pinned && <IconPinnedFilled size={13} className="text-k-accent" aria-label="Pinned" />}
 							{item.hasAttachments && <Paperclip className="h-3.5 w-3.5 text-k-ink-3" />}
+							{expiresAt && (
+								<span
+									className="text-[11.5px] tabular-nums text-k-warn"
+									title={`This thread will go to Trash on ${formatExpiry(expiresAt)}`}
+								>
+									Disappears on {formatExpiry(expiresAt)}
+								</span>
+							)}
 							<time
 								className={`text-[12px] tabular-nums ${snoozed ? "text-k-warn" : isUnread ? "font-semibold text-k-accent" : "text-k-ink-3"}`}
 								title={
@@ -329,6 +341,17 @@ export default function KThreadRow({
 						<KIconButton size="sm" label="Archive" onClick={() => mailActions.archive(item.threadId, activeMailbox.id, smtp, isUnread ? 1 : 0)}>
 							<Archive />
 						</KIconButton>
+					)}
+					{!sending && (
+						<KArchiveFor
+							size="sm"
+							mailboxId={activeMailbox.id}
+							mailboxKind={activeMailbox.kind}
+							smtp={smtp}
+							threadIds={() => [item.threadId]}
+							unread={() => (isUnread ? 1 : 0)}
+							starred={() => !!item.starred}
+						/>
 					)}
 					{!sending && (
 						<KIconButton

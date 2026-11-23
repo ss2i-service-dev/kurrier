@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Archive, ArrowLeft, ChevronDown, ChevronUp, ClipboardList, Inbox, Mail, Trash2, X } from "lucide-react";
 import { copyMailToClipboard } from "@/lib/mail-copy";
 import KIconButton from "@/components/k/icon-button";
+import KArchiveFor from "@/components/k/archive-for";
 import SnoozeMail from "@/components/k/snooze";
 import { IconPin, IconPinnedOff } from "@tabler/icons-react";
 import { useShortcutHint } from "@/components/k/shortcuts-config";
@@ -23,6 +24,7 @@ export default function ThreadToolbar({
 	markSmtp,
 	hasUnread,
 	pinned: serverPinned = false,
+	starred = false,
 	inboxMailboxId,
 }: {
 	threadId: string;
@@ -31,6 +33,8 @@ export default function ThreadToolbar({
 	markSmtp: boolean;
 	hasUnread: boolean;
 	pinned?: boolean;
+	/** The thread is starred: it never expires, the archive toast says so. */
+	starred?: boolean;
 	/** Inbox of the identity when the thread is open in the Spam folder. */
 	inboxMailboxId?: string | null;
 }) {
@@ -127,6 +131,14 @@ export default function ThreadToolbar({
 					<Archive />
 				</KIconButton>
 			)}
+			<KArchiveFor
+				mailboxId={activeMailboxId}
+				mailboxKind={activeMailboxKind}
+				smtp={markSmtp}
+				threadIds={() => [threadId]}
+				starred={() => starred}
+				before={advance}
+			/>
 			<KIconButton
 				label={activeMailboxKind === "trash" ? "Delete permanently" : "Delete"}
 				shortcut={hint.delete}

@@ -29,7 +29,8 @@ export default async function ThreadItem({
 	activeMailboxId,
 	markSmtp,
     identityPublicId,
-    mailSubscription
+    mailSubscription,
+	starred,
 }: {
 	message: MessageEntity;
 	threadIndex: number;
@@ -43,6 +44,8 @@ export default async function ThreadItem({
 	markSmtp: boolean;
     identityPublicId: string;
     mailSubscription: FetchThreadMailSubsResult["byMessageId"] | null;
+	// The thread is starred (passed to the mail's bar: "Archive for...").
+	starred?: boolean;
 }) {
 	const publicConfig = getPublicEnv();
 	const identityMailboxes = await fetchIdentityMailboxList();
@@ -105,6 +108,7 @@ export default async function ThreadItem({
 							activeMailboxId={activeMailboxId}
                             mailSubscription={mailSubscription}
 							identityMailboxes={identityMailboxes}
+							starred={starred}
 						>
 							<EmailViewer message={message} threadIndex={threadIndex} remoteImagesAllowed={remoteImagesAllowed} cidUrls={cidUrls} />
 						</EmailRenderer>

@@ -25,6 +25,7 @@ import {
 	toggleStar,
 } from "@/lib/actions/mailbox";
 import { hideThreads, moveWithUndo } from "@/lib/pending-moves";
+import { archivedMessage } from "@/lib/archive-for";
 import { setThreadPinned } from "@/lib/actions/k-pins";
 import { refreshUnreadBadge } from "@/components/k/new-mail-notifier";
 import { createArrivalTracker, type ArrivalSnapshot } from "@/lib/arrival-tracker";
@@ -208,20 +209,24 @@ export function adjustCount(mailboxId: string, n: number) {
 }
 
 export const mailActions = {
-	/** unread: number of unread threads among those moved (folder counter). */
-	archive(threadIds: string | string[], mailboxId: string, smtp: boolean, unread = 0) {
+	/**
+	 * unread: number of unread threads among those moved (folder counter).
+	 * expiresAt (ISO): archive for a chosen duration ("Archive for..."); starred: the selection
+	 * contains a starred thread, which never expires (the toast says so).
+	 */
+	archive(threadIds: string | string[], mailboxId: string, smtp: boolean, unread = 0, expiresAt?: string | null, starred = false) {
 		const list = ids(threadIds);
 		adjustCount(mailboxId, -unread);
 		moveWithUndo({
 			onUndo: () => adjustCount(mailboxId, unread),
 			mailboxId,
 			threadIds: list,
-			message: list.length > 1 ? `${list.length} threads archived` : "Archived",
+			message: archivedMessage({ count: list.length, expiresAt: expiresAt ? new Date(expiresAt) : null, starred }),
 			// refresh=false: no waiting for the worker or a full page render; the
 						// thread is already hidden, a discreet refresh follows.
 						// archiving only takes the thread out of the Inbox
 			archive: true,
-			run: () => archiveThread(list, mailboxId, smtp, false),
+			run: () => archiveThread(list, mailboxId, smtp, false, expiresAt),
 			onDone: () => scheduleRefresh(),
 			failure: "Archiving failed",
 		});

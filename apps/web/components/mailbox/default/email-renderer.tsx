@@ -4,6 +4,8 @@ import { useStripSubjectPrefixes } from "@/components/mailbox/default/compose-st
 import { subjectForDisplay } from "@common/subject";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { leaveThreadToList } from "@/lib/leave-thread";
+import { mailboxKindOf } from "@/lib/archive-for";
+import KArchiveFor from "@/components/k/archive-for";
 import { MessageAttachmentEntity, MessageEntity } from "@db";
 import { getMessageAddress, getMessageName } from "@common/mail-client";
 import slugify from "@sindresorhus/slugify";
@@ -116,6 +118,7 @@ function EmailRenderer({
 	activeMailboxId,
     mailSubscription,
 	identityMailboxes,
+	starred,
 	children,
 }: {
 	threadIndex: number;
@@ -131,6 +134,8 @@ function EmailRenderer({
 	activeMailboxId: string;
     mailSubscription: FetchThreadMailSubsResult["byMessageId"] | null;
 	identityMailboxes: FetchIdentityMailboxListResult;
+	// The thread is starred (it never expires: the "Archive for..." toast says so).
+	starred?: boolean;
 	children?: React.ReactNode;
 }) {
 	const stripPrefixes = useStripSubjectPrefixes();
@@ -485,6 +490,22 @@ function EmailRenderer({
 								<Archive size={18} />
 							</ActionIcon>
 						</Tooltip>
+						{/* "Archive for..." (or "Expiry..." in the Archive), same component as the modern interface. */}
+						<KArchiveFor
+							mailboxId={activeMailboxId}
+							mailboxKind={mailboxKindOf(identityMailboxes, activeMailboxId)}
+							smtp={markSmtp}
+							threadIds={() => [String(threadId)]}
+							starred={() => !!starred}
+							before={leaveThread}
+							renderTrigger={({ label, disabled, icon }) => (
+								<Tooltip label={label} withArrow>
+									<ActionIcon variant={"subtle"} color={"gray"} aria-label={label} disabled={disabled}>
+										{icon(18)}
+									</ActionIcon>
+								</Tooltip>
+							)}
+						/>
 						<Tooltip label="Mark as unread and back to the list" withArrow>
 							<ActionIcon variant={"subtle"} color={"gray"} aria-label="Mark as unread" onClick={unreadMessage}>
 								<Mail size={18} />

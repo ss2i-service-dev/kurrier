@@ -14,6 +14,7 @@ import {
 	ChevronRight,
 	ChevronDown,
 	MoreVertical,
+	CalendarClock,
 	Clock4,
 } from "lucide-react";
 import * as React from "react";
@@ -127,15 +128,18 @@ function buildTree(
 function IdentityExtraCounts({
 								 identity,
 								 snoozedThreadsPromise,
+								 expiringCountsPromise,
 								 workspacePublicId,
 								 currentSlug,
 							 }: {
 	identity: IdentityEntity;
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
+	expiringCountsPromise: Promise<Record<string, number>>;
 	workspacePublicId: string | undefined;
 	currentSlug: string;
 }) {
 	const { threads: snoozedThreads } = use(snoozedThreadsPromise);
+	const expiringCount = use(expiringCountsPromise)[identity.id] ?? 0;
 
 	const snoozedCount = snoozedThreads.filter(
 		(s) => s.identityId === identity.id,
@@ -156,6 +160,17 @@ function IdentityExtraCounts({
 					<Clock4 size={16} className="shrink-0 text-k-ink-3" />
 					<span className="flex-1 truncate">Snoozed</span>
 					<span className="text-[12px] tabular-nums text-k-ink-3">{snoozedCount}</span>
+				</Link>
+			)}
+			{/* Threads archived for a chosen duration ("Archive for..."), only when there are some. */}
+			{expiringCount > 0 && (
+				<Link
+					href={`/w/${workspacePublicId}/dashboard/mail/${identity.publicId}/expiring`}
+					className={linkCls(currentSlug === "expiring")}
+				>
+					<CalendarClock size={16} className="shrink-0 text-k-ink-3" />
+					<span className="flex-1 truncate">Expiring soon</span>
+					<span className="text-[12px] tabular-nums text-k-ink-3">{expiringCount}</span>
 				</Link>
 			)}
 		</>
@@ -211,6 +226,7 @@ export default function KSidebarNav({
 	unreadCounts,
 	outboxCounts,
 	snoozedThreadsPromise,
+	expiringCountsPromise,
 	workspacePublicId,
 	onComplete,
 }: {
@@ -219,6 +235,8 @@ export default function KSidebarNav({
 	// Outbox counters per identity (fetchOutboxCounts).
 	outboxCounts: OutboxCount[];
 	snoozedThreadsPromise: Promise<{ threads: MailboxThreadEntity[] }>;
+	// Threads archived for a chosen duration, per identity id (fetchExpiringCounts).
+	expiringCountsPromise: Promise<Record<string, number>>;
 	workspacePublicId: string | undefined;
 	onComplete?: () => void;
 }) {
@@ -381,6 +399,7 @@ export default function KSidebarNav({
 					<IdentityExtraCounts
 						identity={identity}
 						snoozedThreadsPromise={snoozedThreadsPromise}
+						expiringCountsPromise={expiringCountsPromise}
 						workspacePublicId={workspacePublicId}
 						currentSlug={currentSlug}
 					/>

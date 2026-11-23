@@ -35,6 +35,7 @@ import { PublicConfig } from "@schema";
 import { useMediaQuery } from "@mantine/hooks";
 import { clsx } from "clsx";
 import MoveToFolder from "@/components/mailbox/default/move-to-folder";
+import KArchiveFor from "@/components/k/archive-for";
 import { usePathname } from "next/navigation";
 
 function MailListHeader({
@@ -348,6 +349,19 @@ function MailListHeader({
 								<Archive className="h-4 w-4" />
 							</button>
 						)}
+						{/* "Archive for..." (or "Expiry..." in the Archive), same component as the modern interface. */}
+						<KArchiveFor
+							mailboxId={String(mailboxIdRef.current)}
+							mailboxKind={String(mailboxKind.current)}
+							smtp={!!mailboxSync}
+							threadIds={() => Array.from(state?.selectedThreadIds ?? []).map(String)}
+							starred={() => {
+								const ids = new Set(Array.from(state?.selectedThreadIds ?? []).map(String));
+								return mailboxThreads.some((t) => ids.has(String(t.threadId)) && t.starred);
+							}}
+							before={clearSelection}
+							bulkClassName="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs hover:bg-muted"
+						/>
 						<button
 							type="button"
 							onClick={deleteThreads}

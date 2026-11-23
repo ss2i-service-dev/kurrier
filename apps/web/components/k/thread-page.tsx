@@ -2,9 +2,11 @@ import React, { Suspense } from "react";
 import {
 	fetchIdentityMailboxList,
 	fetchMailbox,
+	fetchThreadExpiry,
 	fetchThreadMailSubscriptions,
 	fetchWebMailThreadDetail,
 } from "@/lib/actions/mailbox";
+import KExpiryNotice from "@/components/k/expiry-notice";
 import { fetchThreadMailbox } from "@/lib/thread-mailbox";
 import { inboxIdForSpam } from "@/lib/not-spam";
 import { threadOrder } from "@/lib/actions/thread-order";
@@ -48,10 +50,13 @@ export default async function KThreadPage({
 	const { activeMailbox, mailboxSync } = await fetchThreadMailbox(identityPublicId, mailboxSlug, allMessages);
 	// A mail present in two folders (Sent and Inbox) is shown once (thread-dedupe.ts).
 	const messages = dedupeThreadMessages(allMessages);
-	const { byMessageId } = await fetchThreadMailSubscriptions({
-		ownerId: activeMailbox.ownerId,
-		messages: messages.map((m) => ({ id: m.id, headersJson: m.headersJson, from: m.from })),
-	});
+	const [{ byMessageId }, expiry] = await Promise.all([
+		fetchThreadMailSubscriptions({
+			ownerId: activeMailbox.ownerId,
+			messages: messages.map((m) => ({ id: m.id, headersJson: m.headersJson, from: m.from })),
+		}),
+		fetchThreadExpiry(threadId, activeMailbox.id).catch(() => ({ expiresAt: null, starred: false })),
+	]);
 
 	if (!messages.length) {
 		return (
@@ -90,10 +95,12 @@ export default async function KThreadPage({
 					markSmtp={!!mailboxSync}
 					hasUnread={messages.some((m) => !m.seen)}
 					pinned={!!pins[threadId]}
+					starred={expiry.starred}
 					inboxMailboxId={inboxIdForSpam(identityMailboxes, String(activeMailbox.id))}
 				/>
 				<div className="k-scroll min-h-0 flex-1 overflow-y-auto" data-k-thread-scroll>
 					<div className="w-full px-5 pb-10 pt-6 md:px-8">
+						{expiry.expiresAt && <KExpiryNotice threadId={threadId} mailboxId={activeMailbox.id} expiresAt={expiry.expiresAt} />}
 						<div className="mb-4">
 							<div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
 								<h1 className="min-w-0 flex-1 basis-[320px] text-[21px] font-semibold leading-snug tracking-[-0.015em] text-k-ink">

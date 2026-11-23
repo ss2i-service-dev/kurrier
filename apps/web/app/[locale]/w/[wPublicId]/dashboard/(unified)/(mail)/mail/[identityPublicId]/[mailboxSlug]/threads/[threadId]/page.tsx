@@ -2,7 +2,8 @@ import { isModernUi } from "@/lib/actions/interface-pref";
 import MailboxPage from "../../page";
 import { fetchThreadMailbox } from "@/lib/thread-mailbox";
 import React, {Suspense} from "react";
-import {fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
+import {fetchThreadExpiry, fetchThreadMailSubscriptions, fetchWebMailThreadDetail} from "@/lib/actions/mailbox";
+import KExpiryNotice from "@/components/k/expiry-notice";
 import ThreadItem from "@/components/mailbox/default/thread-item";
 import ThreadAttachments from "@/components/mailbox/default/thread-attachments";
 import { Divider } from "@mantine/core";
@@ -44,9 +45,14 @@ async function ClassicPage({
 	const chronological = dedupeThreadMessages(activeThread?.messages ?? []);
 	const newestFirst = (await threadOrder()) === "newest_first";
 	const shown = newestFirst ? [...chronological].reverse() : chronological;
+	// Archived for a chosen duration ("Disappears on" notice, "Keep") and star of the thread.
+	const expiry = await fetchThreadExpiry(threadId, activeMailbox.id).catch(() => ({ expiresAt: null, starred: false }));
 
 	return (
 		<>
+			{expiry.expiresAt && (
+				<KExpiryNotice threadId={threadId} mailboxId={activeMailbox.id} expiresAt={expiry.expiresAt} className="mx-4 mt-3 lg:mx-7" />
+			)}
 			<Suspense fallback={null}>
 				<ThreadAttachments messages={chronological} className="mx-4 mt-3 lg:mx-7" />
 			</Suspense>
@@ -64,6 +70,7 @@ async function ClassicPage({
 							markSmtp={!!mailboxSync}
                             identityPublicId={identityPublicId}
                             mailSubscription={byMessageId.get(message.id) ?? null}
+							starred={expiry.starred}
 						/>
 						<Divider className={"opacity-50 mb-6"} ml={"xl"} mr={"xl"} />
 					</div>

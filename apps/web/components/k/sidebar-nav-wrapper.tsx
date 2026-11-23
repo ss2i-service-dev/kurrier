@@ -1,4 +1,5 @@
 import {
+	fetchExpiringCounts,
 	fetchIdentityMailboxList,
 	fetchIdentitySnoozedThreads,
 	fetchMailboxUnreadCounts,
@@ -35,6 +36,7 @@ export default async function KSidebarNavWrapper() {
 				unreadCounts={unreadCounts}
 				outboxCounts={outboxCounts}
 				snoozedThreadsPromise={fetchIdentitySnoozedThreads()}
+				expiringCountsPromise={fetchExpiringCounts()}
 				workspacePublicId={workspacePublicId}
 			/>
 			<DynamicContextProvider initialState={{ labels: [], scope: "thread" as LabelScope, workspacePublicId }}>

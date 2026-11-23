@@ -34,6 +34,7 @@ import {
 	AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import KCompose from "@/components/k/compose";
+import KArchiveFor from "@/components/k/archive-for";
 import { PublicConfig } from "@schema";
 import { useMediaQuery } from "@mantine/hooks";
 import { clsx } from "clsx";
@@ -322,6 +323,19 @@ function KListHeader({
 								<Archive className="h-4 w-4" />
 							</button>
 						)}
+						<KArchiveFor
+							mailboxId={String(mailboxIdRef.current)}
+							mailboxKind={String(mailboxKind.current)}
+							smtp={!!mailboxSync}
+							threadIds={() => Array.from(state?.selectedThreadIds ?? []).map(String)}
+							unread={() => unreadAmong(Array.from(state?.selectedThreadIds ?? []).map(String))}
+							starred={() => {
+								const ids = new Set(Array.from(state?.selectedThreadIds ?? []).map(String));
+								return mailboxThreads.some((t) => ids.has(String(t.threadId)) && t.starred);
+							}}
+							before={clearSelection}
+							bulkClassName={bulkBtn}
+						/>
 						<button type="button" onClick={markRead} className={bulkBtn} title="Mark as read">
 							<MailOpen className="h-4 w-4" />
 						</button>

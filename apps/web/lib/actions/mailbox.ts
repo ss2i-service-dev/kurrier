@@ -45,7 +45,7 @@ import { isSignedIn } from "@/lib/actions/auth";
 import slugify from "@sindresorhus/slugify";
 import { redirect } from "next/navigation";
 import { PAGE_SIZE } from "@common/mail-client";
-import { cancelSend, enqueueSend, sendNowPlanOf, dismissRestoresDraft, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendLive, interruptedSendOf, deleteDraftRow, DRAFT_DELETE_JOB, draftDeleteJobOptions, type SettleAction, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
+import { cancelSend, enqueueSend, sendNowPlanOf, dismissRestoresDraft, isOutboxVisible, outboxActionsOf, outboxCountOf, sendStateOf, type OutboxActions, type SendState, extractListUnsubscribe, imapDraftIdOfJob, pendingSendLive, interruptedSendOf, deleteDraftRow, DRAFT_DELETE_JOB, draftDeleteJobOptions, type SettleAction, scheduledJobOf, scheduledPendingSend, subscriptionKeyOf, draftSendStateOf, draftTimesOf, setDraftSendState, shouldMoveImap, validateScheduledAt, parseExpiry, SCHEDULED_JOB, type DraftSendState, type DraftTimes } from "@common";
 import { getRedis } from "@/lib/actions/get-redis";
 import { saveDraft } from "@/lib/actions/drafts";
 import { undoSendSeconds } from "@/lib/actions/undo-send";
@@ -1366,11 +1366,16 @@ export const moveToTrash = async (
 // (mail:move, op=archive) looks it up by kind; if it does not exist yet for
 // this identity (Stalwart does not create one), it is created first, on the IMAP side
 // when the mailbox is synchronised.
+// expiresAt (ISO, optional) = archive for a chosen duration. Never written here: it travels in
+// the mail:move job, whose moveMail sets it on the destination row inside the move's transaction
+// (the asynchronous move and the expiry cannot diverge). Invalid, past or more than 10 years
+// away: plain archive.
 export const archiveThread = async (
 	threadIds: string | string[],
 	mailboxId: string,
 	moveImap: boolean,
 	refresh: boolean,
+	expiresAt?: string | null,
 ) => {
 	const requestedIds = (Array.isArray(threadIds) ? threadIds : [threadIds])
 		.map(String)
@@ -1382,6 +1387,7 @@ export const archiveThread = async (
 	if (!ids.length) return;
 	if (src.kind === "archive") return;
 	moveImap = shouldMoveImap(moveImap, await imapSynced(src.id));
+	const expiry = parseExpiry(expiresAt, new Date());
 
 	const findArchive = async () => {
 		const [row] = await db
@@ -1434,7 +1440,14 @@ export const archiveThread = async (
 	// thread at a time.
 	await smtpQueue.add(
 		"mail:move",
-		{ threadId: ids[0], threadIds: ids, mailboxId: src.id, op: "archive", moveImap },
+		{
+			threadId: ids[0],
+			threadIds: ids,
+			mailboxId: src.id,
+			op: "archive",
+			moveImap,
+			expiresAt: expiry ? expiry.toISOString() : null,
+		},
 		{
 			attempts: 3,
 			backoff: { type: "exponential", delay: 1500 },
@@ -2342,6 +2355,142 @@ export async function snoozeThread(input: {
 		return { success: true };
 	});
 }
+
+// Archive for a chosen duration, for threads already archived, in a single call. A null
+// expiresAt cancels the expiry. A starred thread or one with a row in the Inbox of the same
+// identity is set aside (counted in skipped): the mbth_expiry_guard trigger and
+// upsertMailboxThreadItem would clear the expiry at once, the displayed date would be a lie. No
+// row touched (thread moved to Trash or elsewhere in the meantime) is never a success: ok false,
+// with the reason.
+export async function setThreadExpiry(input: {
+	threadIds: string[];
+	mailboxId: string;
+	expiresAt: string | null;
+}): Promise<{ ok: true; updated: number; skipped: number; expiresAt: string | null } | { ok: false; reason: string }> {
+	try {
+		const { mailbox, threadIds } = await assertThreadsInMailbox(input.mailboxId, input.threadIds);
+		if (!threadIds.length) return { ok: false, reason: "Thread not found in this folder" };
+		if (mailbox.kind !== "archive") {
+			return { ok: false, reason: "The expiry can only be set in the archive" };
+		}
+		const expiry = input.expiresAt === null ? null : parseExpiry(input.expiresAt, new Date());
+		if (input.expiresAt !== null && !expiry) {
+			return { ok: false, reason: "Invalid date: pick a day in the future, within ten years" };
+		}
+
+		const rls = await rlsClient();
+		let eligible = threadIds;
+		if (expiry) {
+			const rows = await rls((tx) =>
+				tx
+					.select({ threadId: mailboxThreads.threadId, starred: mailboxThreads.starred })
+					.from(mailboxThreads)
+					.where(and(inArray(mailboxThreads.threadId, threadIds), eq(mailboxThreads.mailboxId, mailbox.id))),
+			);
+			const inboxRows = await rls((tx) =>
+				tx
+					.select({ threadId: mailboxThreads.threadId })
+					.from(mailboxThreads)
+					.innerJoin(mailboxes, eq(mailboxes.id, mailboxThreads.mailboxId))
+					.where(
+						and(
+							inArray(mailboxThreads.threadId, threadIds),
+							eq(mailboxThreads.identityId, mailbox.identityId),
+							eq(mailboxes.kind, "inbox"),
+						),
+					),
+			);
+			const starred = new Set(rows.filter((r) => r.starred).map((r) => r.threadId));
+			const inInbox = new Set(inboxRows.map((r) => r.threadId));
+			eligible = rows.map((r) => r.threadId).filter((id) => !starred.has(id) && !inInbox.has(id));
+			if (!eligible.length) {
+				if (!rows.length) return { ok: false, reason: "Thread not found in this folder" };
+				return {
+					ok: false,
+					reason: starred.size
+						? "A starred thread does not expire: remove the star first"
+						: "This thread is also in the Inbox: it will not expire",
+				};
+			}
+		}
+
+		const touched = await rls((tx) =>
+			tx
+				.update(mailboxThreads)
+				.set({ expiresAt: expiry, updatedAt: new Date() })
+				.where(and(inArray(mailboxThreads.threadId, eligible), eq(mailboxThreads.mailboxId, mailbox.id)))
+				.returning({ threadId: mailboxThreads.threadId }),
+		);
+		if (touched.length === 0) {
+			return { ok: false, reason: "Nothing was updated: the thread is no longer in the archive (moved or deleted in the meantime)" };
+		}
+		revalidatePath("/dashboard/mail");
+		return {
+			ok: true,
+			updated: touched.length,
+			skipped: threadIds.length - touched.length,
+			expiresAt: expiry ? expiry.toISOString() : null,
+		};
+	} catch (e: any) {
+		return { ok: false, reason: e?.message ?? "Update failed" };
+	}
+}
+
+// Threads of the identity that have an expiry, in its archive folder, closest first ("Expiring
+// soon" view). Filtered on the server: the 200 rows are those of the identity.
+export const fetchIdentityExpiringThreads = async (
+	identityPublicId: string,
+): Promise<{ threads: MailboxThreadEntity[] }> => {
+	const rls = await rlsClient();
+	const rows = await rls((tx) =>
+		tx
+			.select({ thread: mailboxThreads })
+			.from(mailboxThreads)
+			.innerJoin(mailboxes, eq(mailboxes.id, mailboxThreads.mailboxId))
+			.where(
+				and(
+					isNotNull(mailboxThreads.expiresAt),
+					eq(mailboxThreads.identityPublicId, identityPublicId),
+					eq(mailboxes.kind, "archive"),
+				),
+			)
+			.orderBy(asc(mailboxThreads.expiresAt), desc(mailboxThreads.lastActivityAt))
+			.limit(200),
+	);
+	return { threads: rows.map((r) => r.thread) };
+};
+
+// Number of threads that will expire, per identity (id), for the sidebar. Computed on the server:
+// no row limit, no filter to redo in the browser.
+export const fetchExpiringCounts = async (): Promise<Record<string, number>> => {
+	const rls = await rlsClient();
+	const rows = await rls((tx) =>
+		tx
+			.select({ identityId: mailboxThreads.identityId, n: count() })
+			.from(mailboxThreads)
+			.innerJoin(mailboxes, eq(mailboxes.id, mailboxThreads.mailboxId))
+			.where(and(isNotNull(mailboxThreads.expiresAt), eq(mailboxes.kind, "archive")))
+			.groupBy(mailboxThreads.identityId),
+	);
+	return Object.fromEntries(rows.map((r) => [String(r.identityId), Number(r.n)]));
+};
+
+// Expiry and star of the open thread, in the folder where it is (the "Disappears on" notice and
+// the archive toast message).
+export const fetchThreadExpiry = async (
+	threadId: string,
+	mailboxId: string,
+): Promise<{ expiresAt: string | null; starred: boolean }> => {
+	const rls = await rlsClient();
+	const [row] = await rls((tx) =>
+		tx
+			.select({ expiresAt: mailboxThreads.expiresAt, starred: mailboxThreads.starred })
+			.from(mailboxThreads)
+			.where(and(eq(mailboxThreads.threadId, threadId), eq(mailboxThreads.mailboxId, mailboxId)))
+			.limit(1),
+	);
+	return { expiresAt: row?.expiresAt ? new Date(row.expiresAt).toISOString() : null, starred: !!row?.starred };
+};
 
 export const fetchIdentitySnoozedThreads = async (): Promise<{ threads: MailboxThreadEntity[] }> => {
 	const rls = await rlsClient();

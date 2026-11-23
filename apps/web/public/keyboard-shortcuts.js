@@ -24,6 +24,7 @@
     ["reply", ["r"], "Reply", () => click("Reply")],
     ["forward", ["f"], "Forward", () => click("Forward")],
     ["archive", ["a"], "Archive (open or selected mail)", () => onMailOrSelection("Archive")],
+    ["selectAll", ["Ctrl+a"], "Select all mail in the list", () => selectAll()],
     ["delete", ["e", "#"], "Delete (open or selected mail)", () => onMailOrSelection("Delete")],
     ["unread", ["u"], "Mark as unread and return to the list", () => markUnread()],
     ["search", ["/"], "Search", () => focusSearch()],
@@ -150,6 +151,20 @@
     ).find((b) => b.offsetParent !== null);
     if (target) target.click();
     return Boolean(target);
+  };
+
+  // Ctrl+A on a mail list: ticks the "select all" box of the header
+  // (data-k-shortcut="select-all", mail-list-header.tsx and k/list-header.tsx), which ticks the
+  // threads of the page. Elsewhere Ctrl+A keeps its native effect: in a field, while a mail is
+  // being written, in a menu or a dialog, or without a visible list (mail open full screen,
+  // where the text of the mail may be what you want to select).
+  const selectAll = () => {
+    if (inInput(document.activeElement) || composerOpen()) return false;
+    if (document.querySelector('[role="menu"], [role="dialog"]')) return false;
+    const target = Array.from(document.querySelectorAll('input[data-k-shortcut="select-all"]')).find(visible);
+    if (!target || target.disabled) return false;
+    if (!target.checked) target.click();
+    return true;
   };
 
   // Unread: only in an open mail (URL .../threads/<id>). The button is an icon

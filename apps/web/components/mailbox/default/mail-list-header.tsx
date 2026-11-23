@@ -277,6 +277,7 @@ function MailListHeader({
 						}}
 						checked={isChecked}
 						aria-label="Select all"
+						data-k-shortcut="select-all"
 						className="h-4 w-4 rounded border-muted-foreground/40"
 					/>
 				)}

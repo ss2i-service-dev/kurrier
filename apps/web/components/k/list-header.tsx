@@ -299,6 +299,7 @@ function KListHeader({
 							}}
 							checked={isChecked}
 							aria-label="Select all"
+							data-k-shortcut="select-all"
 							className="h-4 w-4 cursor-pointer accent-[var(--k-accent)]"
 						/>
 					</label>

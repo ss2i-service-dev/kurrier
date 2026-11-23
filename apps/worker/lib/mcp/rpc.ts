@@ -70,7 +70,7 @@ async function callTool(ctx: ToolContext, params: Record<string, any> | undefine
 		const result = await tool.handler(ctx, args);
 		const structured = result && typeof result === "object" && !Array.isArray(result) ? result : { result };
 		return {
-			content: [{ type: "text", text: JSON.stringify(result ?? null, null, 2) }],
+			content: [{ type: "text", text: JSON.stringify(result ?? null) }],
 			structuredContent: structured,
 		};
 	} catch (err: any) {

@@ -1,6 +1,7 @@
 // @ts-nocheck
 import "@mantine/tiptap/styles.css";
-import { RichTextEditor, Link } from "@mantine/tiptap";
+import { RichTextEditor } from "@mantine/tiptap";
+import { MailLink } from "@/lib/mail-link";
 import { useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
@@ -85,9 +86,9 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 			parseOptions: { preserveWhitespace: "full" },
 			extensions: modern
 				? [
-						// StarterKit's link would duplicate Mantine's (Link)
+						// StarterKit's link would duplicate MailLink
 						StarterKit.configure({ link: false }),
-						Link,
+						MailLink,
 						Image,
 						TextStyle,
 						Color,
@@ -95,7 +96,7 @@ export const TextEditor = forwardRef<TextEditorHandle, TextEditorProps>(
 						Highlight.configure({ multicolor: true }),
 						TextAlign.configure({ types: ["heading", "paragraph"] }),
 					]
-				: [StarterKit, Link, Image],
+				: [StarterKit.configure({ link: false }), MailLink, Image],
 			// Resuming a draft: the saved body is the initial content.
 			content: fromStoredHtml(defaultValue),
 			onCreate: ({ editor }) => {

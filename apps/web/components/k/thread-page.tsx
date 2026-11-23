@@ -6,6 +6,7 @@ import {
 	fetchWebMailThreadDetail,
 } from "@/lib/actions/mailbox";
 import { fetchThreadMailbox } from "@/lib/thread-mailbox";
+import { inboxIdForSpam } from "@/lib/not-spam";
 import { threadOrder } from "@/lib/actions/thread-order";
 import { stripSubjectPrefixesEnabled } from "@/lib/actions/subject-prefixes";
 import { subjectForDisplay } from "@common/subject";
@@ -88,6 +89,7 @@ export default async function KThreadPage({
 					markSmtp={!!mailboxSync}
 					hasUnread={messages.some((m) => !m.seen)}
 					pinned={!!pins[threadId]}
+					inboxMailboxId={inboxIdForSpam(identityMailboxes, String(activeMailbox.id))}
 				/>
 				<div className="k-scroll min-h-0 flex-1 overflow-y-auto" data-k-thread-scroll>
 					<div className="w-full px-5 pb-10 pt-6 md:px-8">

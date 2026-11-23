@@ -3,7 +3,7 @@
 // the background and we move on to the next thread (or the list) right away.
 import React, { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Archive, ArrowLeft, ChevronDown, ChevronUp, ClipboardList, Mail, Trash2, X } from "lucide-react";
+import { Archive, ArrowLeft, ChevronDown, ChevronUp, ClipboardList, Inbox, Mail, Trash2, X } from "lucide-react";
 import { copyMailToClipboard } from "@/lib/mail-copy";
 import KIconButton from "@/components/k/icon-button";
 import SnoozeMail from "@/components/k/snooze";
@@ -23,6 +23,7 @@ export default function ThreadToolbar({
 	markSmtp,
 	hasUnread,
 	pinned: serverPinned = false,
+	inboxMailboxId,
 }: {
 	threadId: string;
 	activeMailboxId: string;
@@ -30,6 +31,8 @@ export default function ThreadToolbar({
 	markSmtp: boolean;
 	hasUnread: boolean;
 	pinned?: boolean;
+	/** Inbox of the identity when the thread is open in the Spam folder. */
+	inboxMailboxId?: string | null;
 }) {
 	const pinOverride = useMailStore((s) => s.pinned.get(String(threadId)));
 	const pinned = pinOverride ?? serverPinned;
@@ -87,6 +90,11 @@ export default function ThreadToolbar({
 		advance();
 		mailActions.trash(threadId, activeMailboxId, markSmtp, activeMailboxKind === "trash");
 	};
+	const notSpam = () => {
+		if (!inboxMailboxId) return;
+		advance();
+		mailActions.notSpam(threadId, activeMailboxId, inboxMailboxId, markSmtp);
+	};
 	const unread = () => {
 		mailActions.unread(threadId, activeMailboxId, markSmtp, 1);
 		close();
@@ -109,6 +117,11 @@ export default function ThreadToolbar({
 				<X className="hidden lg:block" />
 			</KIconButton>
 			<span className="mx-1.5 h-5 w-px bg-k-line" />
+			{inboxMailboxId && (
+				<KIconButton label="Not spam: move back to the Inbox" onClick={notSpam}>
+					<Inbox />
+				</KIconButton>
+			)}
 			{activeMailboxKind !== "archive" && (
 				<KIconButton label="Archive" shortcut={hint.archive} action="archive" onClick={archive}>
 					<Archive />

@@ -20,6 +20,7 @@ import {
 	archiveThread,
 	markAsRead,
 	markAsUnread,
+	moveToFolder,
 	moveToTrash,
 	toggleStar,
 } from "@/lib/actions/mailbox";
@@ -236,6 +237,18 @@ export const mailActions = {
 			run: () => moveToTrash(list, mailboxId, smtp, false),
 			onDone: () => scheduleRefresh(),
 			failure: "Deletion failed",
+		});
+	},
+	/** Thread of the Spam folder moved back to the Inbox ("Not spam" button). */
+	notSpam(threadIds: string | string[], spamMailboxId: string, inboxMailboxId: string, smtp: boolean) {
+		const list = ids(threadIds);
+		moveWithUndo({
+			mailboxId: spamMailboxId,
+			threadIds: list,
+			message: list.length > 1 ? `${list.length} threads moved to Inbox` : "Moved to Inbox",
+			run: () => moveToFolder(list, spamMailboxId, inboxMailboxId, smtp, false),
+			onDone: () => scheduleRefresh(),
+			failure: "Move to Inbox failed",
 		});
 	},
 	/** Move done elsewhere (folder, not spam): only hides. */

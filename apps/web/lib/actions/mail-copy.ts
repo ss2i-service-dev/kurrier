@@ -5,6 +5,7 @@
 // DOM to convert the HTML.
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { messageAttachments, messages } from "@db";
+import { parseAddressField } from "@common";
 import { rlsClient } from "@/lib/actions/clients";
 
 export type CopyAddress = { name?: string | null; address?: string | null };
@@ -21,21 +22,9 @@ export type CopyMessage = {
 	attachments: string[];
 };
 
-// Addresses of a from/to/cc field: mailparser object ({ value: [...] }) for received
-// messages, plain string ("a@b, "Name" <c@d>") for those sent from kurrier.
-const addrs = (v: any): CopyAddress[] => {
-	if (!v) return [];
-	if (Array.isArray(v.value))
-		return v.value.map((a: any) => ({ name: a?.name || null, address: a?.address || null }));
-	const raw: string = typeof v === "string" ? v : typeof v.text === "string" ? v.text : "";
-	return (raw.match(/(?:"[^"]*"|[^,])+/g) ?? [])
-		.map((part) => part.trim())
-		.filter(Boolean)
-		.map((part) => {
-			const m = part.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
-			return m ? { name: m[1].trim() || null, address: m[2].trim() } : { name: null, address: part };
-		});
-};
+// Addresses of a from/to/cc field: mailparser object for received messages, plain string for
+// those sent from kurrier (packages/common/src/address-field.ts).
+const addrs = (v: unknown): CopyAddress[] => parseAddressField(v);
 
 export async function fetchMessagesForCopy(opts: {
 	threadId?: string;

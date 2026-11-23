@@ -30,12 +30,16 @@ import { toast } from "sonner";
 import { useParams, useRouter } from "next/navigation";
 import { useRfcStyle } from "@/components/mailbox/default/compose-style-context";
 import {
+	aliveAt,
+	clearAlive,
+	listBackups,
 	newBackupId,
 	patchBackup,
 	removeBackup,
 	touchAlive,
 	writeBackup,
 } from "@/lib/draft-backup";
+import { backupToDraftRow, pickBackupForEditor } from "@/lib/draft-resume";
 import { formatScheduledWhen } from "@common/schedule-send";
 import { useHour24 } from "@/components/k/ui-context";
 
@@ -190,10 +194,38 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 		}, []);
 
 		// --- draft ---------------------------------------------------------------
+		// If the local copy is more recent than the server (last keystrokes not saved yet, tab
+		// reloaded by a redeploy), the editor opens on it from the first render, and takes over
+		// its id: a single writer (lib/draft-resume.ts).
+		const [resume] = useState(() => {
+			if (!draft && !message) return null;
+			const savedAt = draft ? draftTimesOf(draft).savedAt : null;
+			const b = pickBackupForEditor(listBackups(), {
+				draftMessageId: draft?.id ?? null,
+				draftUpdatedAt: savedAt ? Date.parse(savedAt) : null,
+				originalMessageId: message?.id ?? null,
+				mode: showEditorMode,
+				now: Date.now(),
+				aliveAt,
+			});
+			if (!b) return null;
+			return { id: b.id, row: backupToDraftRow(b, draft) as unknown as MessageEntity };
+		});
+		const shownDraft = resume?.row ?? draft;
+		useEffect(() => {
+			if (!resume) return;
+			// Beat right away: DraftBackupRecovery skips the copies of a live editor.
+			touchAlive(resume.id);
+			toast("Text restored from this browser", {
+				id: "draft-resume",
+				position: "bottom-left",
+				duration: 6_000,
+			});
+		}, []);
 		const [draftId, setDraftId] = useState<string | null>(draft?.id ?? null);
 		const draftIdRef = useRef<string | null>(draft?.id ?? null);
 		const [draftStatus, setDraftStatus] = useState<DraftStatus>(
-			draft
+			draft && !resume
 				? (() => {
 						const times = draftTimesOf(draft);
 						return {
@@ -206,8 +238,9 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 		);
 		const lastSavedKey = useRef<string | null>(null);
 		const seenKey = useRef<string | null>(null);
-		// Resumed draft: the first read (editor rendered) is the saved state.
-		const baseline = useRef(!!draft);
+		// Resumed draft: the first read (editor rendered) is the saved state; except a resumed
+		// local copy, more recent: it goes to the server like a keystroke.
+		const baseline = useRef(!!draft && !resume);
 		// Sending in progress or draft discarded: no more saving.
 		const suspended = useRef(false);
 		const chain = useRef<Promise<void>>(Promise.resolve());
@@ -223,7 +256,9 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 
 		// Local copy of the draft (lib/draft-backup.ts), written on every keystroke and
 		// independent of the server. It is only removed after a successful send or on discard.
-		const backupId = useRef<string>(newBackupId());
+		const backupId = useRef<string>(resume?.id ?? newBackupId());
+		// Page closing: no more beats, the copy is free for the next one.
+		const leaving = useRef(false);
 		const backupOff = useRef(false);
 		const sentAt = useRef<number | null>(null);
 		const lastBackup = useRef<string | null>(null);
@@ -248,7 +283,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				updatedAt: Date.now(),
 			});
 			if (ok) lastBackup.current = sig;
-			touchAlive(backupId.current);
+			if (!leaving.current) touchAlive(backupId.current);
 		};
 		const dropBackup = () => {
 			backupOff.current = true;
@@ -348,7 +383,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 
 		useEffect(() => {
 			const tick = () => {
-				if (!backupOff.current) touchAlive(backupId.current);
+				if (!backupOff.current && !leaving.current) touchAlive(backupId.current);
 				if (suspended.current) return;
 				backupNow();
 				const snap = snapshot();
@@ -370,9 +405,18 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 			};
 			const interval = setInterval(tick, DRAFT_POLL_MS);
 			// Tab or editor closing: whatever is left is saved right away.
-			const onHide = () => {
+			const onHide = (e: PageTransitionEvent) => {
 				backupNow();
 				void persist(true);
+				// Close or reload (not a bfcache freeze): this editor is no longer alive, the one
+				// of the next page takes over the copy right away (lib/draft-resume.ts).
+				if (!e.persisted) {
+					leaving.current = true;
+					clearAlive(backupId.current);
+				}
+			};
+			const onShow = () => {
+				leaving.current = false;
 			};
 			// Server failing: browser confirmation before leaving the page.
 			const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -382,10 +426,12 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 				e.returnValue = "";
 			};
 			window.addEventListener("pagehide", onHide);
+			window.addEventListener("pageshow", onShow);
 			window.addEventListener("beforeunload", onBeforeUnload);
 			return () => {
 				clearInterval(interval);
 				window.removeEventListener("pagehide", onHide);
+				window.removeEventListener("pageshow", onShow);
 				window.removeEventListener("beforeunload", onBeforeUnload);
 				backupNow();
 				if (timer.current) clearTimeout(timer.current);
@@ -595,7 +641,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 							identityMailboxes,
 							signatureHtml,
 							rfcStyle,
-							draftRow: draft,
+							draftRow: shownDraft,
 							draft: draftContext,
 						}}
 						syncOnChange
@@ -610,7 +656,7 @@ const EmailEditor = forwardRef<EmailEditorHandle, Props>(
 							<TextEditor
 								name={"html"}
 								ref={textEditorRef}
-								defaultValue={draft?.html ?? ""}
+								defaultValue={shownDraft?.html ?? ""}
 							/>
 						</Form>
 					</DynamicContextProvider>

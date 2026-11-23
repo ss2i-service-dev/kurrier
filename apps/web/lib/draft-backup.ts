@@ -95,6 +95,16 @@ export function touchAlive(id: string) {
 	} catch {}
 }
 
+// Page closing or reloading: its editor is no longer alive, the copy is free for the editor of
+// the next page (lib/draft-resume.ts) without waiting 10 s.
+export function clearAlive(id: string) {
+	const s = storage();
+	if (!s) return;
+	try {
+		s.removeItem(ALIVE_PREFIX + id);
+	} catch {}
+}
+
 export function aliveAt(id: string): number {
 	const s = storage();
 	if (!s) return 0;

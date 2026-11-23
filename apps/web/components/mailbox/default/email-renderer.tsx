@@ -41,6 +41,10 @@ export type MessageAttachmentWithUrl = MessageAttachmentEntity & {
 	downloadUrl?: string;
 	// Bytes of the file on our origin, present when a .pptx preview is possible.
 	contentUrl?: string;
+	// Same bytes for a text or a CSV, rendered as text or as a table.
+	textUrl?: string;
+	// JSON list of the files of a zip.
+	zipUrl?: string;
 	// Direct S3 URL of an image referenced by cid: in the body of the message.
 	inlineUrl?: string;
 };

@@ -3,8 +3,10 @@
 // the storage ("Bad request: Date is too old"). The page now only carries
 // /api/attachments/<id>, and the signature happens at click time. Pure functions, tested by
 // apps/web/test/attachment-links.ts.
+import { canPreviewText } from "./text-preview";
+import { canListZip } from "./zip-listing";
 
-export type AttachmentLinkMode = "open" | "download" | "content";
+export type AttachmentLinkMode = "open" | "download" | "content" | "listing";
 
 // Beyond this, the preview of a .pptx loads the browser too much: the download is offered.
 export const PPTX_PREVIEW_MAX_BYTES = 50 * 1024 * 1024;
@@ -23,7 +25,7 @@ export function attachmentLink(id: string, mode: AttachmentLinkMode = "open") {
 
 export function parseAttachmentMode(value: string | null): AttachmentLinkMode | null {
 	if (value === null || value === "open") return "open";
-	return value === "download" || value === "content" ? value : null;
+	return value === "download" || value === "content" || value === "listing" ? value : null;
 }
 
 export function canPreviewPptx(a: {
@@ -46,6 +48,10 @@ export function attachmentUrls(a: {
 		signedUrl: attachmentLink(a.id),
 		downloadUrl: attachmentLink(a.id, "download"),
 		contentUrl: canPreviewPptx(a) ? attachmentLink(a.id, "content") : undefined,
+		// Text and CSV: same bytes, rendered as text or as a table (lib/text-preview.ts).
+		textUrl: canPreviewText(a) ? attachmentLink(a.id, "content") : undefined,
+		// Zip: list of the files only (lib/zip-listing.ts), nothing is decompressed.
+		zipUrl: canListZip(a) ? attachmentLink(a.id, "listing") : undefined,
 	};
 }
 

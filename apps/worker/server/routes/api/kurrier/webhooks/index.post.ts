@@ -9,7 +9,7 @@ import { db, WebhookCreateSchema, WebhookInsertEntity, webhooks } from "@db";
 
 export default defineEventHandler(async (event) => {
 
-	const { ownerId } = await validateApiKey(event);
+	const { apiKey, ownerId } = await validateApiKey(event);
 	const body = await readBody(event).catch(() => ({}));
 	const parsed = WebhookCreateSchema.safeParse(body);
 	if (!parsed.success) {
@@ -31,14 +31,16 @@ export default defineEventHandler(async (event) => {
 			"Field `events` must have at least one event",
 		);
 	}
-	// Access control: identity required, belonging to the API key; the webhook takes its
-	// workspace. Without an identity, the worker would call it for all incoming mail.
+	// Access control: identity required, belonging to the API key and to its workspace
+	// (GHSA-cvh9-93mg-xvc9); the webhook takes its workspace. Without an identity, the worker
+	// would call it for all incoming mail.
 	if (!data.identityId) {
 		return apiError(400, "MISSING_IDENTITY", "Field `identityId` is required");
 	}
 	const identity = await validateIdentityOwnership({
 		identityId: data.identityId,
 		ownerId,
+		workspaceId: apiKey.workspaceId,
 	});
 	// Public address only (re-checked on each send, lib/webhooks/message.received.ts).
 	const url = await assertPublicUrl(String(data.url), { allowHttp: true }).catch(() => null);

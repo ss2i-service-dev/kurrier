@@ -1348,11 +1348,19 @@ export async function addWebhook(
 ): Promise<FormState> {
 	return handleAction(async () => {
 		const data = decode(formData);
+		const user = await assertSignedIn();
 		// A webhook is attached to a visible identity; without one, the worker called it for
 		// all incoming mail of all mailboxes.
 		const identity = await assertIdentityAccess({ id: String(data.identityId ?? "") }).catch(() => null);
 		if (!identity) {
 			return { success: false, error: "Choose an identity for this webhook." };
+		}
+		// And one you own (GHSA-cvh9-93mg-xvc9). A visible identity can be a domain identity,
+		// shared with the workspace or a colleague's you are a member of: its incoming mail went
+		// to someone else's URL, even after the sharing ended (the worker now only fires the
+		// owner's webhooks).
+		if (identity.ownerId !== user.id) {
+			return { success: false, error: "Webhooks can only be added to your own identities." };
 		}
 		// Public address only (the worker re-checks it on every send).
 		const url = await assertPublicUrl(String(data.url ?? ""), { allowHttp: true }).catch(() => null);

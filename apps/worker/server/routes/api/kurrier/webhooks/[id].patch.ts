@@ -10,7 +10,7 @@ import {and, eq} from "drizzle-orm";
 
 export default defineEventHandler(async (event) => {
 
-	const { ownerId } = await validateApiKey(event);
+	const { apiKey, ownerId } = await validateApiKey(event);
 	const id = getRouterParam(event, "id");
 	if (!id) {
 		return apiError(400, "INVALID_WEBHOOK_ID", "Webhook id is required");
@@ -25,16 +25,19 @@ export default defineEventHandler(async (event) => {
 		}));
 		return apiError(400, "INVALID_REQUEST_BODY", "Invalid request body", issues);
 	}
+	// Access control (GHSA-cvh9-93mg-xvc9): within the workspace of the key only.
+	const scope = (webhookId: string) =>
+		and(eq(webhooks.id, webhookId), eq(webhooks.ownerId, ownerId), eq(webhooks.workspaceId, apiKey.workspaceId));
 	const [existing] = await db
 		.select()
 		.from(webhooks)
-		.where(and(eq(webhooks.id, String(id)), eq(webhooks.ownerId, ownerId)))
+		.where(scope(String(id)))
 		.limit(1);
 	if (!existing) {
 		return apiError(404, "WEBHOOK_NOT_FOUND", "Webhook not found");
 	}
 	// Access control: owner, workspace and id cannot be changed; a new identity must belong to
-	// the API key (the webhook takes its workspace).
+	// the API key and to its workspace (so the webhook never changes workspace).
 	const { id: _id, ownerId: _ownerId, workspaceId: _workspaceId, ...patch } = parsed.data as Record<string, any>;
 	if ("url" in patch) {
 		const url = await assertPublicUrl(String(patch.url ?? ""), { allowHttp: true }).catch(() => null);
@@ -45,14 +48,18 @@ export default defineEventHandler(async (event) => {
 		if (!patch.identityId) {
 			return apiError(400, "MISSING_IDENTITY", "Field `identityId` cannot be empty");
 		}
-		const identity = await validateIdentityOwnership({ identityId: String(patch.identityId), ownerId });
+		const identity = await validateIdentityOwnership({
+			identityId: String(patch.identityId),
+			ownerId,
+			workspaceId: apiKey.workspaceId,
+		});
 		patch.identityId = identity.id;
 		patch.workspaceId = identity.workspaceId;
 	}
 	const [updated] = await db
 		.update(webhooks)
 		.set(patch as WebhookInsertEntity)
-		.where(and(eq(webhooks.id, existing.id), eq(webhooks.ownerId, ownerId)))
+		.where(scope(existing.id))
 		.returning();
 	return apiSuccess(updated);
 

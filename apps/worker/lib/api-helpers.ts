@@ -155,9 +155,12 @@ export async function validateApiKeyToken(token: string) {
 }
 
 
+// Access control (GHSA-cvh9-93mg-xvc9): `workspaceId`, the one of the API key, also bounds the
+// identity to that workspace (webhooks); without it, the behavior is unchanged.
 export async function validateIdentityOwnership(opts: {
 	identityId: string;
 	ownerId: string;
+	workspaceId?: string;
 }) {
 
 	const [identity] = await db
@@ -167,6 +170,9 @@ export async function validateIdentityOwnership(opts: {
 			and(
 				eq(identities.id, opts.identityId),
 				eq(identities.ownerId, opts.ownerId),
+				opts.workspaceId === undefined
+					? undefined
+					: eq(identities.workspaceId, opts.workspaceId),
 			),
 		)
 		.limit(1);

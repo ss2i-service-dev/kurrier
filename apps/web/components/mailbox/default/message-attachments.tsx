@@ -16,6 +16,7 @@ import EditorAttachmentItem, {
 } from "@/components/mailbox/default/editor/editor-attachment-item";
 import type { MessageAttachmentWithUrl } from "@/components/mailbox/default/email-renderer";
 import { useModernUi } from "@/components/k/ui-context";
+import { Viewer } from "@/components/k/attachments";
 
 export default function MessageAttachments({
 	attachments,
@@ -29,6 +30,8 @@ export default function MessageAttachments({
 }) {
 	const modern = useModernUi();
 	const [showPreviews, setShowPreviews] = useState(false);
+	// A .pptx opens in the viewer, the browser cannot display it.
+	const [viewerIndex, setViewerIndex] = useState<number | null>(null);
 
 	const files = (attachments ?? []).filter((a) => !hiddenIds.includes(a.id));
 	if (files.length === 0) return null;
@@ -70,13 +73,18 @@ export default function MessageAttachments({
 
 			{showPreviews ? (
 				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-					{files.map((a) => (
-						<EditorAttachmentItem key={a.id} attachment={a} publicConfig={publicConfig} />
+					{files.map((a, i) => (
+						<EditorAttachmentItem
+							key={a.id}
+							attachment={a}
+							publicConfig={publicConfig}
+							onPreview={a.contentUrl ? () => setViewerIndex(i) : undefined}
+						/>
 					))}
 				</div>
 			) : (
 				<div className="flex flex-wrap gap-2">
-					{files.map((a) => {
+					{files.map((a, i) => {
 						const kind = getKind(a);
 						const name = a.filenameOriginal || "attachment";
 						const size = formatBytes(a.sizeBytes);
@@ -95,7 +103,15 @@ export default function MessageAttachments({
 									href={a.signedUrl || "#"}
 									target="_blank"
 									rel="noreferrer noopener"
-									title={`Open ${name}`}
+									title={a.contentUrl ? `Preview ${name}` : `Open ${name}`}
+									onClick={
+										a.contentUrl
+											? (e) => {
+													e.preventDefault();
+													setViewerIndex(i);
+												}
+											: undefined
+									}
 									className="inline-flex min-w-0 items-center gap-2 py-1.5 pl-2.5 pr-1"
 								>
 									<span className="shrink-0 text-neutral-500">
@@ -119,6 +135,10 @@ export default function MessageAttachments({
 						);
 					})}
 				</div>
+			)}
+
+			{viewerIndex !== null && files[viewerIndex] && (
+				<Viewer files={files} index={viewerIndex} onIndex={setViewerIndex} onClose={() => setViewerIndex(null)} />
 			)}
 		</div>
 	);

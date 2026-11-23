@@ -10,8 +10,10 @@ import {
 	attachmentDisposition,
 	attachmentLink,
 	attachmentUrls,
+	canPreviewPptx,
 	isAttachmentId,
 	parseAttachmentMode,
+	PPTX_PREVIEW_MAX_BYTES,
 } from "../lib/attachment-links";
 import { cidUrlMap } from "../lib/inline-images";
 
@@ -36,7 +38,22 @@ test("stable links, no signature in the page", () => {
 	assert.deepEqual(attachmentUrls({ id: ID }), {
 		signedUrl: `/api/attachments/${ID}`,
 		downloadUrl: `/api/attachments/${ID}?mode=download`,
+		contentUrl: undefined,
 	});
+});
+
+test("pptx preview: only a .pptx under the size limit gets a content URL", () => {
+	const pptx = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+	assert.equal(canPreviewPptx({ contentType: pptx, sizeBytes: 1000 }), true);
+	assert.equal(canPreviewPptx({ contentType: "application/octet-stream", filenameOriginal: "Deck.PPTX" }), true);
+	assert.equal(canPreviewPptx({ filenameOriginal: "deck.ppt" }), false);
+	assert.equal(canPreviewPptx({ filenameOriginal: "deck.pdf", contentType: "application/pdf" }), false);
+	assert.equal(canPreviewPptx({ filenameOriginal: "deck.pptx", sizeBytes: PPTX_PREVIEW_MAX_BYTES + 1 }), false);
+	assert.equal(
+		attachmentUrls({ id: ID, filenameOriginal: "deck.pptx", sizeBytes: 10 }).contentUrl,
+		`/api/attachments/${ID}?mode=content`,
+	);
+	assert.equal(parseAttachmentMode("content"), "content");
 });
 
 test("unknown id and mode are refused", () => {
@@ -74,6 +91,20 @@ test("route: access by RLS, redirect to a fresh S3 URL", () => {
 	assert.match(route, /rlsClient\(\)/);
 	assert.match(route, /status: 302/);
 	assert.match(route, /expiresIn: SIGNED_URL_SECONDS/);
+});
+
+test("route content mode: never interpretable by the browser", () => {
+	const route = source("app/api/attachments/[id]/route.ts");
+	assert.match(route, /"Content-Type": "application\/octet-stream"/);
+	assert.match(route, /"X-Content-Type-Options": "nosniff"/);
+	assert.match(route, /sandbox/);
+	assert.match(route, /canPreviewPptx\(attachment\)/);
+});
+
+test("pptx viewer blocks external media and loads the engine on demand", () => {
+	const viewer = source("components/k/pptx-preview.tsx");
+	assert.match(viewer, /externalMedia: "block"/);
+	assert.match(viewer, /await import\("@aiden0z\/pptx-renderer"\)/);
 });
 
 if (failures > 0) {

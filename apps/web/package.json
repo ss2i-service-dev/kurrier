@@ -10,6 +10,7 @@
     "format": "biome format --write"
   },
   "dependencies": {
+    "@aiden0z/pptx-renderer": "1.4.0",
     "@js-temporal/polyfill": "^0.5.1",
     "@mantine/core": "^8.3.5",
     "@mantine/dates": "^8.3.8",

@@ -25,6 +25,12 @@ const norm = (v?: string | null) =>
  * their UID, nor by SEARCH, nor in the COMPLETE read of the folder envelopes (readable
  * folder, at most SCAN_LIMIT messages, read without error). A row merely "not found"
  * (folder too big, read error) is not in it.
+ *
+ * On Gmail (X-GM-EXT-1), absence is also proven when the UID in the database does not carry
+ * the message (FETCH without error) and both SEARCH HEADER Message-ID and X-GM-RAW
+ * "rfc822msgid:" answer without error and empty. Without it, a message deleted from Gmail by
+ * another client came back to the Inbox at every move to the trash, the folder being too big
+ * to be scanned.
  */
 const SCAN_LIMIT = 5000;
 
@@ -60,12 +66,15 @@ export async function resolveUids(
 	// Envelopes of the UIDs held in the database, in ONE FETCH: a selection of 50 threads used
 	// to make 50 round trips (several seconds on Gmail) before moving anything.
 	const atUid = new Map<number, string>();
+	let atUidRead = false;
+	const gmail = Boolean((client as any).capabilities?.has?.("X-GM-EXT-1"));
 	const uidList = [...new Set(rows.map((r) => Number(r.uid)).filter((u) => u > 0))];
 	if (uidList.length) {
 		try {
 			for await (const m of client.fetch(uidList.join(","), { uid: true, envelope: true }, { uid: true })) {
 				atUid.set(Number(m.uid), norm(m.envelope?.messageId));
 			}
+			atUidRead = true;
 		} catch {
 			// per-message check below
 		}
@@ -91,13 +100,26 @@ export async function resolveUids(
 			)
 			.catch(() => false as const);
 		let uids: number[] = Array.isArray(found) ? found : [];
+		// Gmail: second search through its native operator, which is authoritative.
+		let gmailEmpty = false;
+		if (!uids.length && gmail && Array.isArray(found)) {
+			const raw = await client
+				.search({ gmraw: `rfc822msgid:${wanted}` } as any, { uid: true })
+				.catch(() => false as const);
+			if (Array.isArray(raw)) {
+				uids = raw;
+				gmailEmpty = raw.length === 0;
+			}
+		}
 		if (!uids.length) {
 			uids = (await scan().catch(() => undefined))?.get(wanted) ?? [];
 		}
 		if (!uids.length) {
-			if (scanComplete) absent?.add(row.id);
+			const gmailProof = gmailEmpty && (Number(row.uid) <= 0 || atUidRead);
+			if (scanComplete || gmailProof) absent?.add(row.id);
+			const why = scanComplete ? ", folder read in full" : gmailProof ? ", absent according to Gmail" : "";
 			console.warn(
-				`[imap:resolve-uids] message ${row.id} not found in the folder (database uid ${row.uid}${scanComplete ? ", folder read in full" : ""}), skipped`,
+				`[imap:resolve-uids] message ${row.id} not found in the folder (database uid ${row.uid}${why}), skipped`,
 			);
 			continue;
 		}

@@ -38,8 +38,10 @@ export default function ThreadSlot({
 	// Precedent du telephone : barre de retour collee sous la barre du haut.
 	const back = (
 		<div className={`sticky ${pane ? "top-0" : "top-[var(--ss2i-mail-header-h,0px)]"} z-40 border-b bg-background/95 px-2 py-1 backdrop-blur md:hidden`} data-ss2i-thread-back="">
+			{/* Cible du double Echap (public/ss2i-shortcuts.js), aussi sur ordinateur ou la barre est cachee. */}
 			<button
 				type="button"
+				data-ss2i-shortcut="leave-thread"
 				onClick={() => leaveThreadToList(router, pathname ?? "")}
 				className="inline-flex h-9 items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground hover:bg-muted"
 			>

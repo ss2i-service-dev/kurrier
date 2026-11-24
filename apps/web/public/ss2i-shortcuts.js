@@ -30,10 +30,10 @@
     ["unread", ["u"], "Marquer non lu et revenir a la liste", () => marquerNonLu()],
     ["search", ["/"], "Rechercher", () => focaliserRecherche()],
     ["help", ["?"], "Afficher cette aide", () => basculerAide()],
-    // Nouvelle interface seulement : navigation dans la liste et fermeture du fil.
+    // Nouvelle interface seulement : navigation dans la liste. Fermeture du fil : les deux.
     ["next", ["j", "ArrowDown"], "Fil suivant", () => nouvelle() && voisin(1), "liste"],
     ["prev", ["k", "ArrowUp"], "Fil precedent", () => nouvelle() && voisin(-1), "liste"],
-    ["close", ["Escape"], "Fermer le fil ouvert", () => fermer()],
+    ["close", ["Escape"], "Fermer le fil ouvert (style Gmail : deux appuis)", () => fermer()],
     // Jamais depuis une fenetre sans editeur (consigne de « Repondre avec Lore »...) : le
     // bouton Send trouve serait celui d'un brouillon ouvert derriere, envoye a l'aveugle.
     ["send", ["Ctrl+Enter"], "Envoyer le message en cours", () => !dansUneFenetreSansEditeur() && cliquer("Send")],
@@ -204,10 +204,24 @@
     return Boolean(cible);
   };
 
-  // Nouvelle interface : ferme le fil ouvert (sauf fenetre ou menu ouvert).
+  // Ferme le fil ouvert (sauf fenetre ou menu ouvert : Echap les ferme d'abord, sans compter).
+  // Nouvelle interface : un appui. Interface classique (style Gmail) : deux appuis rapproches,
+  // puis retour a la liste par le bouton Back du fil (thread-slot.tsx, leaveThreadToList), cache
+  // sur ordinateur (md:hidden) donc jamais filtre par visible() (Samuel le 24/11/2026).
+  let dernierEchap = 0;
   const fermer = () => {
-    if (!nouvelle() || document.querySelector('[role="dialog"], [role="menu"]')) return false;
-    return cliquerK("close");
+    if (document.querySelector('[role="dialog"], [role="menu"]')) return false;
+    if (nouvelle()) return cliquerK("close");
+    if (!dansUnMail()) return false;
+    const maintenant = Date.now();
+    if (maintenant - dernierEchap > 800) {
+      dernierEchap = maintenant;
+      return false;
+    }
+    dernierEchap = 0;
+    const retour = document.querySelector('button[data-ss2i-shortcut="leave-thread"]');
+    if (retour) retour.click();
+    return Boolean(retour);
   };
 
   const focaliserRecherche = () => {
@@ -243,7 +257,6 @@
     const entrees = c && Array.isArray(c.help)
       ? c.help.map((h) => [h.keys, h.label])
       : RACCOURCIS.filter(([, , , , portee]) => nouvelle() || !portee)
-          .filter(([id]) => nouvelle() || id !== "close")
           .map(([, touches, libelle]) => [touches, libelle]);
     const lignes = entrees
       .map(

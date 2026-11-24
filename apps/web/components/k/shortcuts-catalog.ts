@@ -37,7 +37,7 @@ export type ShortcutDef = {
 export const SHORTCUTS: ShortcutDef[] = [
 	{ id: "next", group: "nav", en: "Next conversation", fr: "Fil suivant", defaults: ["j", "ArrowDown"], outlookOnly: true },
 	{ id: "prev", group: "nav", en: "Previous conversation", fr: "Fil précédent", defaults: ["k", "ArrowUp"], outlookOnly: true },
-	{ id: "close", group: "nav", en: "Close the conversation", fr: "Fermer le fil ouvert", defaults: ["Escape"], outlookOnly: true },
+	{ id: "close", group: "nav", en: "Close the conversation (Gmail style: press twice)", fr: "Fermer le fil ouvert (style Gmail : deux appuis)", defaults: ["Escape"] },
 	{ id: "search", group: "nav", en: "Search", fr: "Rechercher", defaults: ["/"] },
 	{ id: "help", group: "nav", en: "Show shortcuts", fr: "Afficher les raccourcis", defaults: ["?"] },
 	{ id: "reply", group: "read", en: "Reply", fr: "Répondre", defaults: ["r"] },

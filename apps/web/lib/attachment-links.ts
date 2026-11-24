@@ -6,8 +6,10 @@
 import { canPreviewSheet } from "./sheet-preview";
 import { canPreviewText } from "./text-preview";
 import { canListZip } from "./zip-listing";
+import { canPreviewEml } from "./eml-preview";
 
-export type AttachmentLinkMode = "open" | "download" | "content" | "listing";
+// message : mail joint (.eml) decode en JSON ; part : une de ses pieces jointes (lib/eml-preview.ts).
+export type AttachmentLinkMode = "open" | "download" | "content" | "listing" | "message" | "part";
 
 // Au-dela, l'apercu d'un pptx charge trop le navigateur : on propose le telechargement.
 export const PPTX_PREVIEW_MAX_BYTES = 50 * 1024 * 1024;
@@ -26,7 +28,9 @@ export function attachmentLink(id: string, mode: AttachmentLinkMode = "open") {
 
 export function parseAttachmentMode(value: string | null): AttachmentLinkMode | null {
 	if (value === null || value === "open") return "open";
-	return value === "download" || value === "content" || value === "listing" ? value : null;
+	return value === "download" || value === "content" || value === "listing" || value === "message" || value === "part"
+		? value
+		: null;
 }
 
 export function canPreviewPptx(a: {
@@ -55,5 +59,7 @@ export function attachmentUrls(a: {
 		sheetUrl: canPreviewSheet(a) ? attachmentLink(a.id, "content") : undefined,
 		// Zip : liste des fichiers seulement (lib/zip-listing.ts), rien n'est decompresse.
 		zipUrl: canListZip(a) ? attachmentLink(a.id, "listing") : undefined,
+		// Mail joint (.eml) : decode par le serveur, affiche comme un mail (lib/eml-preview.ts).
+		emlUrl: canPreviewEml(a) ? attachmentLink(a.id, "message") : undefined,
 	};
 }

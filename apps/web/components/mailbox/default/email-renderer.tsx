@@ -52,6 +52,8 @@ export type MessageAttachmentWithUrl = MessageAttachmentEntity & {
 	sheetUrl?: string;
 	// ss2i : liste JSON des fichiers d'un zip.
 	zipUrl?: string;
+	// ss2i : mail joint (.eml) decode en JSON par le serveur.
+	emlUrl?: string;
 	// ss2i : URL S3 directe d'une image referencee par cid: dans le corps du message.
 	inlineUrl?: string;
 };

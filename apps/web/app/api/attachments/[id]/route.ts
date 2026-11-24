@@ -3,6 +3,8 @@
 // - open / download : redirection vers une URL S3 fraiche. Le fichier reste servi par
 //   l'origine S3 : une piece jointe HTML ou SVG ne s'execute jamais sur celle de l'application.
 // - listing : liste JSON des fichiers d'un zip, lue par plages S3 (lib/zip-listing.ts).
+// - message : mail joint (.eml) decode en JSON pour la visionneuse ; part (&part=N) : une de ses
+//   pieces jointes, en telechargement (lib/eml-preview.ts, lib/eml-parse.ts).
 // - content : octets d'un pptx, d'un texte, d'un CSV ou d'un classeur pour l'apercu, sur la meme origine (S3 refuse le fetch du
 //   navigateur, CORS). Jamais interpretables : type binaire, attachment, nosniff, sandbox.
 import { GetObjectCommand } from "@aws-sdk/client-s3";
@@ -28,6 +30,8 @@ import {
 	ZIP_TAIL_BYTES,
 } from "@/lib/zip-listing";
 import { attachmentDisposition } from "@/lib/compose-attachment-preview";
+import { canPreviewEml, EML_PREVIEW_MAX_BYTES, parsePartIndex } from "@/lib/eml-preview";
+import { emlPart, parseEmlPreview } from "@/lib/eml-parse";
 import { s3 } from "@/lib/create-s3-client";
 
 export const dynamic = "force-dynamic";
@@ -64,6 +68,51 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 	const { S3_BUCKET } = getServerEnv();
 	const Bucket = S3_BUCKET!;
 	const Key = attachment.path;
+
+	if (mode === "message" || mode === "part") {
+		const json = (body: unknown, status = 200) =>
+			new Response(JSON.stringify(body), {
+				status,
+				headers: {
+					"Content-Type": "application/json; charset=utf-8",
+					"X-Content-Type-Options": "nosniff",
+					"Cache-Control": "private, no-store",
+				},
+			});
+		if (!canPreviewEml(attachment)) return failure(415, "Aperçu indisponible pour ce fichier.");
+		const part = mode === "part" ? parsePartIndex(req.nextUrl.searchParams.get("part")) : null;
+		if (mode === "part" && part === null) return failure(404, "Pièce jointe introuvable.");
+		const object = await s3.send(new GetObjectCommand({ Bucket, Key }));
+		if (!object.Body) return failure(404, "Pièce jointe introuvable.");
+		if (Number(object.ContentLength ?? 0) > EML_PREVIEW_MAX_BYTES) {
+			object.Body.transformToWebStream().cancel().catch(() => {});
+			return mode === "message"
+				? json({ error: "Mail trop volumineux pour l'aperçu." }, 413)
+				: failure(413, "Mail trop volumineux : téléchargez-le pour ouvrir ses pièces jointes.");
+		}
+		const source = Buffer.from(await object.Body.transformToByteArray());
+		try {
+			if (mode === "message") return json(await parseEmlPreview(source));
+			const found = await emlPart(source, part!);
+			if (!found) return failure(404, "Pièce jointe introuvable.");
+			// Toujours en telechargement, jamais interpretee sur l'origine de l'application.
+			return new Response(new Uint8Array(found.content), {
+				headers: {
+					"Content-Type": "application/octet-stream",
+					"Content-Length": String(found.content.length),
+					"Content-Disposition": attachmentDisposition(found.filename),
+					"Content-Security-Policy": "default-src 'none'; sandbox",
+					"X-Content-Type-Options": "nosniff",
+					"Cache-Control": "private, no-store",
+				},
+			});
+		} catch (error) {
+			console.warn("[courrier] mail joint illisible", attachment.id, error);
+			return mode === "message"
+				? json({ error: "Ce mail n'a pas pu être lu." }, 422)
+				: failure(422, "Ce mail n'a pas pu être lu.");
+		}
+	}
 
 	if (mode === "content") {
 		const maxBytes = canPreviewPptx(attachment)

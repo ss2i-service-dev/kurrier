@@ -14,15 +14,16 @@ import PptxPreview from "@/components/k/pptx-preview";
 import SheetPreview from "@/components/k/sheet-preview";
 import TextPreview from "@/components/k/text-preview";
 import ZipPreview from "@/components/k/zip-preview";
+import EmlPreview from "@/components/k/eml-preview";
 import { isTabular } from "@/lib/text-preview";
 
 type Kind = ReturnType<typeof getKind>;
 export const PREVIEWABLE: Kind[] = ["image", "pdf", "text", "video", "audio"];
 
-// Un pptx, un classeur, un CSV envoye en application/vnd.ms-excel ou un zip n'ont pas de famille propre :
+// Un pptx, un classeur, un CSV envoye en application/vnd.ms-excel, un zip ou un mail joint (.eml) n'ont pas de famille propre :
 // ils sont previsualisables quand la page porte l'URL de leur apercu.
 export const isPreviewable = (a: MessageAttachmentWithUrl) =>
-	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl || !!a.textUrl || !!a.sheetUrl || !!a.zipUrl);
+	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl || !!a.textUrl || !!a.sheetUrl || !!a.zipUrl || !!a.emlUrl);
 
 // Pastille de type : couleur et sigle par famille de fichier.
 export function badgeFor(name: string, kind: Kind) {
@@ -32,6 +33,7 @@ export function badgeFor(name: string, kind: Kind) {
 	if (["xls", "xlsx", "ods", "csv"].includes(ext)) return { label: ext === "csv" ? "CSV" : "XLS", color: "#1f8a4c" };
 	if (["ppt", "pptx", "odp", "key"].includes(ext)) return { label: "PPT", color: "#d5651b" };
 	if (["zip", "rar", "7z", "gz", "tar"].includes(ext)) return { label: "ZIP", color: "#7a6a52" };
+	if (["eml", "msg"].includes(ext)) return { label: "MAIL", color: "#2b6cb0" };
 	if (kind === "video") return { label: "VID", color: "#7b3fb8" };
 	if (kind === "audio") return { label: "SON", color: "#b8337a" };
 	if (kind === "calendar") return { label: "ICS", color: "#1e7a8c" };
@@ -188,8 +190,8 @@ export function Viewer({
 							.join(" · ")}
 					</div>
 				</div>
-				{/* Un pptx, un classeur, un CSV ou un zip ouvert dans un onglet serait simplement telecharge. */}
-				{!current.contentUrl && !current.sheetUrl && !current.zipUrl && !(current.textUrl && isTabular(current)) && (
+				{/* Un pptx, un classeur, un CSV, un zip ou un .eml ouvert dans un onglet serait simplement telecharge. */}
+				{!current.contentUrl && !current.sheetUrl && !current.zipUrl && !current.emlUrl && !(current.textUrl && isTabular(current)) && (
 					<a
 						href={current.signedUrl}
 						target="_blank"
@@ -259,6 +261,15 @@ export function Viewer({
 					)}
 					{current.zipUrl && (
 						<ZipPreview key={current.id} url={current.zipUrl} name={name} downloadUrl={current.downloadUrl} />
+					)}
+					{current.emlUrl && (
+						<EmlPreview
+							key={current.id}
+							url={current.emlUrl}
+							attachmentId={current.id}
+							name={name}
+							downloadUrl={current.downloadUrl}
+						/>
 					)}
 					{(kind === "pdf" || (kind === "text" && !current.textUrl)) && (
 						<iframe

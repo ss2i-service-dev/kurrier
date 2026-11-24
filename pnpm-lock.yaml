@@ -277,6 +277,9 @@ importers:
       '@tiptap/starter-kit':
         specifier: ^3.7.0
         version: 3.13.0
+      '@types/mailparser':
+        specifier: ^3.4.6
+        version: 3.4.6
       argon2:
         specifier: ^0.44.0
         version: 0.44.0
@@ -319,6 +322,9 @@ importers:
       lucide-react:
         specifier: ^0.545.0
         version: 0.545.0(react@19.3.1)
+      mailparser:
+        specifier: 3.9.47
+        version: 3.9.47
       mime-types:
         specifier: ^3.0.1
         version: 3.0.1
@@ -9755,7 +9761,7 @@ snapshots:
   '@inquirer/external-editor@1.0.3(@types/node@24.10.2)':
     dependencies:
       chardet: 2.1.1
-      iconv-lite: 0.7.0
+      iconv-lite: 0.7.3
     optionalDependencies:
       '@types/node': 24.10.2
 
@@ -11885,7 +11891,7 @@ snapshots:
 
   '@types/mailparser@3.4.6':
     dependencies:
-      '@types/node': 24.10.1
+      '@types/node': 24.10.2
       iconv-lite: 0.6.3
 
   '@types/markdown-it@14.1.2':

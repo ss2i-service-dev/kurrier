@@ -149,7 +149,7 @@ export function GuestBuddies({ event, className = "" }: { event: CalendarEvent; 
 }
 
 /** Liseré des reunions : contour fin en plus de la couleur de l'agenda. */
-export const meetingRing = (e: CalendarEvent) => (e.guests?.length && !e.ghost && !e.active ? "ring-1 ring-inset ring-current/30" : "");
+export const meetingRing = (e: CalendarEvent) => (e.guests?.length && !e.ghost && !e.active ? "ring-1 ring-inset ring-current/50" : "");
 
 const guestNames = (e: CalendarEvent) => (e.guests ?? []).map((g) => g.name ?? g.address).join(", ");
 
@@ -526,10 +526,13 @@ export default function CalendarGrid({
 												...colorStyle(p.event),
 											}}
 										>
-											<span className={`block truncate font-medium ${short ? "text-[10.5px]" : "text-[11.5px]"}`}>
-												{!!p.event.proposals?.length && <ProposalBadge />}
-												<MeetingBadge event={p.event} />
-												{short ? `${hhmm(p.top)} ${p.event.title}` : p.event.title}
+											<span className={`flex items-center gap-1 font-medium ${short ? "text-[10.5px]" : "text-[11.5px]"}`}>
+												<span className="min-w-0 flex-1 truncate">
+													{!!p.event.proposals?.length && <ProposalBadge />}
+													<MeetingBadge event={p.event} />
+													{short ? `${hhmm(p.top)} ${p.event.title}` : p.event.title}
+												</span>
+												<GuestBuddies event={p.event} className="shrink-0" />
 											</span>
 											{!short && h >= 44 && !!p.event.proposals?.length && (
 												<span className="block truncate text-[10px] font-semibold text-amber-700 dark:text-amber-400">Nouvel horaire proposé</span>
@@ -540,7 +543,6 @@ export default function CalendarGrid({
 													{p.event.location && !many ? ` · ${p.event.location}` : ""}
 												</span>
 											)}
-											{h >= 40 && <GuestBuddies event={p.event} className="mt-0.5" />}
 											{draggable && (
 												<span
 													aria-hidden

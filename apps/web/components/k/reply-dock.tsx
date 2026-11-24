@@ -40,6 +40,11 @@ export default function ReplyDock({
 	const [, force] = useState(0);
 	// Les messages s'enregistrent au montage : un rendu de plus pour les voir.
 	useEffect(() => force((n) => n + 1), []);
+	// L'etat « reponse ouverte » vit dans le fil, l'editeur ici. Pendant l'envoi, le
+	// brouillon devient le dernier message et la page retire la zone (!last.draft) ;
+	// l'editeur demonte ne peut plus fermer la reponse, et quand le message envoye
+	// remplace le brouillon la zone revenait avec un editeur ouvert. Demontee, elle ferme.
+	useEffect(() => () => closeReply(), [closeReply]);
 
 	const own = useMemo(() => identityMailboxes.map((im) => String(im.identity.value)), [identityMailboxes]);
 	const last = getMessage(lastMessageId);

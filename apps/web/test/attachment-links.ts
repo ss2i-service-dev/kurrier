@@ -73,6 +73,7 @@ test("la page ne recoit plus d'URL signee pour les pieces jointes", () => {
 		textUrl: undefined,
 		sheetUrl: undefined,
 		zipUrl: undefined,
+		wordUrl: undefined,
 		emlUrl: undefined,
 	});
 });

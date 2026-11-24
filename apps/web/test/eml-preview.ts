@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { attachmentUrls, parseAttachmentMode } from "../lib/attachment-links";
 import { canPreviewEml, emlPartLink, emlPartName, parsePartIndex } from "../lib/eml-preview";
 import { emlPart, parseEmlPreview } from "../lib/eml-parse";
+import { isMsgFile, sniffImage } from "../lib/msg-parse";
 
 const ID = "111575e0-724f-4e04-b148-892453ebcbd5";
 const source = (p: string) => readFileSync(join(__dirname, "..", p), "utf8");
@@ -119,6 +120,29 @@ test("piece interne toujours servie en telechargement, jamais interpretee", () =
 	assert.match(block, /attachmentDisposition\(found\.filename\)/);
 	assert.match(block, /sandbox/);
 	assert.match(block, /EML_PREVIEW_MAX_BYTES/);
+});
+
+// Hugo le 24/11/2026 : les .msg d'Outlook (218 recus) ont le meme apercu. Verifie a la main sur
+// 5 .msg recus (HTML direct ou extrait du RTF, images inline sans type reconnues) ; pas de
+// fichier d'exemple ici, ils contiennent de vrais mails.
+test("un .msg d'Outlook passe par le meme apercu, reconnu a sa signature", async () => {
+	assert.equal(canPreviewEml({ filenameOriginal: "Relance.MSG" }), true);
+	assert.equal(canPreviewEml({ filenameOriginal: "sans-nom", contentType: "application/vnd.ms-outlook" }), true);
+	assert.equal(attachmentUrls({ id: ID, filenameOriginal: "a.msg" }).emlUrl, `/api/attachments/${ID}?mode=message`);
+	const cfbf = Buffer.concat([Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]), Buffer.alloc(504)]);
+	assert.equal(isMsgFile(cfbf), true);
+	assert.equal(isMsgFile(eml), false);
+	// Conteneur illisible : erreur, que la route transforme en « Ce mail n'a pas pu etre lu ».
+	await assert.rejects(async () => parseEmlPreview(cfbf));
+	assert.match(source("lib/eml-parse.ts"), /if \(isMsgFile\(source\)\) return parseMsgPreview\(source\)/);
+	assert.match(source("lib/eml-parse.ts"), /if \(isMsgFile\(source\)\) return msgPart\(source, index\)/);
+});
+
+test("image inline d'Outlook sans type reconnue a sa signature", () => {
+	assert.equal(sniffImage(PNG), "image/png");
+	assert.equal(sniffImage(Buffer.from([0xff, 0xd8, 0xff, 0xe0])), "image/jpeg");
+	assert.equal(sniffImage(Buffer.from("GIF89a")), "image/gif");
+	assert.equal(sniffImage(PDF), null);
 });
 
 test("la visionneuse ouvre le .eml dans le lecteur des mails", () => {

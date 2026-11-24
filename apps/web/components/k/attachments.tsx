@@ -15,6 +15,7 @@ import SheetPreview from "@/components/k/sheet-preview";
 import TextPreview from "@/components/k/text-preview";
 import ZipPreview from "@/components/k/zip-preview";
 import EmlPreview from "@/components/k/eml-preview";
+import WordPreview from "@/components/k/word-preview";
 import { isTabular } from "@/lib/text-preview";
 
 type Kind = ReturnType<typeof getKind>;
@@ -23,14 +24,14 @@ export const PREVIEWABLE: Kind[] = ["image", "pdf", "text", "video", "audio"];
 // Un pptx, un classeur, un CSV envoye en application/vnd.ms-excel, un zip ou un mail joint (.eml) n'ont pas de famille propre :
 // ils sont previsualisables quand la page porte l'URL de leur apercu.
 export const isPreviewable = (a: MessageAttachmentWithUrl) =>
-	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl || !!a.textUrl || !!a.sheetUrl || !!a.zipUrl || !!a.emlUrl);
+	!!a.signedUrl && (PREVIEWABLE.includes(getKind(a)) || !!a.contentUrl || !!a.textUrl || !!a.sheetUrl || !!a.zipUrl || !!a.emlUrl || !!a.wordUrl);
 
 // Pastille de type : couleur et sigle par famille de fichier.
 export function badgeFor(name: string, kind: Kind) {
 	const ext = (name.split(".").pop() || "").toLowerCase();
 	if (kind === "pdf") return { label: "PDF", color: "#d0453b" };
 	if (["doc", "docx", "odt", "rtf"].includes(ext)) return { label: "DOC", color: "#2f5bd3" };
-	if (["xls", "xlsx", "ods", "csv"].includes(ext)) return { label: ext === "csv" ? "CSV" : "XLS", color: "#1f8a4c" };
+	if (["xls", "xlsx", "xlsm", "xlsb", "ods", "csv"].includes(ext)) return { label: ext === "csv" ? "CSV" : "XLS", color: "#1f8a4c" };
 	if (["ppt", "pptx", "odp", "key"].includes(ext)) return { label: "PPT", color: "#d5651b" };
 	if (["zip", "rar", "7z", "gz", "tar"].includes(ext)) return { label: "ZIP", color: "#7a6a52" };
 	if (["eml", "msg"].includes(ext)) return { label: "MAIL", color: "#2b6cb0" };
@@ -191,7 +192,7 @@ export function Viewer({
 					</div>
 				</div>
 				{/* Un pptx, un classeur, un CSV, un zip ou un .eml ouvert dans un onglet serait simplement telecharge. */}
-				{!current.contentUrl && !current.sheetUrl && !current.zipUrl && !current.emlUrl && !(current.textUrl && isTabular(current)) && (
+				{!current.contentUrl && !current.sheetUrl && !current.zipUrl && !current.emlUrl && !current.wordUrl && !(current.textUrl && isTabular(current)) && (
 					<a
 						href={current.signedUrl}
 						target="_blank"
@@ -261,6 +262,9 @@ export function Viewer({
 					)}
 					{current.zipUrl && (
 						<ZipPreview key={current.id} url={current.zipUrl} name={name} downloadUrl={current.downloadUrl} />
+					)}
+					{current.wordUrl && (
+						<WordPreview key={current.id} url={current.wordUrl} name={name} downloadUrl={current.downloadUrl} />
 					)}
 					{current.emlUrl && (
 						<EmlPreview

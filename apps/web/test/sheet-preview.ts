@@ -35,7 +35,7 @@ const workbook = (bookType: XLSX.BookType, sheets: Record<string, unknown[][]>, 
 
 const main = async () => {
 	await test("classeurs reconnus par extension, jamais le CSV ni le texte", () => {
-		for (const name of ["a.xls", "A.XLSX", "a.xlsm", "a.ods"]) {
+		for (const name of ["a.xls", "A.XLSX", "a.xlsm", "a.xlsb", "a.ods"]) {
 			assert.equal(canPreviewSheet({ filenameOriginal: name, contentType: "application/octet-stream", sizeBytes: 10 }), true, name);
 		}
 		assert.equal(canPreviewSheet({ filenameOriginal: "a.csv", contentType: "application/vnd.ms-excel", sizeBytes: 10 }), false);
@@ -52,7 +52,8 @@ const main = async () => {
 		assert.match(route, /canPreviewSheet\(attachment\)/);
 	});
 
-	for (const bookType of ["xlsx", "xls", "ods"] as const) {
+	// xlsb : Hugo le 24/11/2026, 20 classeurs binaires recus.
+	for (const bookType of ["xlsx", "xls", "xlsb", "ods"] as const) {
 		await test(`lecture ${bookType} : une feuille par onglet, cellules en texte`, async () => {
 			const bytes = workbook(bookType, {
 				Ventes: [["Libelle", "Quantite"], ["Chambre", 12], ["Petit dejeuner", 3.5]],

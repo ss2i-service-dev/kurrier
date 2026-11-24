@@ -7,6 +7,7 @@ import { canPreviewSheet } from "./sheet-preview";
 import { canPreviewText } from "./text-preview";
 import { canListZip } from "./zip-listing";
 import { canPreviewEml } from "./eml-preview";
+import { canPreviewWord } from "./word-preview";
 
 // message : mail joint (.eml) decode en JSON ; part : une de ses pieces jointes (lib/eml-preview.ts).
 export type AttachmentLinkMode = "open" | "download" | "content" | "listing" | "message" | "part";
@@ -59,7 +60,9 @@ export function attachmentUrls(a: {
 		sheetUrl: canPreviewSheet(a) ? attachmentLink(a.id, "content") : undefined,
 		// Zip : liste des fichiers seulement (lib/zip-listing.ts), rien n'est decompresse.
 		zipUrl: canListZip(a) ? attachmentLink(a.id, "listing") : undefined,
-		// Mail joint (.eml) : decode par le serveur, affiche comme un mail (lib/eml-preview.ts).
+		// Word (.docx) : memes octets, rendus dans le navigateur (lib/word-preview.ts).
+		wordUrl: canPreviewWord(a) ? attachmentLink(a.id, "content") : undefined,
+		// Mail joint (.eml, .msg) : decode par le serveur, affiche comme un mail (lib/eml-preview.ts).
 		emlUrl: canPreviewEml(a) ? attachmentLink(a.id, "message") : undefined,
 	};
 }

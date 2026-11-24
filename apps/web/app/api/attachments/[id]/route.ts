@@ -21,6 +21,8 @@ import {
 	PPTX_PREVIEW_MAX_BYTES,
 } from "@/lib/attachment-links";
 import { canPreviewSheet, SHEET_PREVIEW_MAX_BYTES } from "@/lib/sheet-preview";
+import { canPreviewWord, WORD_PREVIEW_MAX_BYTES } from "@/lib/word-preview";
+import { servedTypeOverride } from "@/lib/attachment-type";
 import { canPreviewText, TEXT_PREVIEW_MAX_BYTES } from "@/lib/text-preview";
 import {
 	canListZip,
@@ -121,7 +123,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 				? TEXT_PREVIEW_MAX_BYTES
 				: canPreviewSheet(attachment)
 					? SHEET_PREVIEW_MAX_BYTES
-					: 0;
+					: canPreviewWord(attachment)
+						? WORD_PREVIEW_MAX_BYTES
+						: 0;
 		if (!maxBytes) return failure(415, "Aperçu indisponible pour ce fichier.");
 		const object = await s3.send(new GetObjectCommand({ Bucket, Key }));
 		if (!object.Body) return failure(404, "Pièce jointe introuvable.");
@@ -180,6 +184,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 		}
 	}
 
+	const servedType = servedTypeOverride(attachment.contentType, attachment.filenameOriginal);
 	const url = await getSignedUrl(
 		s3,
 		new GetObjectCommand({
@@ -188,6 +193,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 			...(mode === "download"
 				? { ResponseContentDisposition: attachmentDisposition(attachment.filenameOriginal) }
 				: {}),
+			// ss2i : pdf ou image stockes sous un type generique (application/x-file-download...) :
+			// S3 les servirait en telechargement, la visionneuse n'afficherait rien.
+			...(mode === "open" && servedType ? { ResponseContentType: servedType } : {}),
 		}),
 		{ expiresIn: SIGNED_URL_SECONDS },
 	);

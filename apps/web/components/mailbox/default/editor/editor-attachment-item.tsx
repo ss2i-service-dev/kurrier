@@ -4,7 +4,7 @@ import React from "react";
 import { MessageAttachmentEntity } from "@db";
 import { PublicConfig } from "@schema";
 import { FileText, FileImage, FileVideo, FileAudio, CalendarDays, Paperclip } from "lucide-react";
-import mime from "mime-types";
+import { effectiveType } from "@/lib/attachment-type";
 import {MessageAttachmentWithUrl} from "@/components/mailbox/default/email-renderer";
 
 export function formatBytes(bytes?: number | null) {
@@ -18,8 +18,9 @@ export function getKind(a: MessageAttachmentEntity) {
     const ct = (a.contentType || "").toLowerCase();
     const name = (a.filenameOriginal || "").toLowerCase();
     const ext = name.includes(".") ? name.split(".").pop() || "" : "";
-    const guessed = (ext ? String(mime.lookup(ext) || "") : "").toLowerCase();
-    const type = ct || guessed;
+    // ss2i : un type generique ou faux (application/x-file-download sur un pdf) cede la
+    // place a celui de l'extension (lib/attachment-type.ts).
+    const type = effectiveType(ct, name);
 
     if (type.startsWith("image/")) return "image";
     if (type === "application/pdf") return "pdf";

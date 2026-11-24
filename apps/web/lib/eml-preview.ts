@@ -11,10 +11,12 @@ export const EML_PREVIEW_MAX_BYTES = 25 * 1024 * 1024;
 export const EML_INLINE_MAX_BYTES = 10 * 1024 * 1024;
 
 const EML_TYPES = ["message/rfc822", "message/global"];
+// ss2i : mail Outlook joint (.msg), meme apercu, decode par lib/msg-parse.ts.
+const MSG_TYPES = ["application/vnd.ms-outlook"];
 
 export function canPreviewEml(a: { filenameOriginal?: string | null; contentType?: string | null }) {
 	const type = (a.contentType || "").split(";")[0].trim().toLowerCase();
-	return EML_TYPES.includes(type) || /\.eml$/i.test(a.filenameOriginal || "");
+	return EML_TYPES.includes(type) || MSG_TYPES.includes(type) || /\.(eml|msg)$/i.test(a.filenameOriginal || "");
 }
 
 export type EmlAddress = { name?: string | null; address?: string | null };

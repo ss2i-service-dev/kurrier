@@ -8,6 +8,7 @@ import {
 	type EmlAddressField,
 	type EmlPreviewData,
 } from "./eml-preview";
+import { isMsgFile, msgPart, parseMsgPreview } from "./msg-parse";
 
 const parse = (source: Buffer) =>
 	// Pas de conversion du texte en HTML : le lecteur rend deja le texte seul proprement.
@@ -51,6 +52,8 @@ function inlineImages(parsed: ParsedMail) {
 }
 
 export async function parseEmlPreview(source: Buffer): Promise<EmlPreviewData> {
+	// Mail Outlook (.msg) : reconnu a sa signature CFBF, quel que soit son nom.
+	if (isMsgFile(source)) return parseMsgPreview(source);
 	const parsed = await parse(source);
 	const { cidUrls, used } = inlineImages(parsed);
 	return {
@@ -75,6 +78,7 @@ export async function parseEmlPreview(source: Buffer): Promise<EmlPreviewData> {
 
 // Piece jointe interne n° index (meme numerotation que parseEmlPreview), ou null.
 export async function emlPart(source: Buffer, index: number) {
+	if (isMsgFile(source)) return msgPart(source, index);
 	const parsed = await parse(source);
 	const a = parsed.attachments[index];
 	if (!a) return null;

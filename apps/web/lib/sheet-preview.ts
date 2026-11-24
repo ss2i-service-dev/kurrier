@@ -11,7 +11,8 @@ export const SHEET_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
 
 type FileInfo = { filenameOriginal?: string | null; contentType?: string | null; sizeBytes?: number | null };
 
-const SHEET_EXTENSIONS = new Set(["xls", "xlsx", "xlsm", "ods"]);
+// ss2i : xlsb (classeur binaire Excel, zip lui aussi) lu par SheetJS comme les autres.
+const SHEET_EXTENSIONS = new Set(["xls", "xlsx", "xlsm", "xlsb", "ods"]);
 
 export function canPreviewSheet(a: FileInfo) {
 	const n = (a.filenameOriginal || "").toLowerCase();

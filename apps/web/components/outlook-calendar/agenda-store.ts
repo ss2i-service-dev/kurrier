@@ -7,12 +7,15 @@ import { type CalendarView, isCalendarView, safeTimeZone, todayInParis } from "@
 import { AGENDA_TIMEZONE } from "@common/thread-agenda";
 import type { CalendarEvent } from "@common/outlook-calendar";
 import type { CalendarSource } from "@/lib/actions/outlook-calendar";
+import { DEFAULT_HOUR_HEIGHT, DEFAULT_WORK_END, DEFAULT_WORK_START, nearestZoom, validWorkHours } from "@/lib/agenda-zoom";
 
 const VIEW_KEY = "ss2i.agenda.days";
 const BOX_KEY = "ss2i.agenda.box";
 const HIDDEN_KEY = "ss2i.agenda.hidden";
 const EXTRA_KEY = "ss2i.agenda.colleagues";
 const TZ_KEY = "ss2i.agenda.tz";
+const ZOOM_KEY = "ss2i.agenda.hourHeight";
+const WORK_KEY = "ss2i.agenda.workHours";
 
 
 export type NewEventRequest = { id: number; date: string; minutes: number | null };
@@ -38,6 +41,11 @@ type State = {
 	version: number;
 	/** Fuseau d'affichage (IANA), Paris par defaut. */
 	tz: string;
+	/** Hauteur d'une heure dans la grille (px), cran de zoom. */
+	hourHeight: number;
+	/** Heures de travail habituelles (minutes depuis minuit) : embauche et debauche. */
+	workStart: number;
+	workEnd: number;
 };
 
 const initial: State = {
@@ -53,6 +61,9 @@ const initial: State = {
 	extra: [],
 	version: 0,
 	tz: AGENDA_TIMEZONE,
+	hourHeight: DEFAULT_HOUR_HEIGHT,
+	workStart: DEFAULT_WORK_START,
+	workEnd: DEFAULT_WORK_END,
 };
 // Rendu serveur et hydratation : toujours l'etat initial (le navigateur a peut-etre deja ses
 // preferences chargees d'une visite precedente de la page).
@@ -98,8 +109,13 @@ export const agendaStore = {
 		const box = read(BOX_KEY);
 		const shown = readList(`${HIDDEN_KEY}.shown`);
 		const tz = safeTimeZone(read(TZ_KEY) ?? AGENDA_TIMEZONE);
+		const zoom = read(ZOOM_KEY);
+		const [ws, we] = (read(WORK_KEY) ?? "").split("-").map(Number);
+		const work = validWorkHours(ws, we) ? { workStart: ws, workEnd: we } : {};
 		set({
 			tz,
+			...work,
+			hourHeight: zoom ? nearestZoom(Number(zoom)) : DEFAULT_HOUR_HEIGHT,
 			hidden: readList(HIDDEN_KEY),
 			shownColleagues: shown,
 			extra: readList(EXTRA_KEY),
@@ -118,6 +134,18 @@ export const agendaStore = {
 		const v = safeTimeZone(tz);
 		write(TZ_KEY, v);
 		set({ tz: v, version: state.version + 1 });
+	},
+	setHourHeight(h: number) {
+		const v = nearestZoom(h);
+		write(ZOOM_KEY, String(v));
+		set({ hourHeight: v });
+	},
+	/** Embauche et debauche ; ignore si la debauche ne suit pas l'embauche. */
+	setWorkHours(workStart: number, workEnd: number) {
+		if (!validWorkHours(workStart, workEnd)) return false;
+		write(WORK_KEY, `${workStart}-${workEnd}`);
+		set({ workStart, workEnd });
+		return true;
 	},
 	setAnchor(anchor: string) {
 		set({ anchor });

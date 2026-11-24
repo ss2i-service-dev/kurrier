@@ -1,8 +1,9 @@
 "use client";
 // ss2i : barre de navigation de l'agenda Outlook (page Agenda et fenetre « Ajouter a
-// l'agenda ») : Aujourd'hui, precedent / suivant, periode affichee, nombre de jours.
+// l'agenda ») : Aujourd'hui, precedent / suivant, periode affichee, nombre de jours, zoom de
+// la grille horaire.
 import React from "react";
-import { ChevronLeft, ChevronRight, RotateCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, RotateCw, ZoomIn, ZoomOut } from "lucide-react";
 import { CALENDAR_VIEWS, type CalendarView } from "@common/outlook-calendar";
 
 const LABEL: Record<string, string> = { 1: "Jour", 3: "3 jours", 7: "Semaine", 14: "2 semaines", month: "Mois" };
@@ -18,6 +19,8 @@ export default function CalendarToolbar({
 	onReload,
 	loading,
 	extra,
+	onZoomIn,
+	onZoomOut,
 }: {
 	nouvelle: boolean;
 	/** Periode affichee (« 2 – 15 novembre 2026 », « novembre 2026 »). */
@@ -30,6 +33,9 @@ export default function CalendarToolbar({
 	onReload?: () => void;
 	loading?: boolean;
 	extra?: React.ReactNode;
+	/** Zoom de la grille horaire (absent : pas de boutons, ou undefined au cran extreme : grise). */
+	onZoomIn?: (() => void) | null;
+	onZoomOut?: (() => void) | null;
 }) {
 	const btn = nouvelle
 		? "k-focus inline-flex h-7 items-center justify-center rounded-k-sm px-2 text-[12.5px] text-k-ink-2 hover:bg-k-hover hover:text-k-ink"
@@ -54,6 +60,16 @@ export default function CalendarToolbar({
 				</button>
 			)}
 			<span className="flex-1" />
+			{onZoomIn !== undefined && onZoomOut !== undefined && (
+				<div className="inline-flex" role="group" aria-label="Zoom de la grille horaire">
+					<button type="button" className={`${btn} disabled:opacity-40`} onClick={onZoomOut ?? undefined} disabled={!onZoomOut} aria-label="Zoom arrière" title="Zoom arrière (Ctrl+molette)">
+						<ZoomOut className="h-4 w-4" />
+					</button>
+					<button type="button" className={`${btn} disabled:opacity-40`} onClick={onZoomIn ?? undefined} disabled={!onZoomIn} aria-label="Zoom avant" title="Zoom avant, jusqu'au quart d'heure (Ctrl+molette)">
+						<ZoomIn className="h-4 w-4" />
+					</button>
+				</div>
+			)}
 			{extra}
 			{onView && (
 				<div className={`inline-flex rounded-md p-0.5 ${nouvelle ? "bg-k-hover" : "bg-muted"}`} role="group" aria-label="Vue">

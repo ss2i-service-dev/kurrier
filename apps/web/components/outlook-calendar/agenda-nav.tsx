@@ -22,6 +22,7 @@ import type { CalendarEvent } from "@common/outlook-calendar";
 import { type CalendarSource, type OutlookCalendarBox, checkColleagueCalendar } from "@/lib/actions/outlook-calendar";
 import { agendaStore, useAgendaState } from "@/components/outlook-calendar/agenda-store";
 import { useOutlookEvents } from "@/components/outlook-calendar/use-outlook-events";
+import { parseHourInput, validWorkHours } from "@/lib/agenda-zoom";
 
 const theme = (n: boolean) => ({
 	title: n ? "text-[11px] font-semibold uppercase tracking-[0.06em] text-k-ink-3" : "text-xs font-medium text-muted-foreground",
@@ -340,7 +341,67 @@ function AddColleague({ nouvelle }: { nouvelle: boolean }) {
 	);
 }
 
-/** Fuseau d'affichage et notifications du bureau pour les rappels. */
+// Heures proposees dans les champs embauche / debauche (saisie libre aussi : 8h30, 0830...).
+const HOUR_PRESETS = Array.from({ length: 33 }, (_, i) => 5 * 60 + i * 30).map((m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
+const fmt = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+
+/** Heures de travail habituelles : grise le reste de la grille, place l'ouverture de l'agenda. */
+function WorkHours({ nouvelle }: { nouvelle: boolean }) {
+	const t = theme(nouvelle);
+	const { workStart, workEnd } = useAgendaState();
+	const [start, setStart] = useState(fmt(workStart));
+	const [end, setEnd] = useState(fmt(workEnd));
+	const [error, setError] = useState<string | null>(null);
+	useEffect(() => {
+		setStart(fmt(workStart));
+		setEnd(fmt(workEnd));
+	}, [workStart, workEnd]);
+	const commit = (s: string, e: string) => {
+		const a = parseHourInput(s);
+		const b = parseHourInput(e);
+		if (a === null || b === null) return setError("Heure attendue en 24 h, par exemple 08:30 ou 17h45.");
+		if (!validWorkHours(a, b)) return setError("La débauche doit suivre l'embauche.");
+		setError(null);
+		agendaStore.setWorkHours(a, b);
+		setStart(fmt(a));
+		setEnd(fmt(b));
+	};
+	const field = `w-full rounded-md border bg-transparent px-1.5 py-1 text-[12.5px] tabular-nums ${nouvelle ? "border-k-line text-k-ink" : "border-border"}`;
+	const input = (label: string, value: string, set: (v: string) => void, other: () => [string, string]) => (
+		<label className="block min-w-0 flex-1">
+			<span className={`mb-0.5 block text-[11.5px] ${t.muted}`}>{label}</span>
+			<input
+				type="text"
+				inputMode="numeric"
+				list="ss2i-work-hours"
+				placeholder="HH:MM"
+				value={value}
+				className={field}
+				onChange={(e) => set(e.currentTarget.value)}
+				onBlur={() => commit(...other())}
+				onKeyDown={(e) => {
+					if (e.key === "Enter") commit(...other());
+				}}
+			/>
+		</label>
+	);
+	return (
+		<div className="px-1">
+			<div className="flex gap-2">
+				{input("Embauche", start, setStart, () => [start, end])}
+				{input("Débauche", end, setEnd, () => [start, end])}
+			</div>
+			<datalist id="ss2i-work-hours">
+				{HOUR_PRESETS.map((h) => (
+					<option key={h} value={h} />
+				))}
+			</datalist>
+			{error && <div className="mt-0.5 text-[11.5px] text-red-600">{error}</div>}
+		</div>
+	);
+}
+
+/** Fuseau d'affichage, heures de travail et notifications du bureau pour les rappels. */
 function Settings({ nouvelle }: { nouvelle: boolean }) {
 	const t = theme(nouvelle);
 	const { tz } = useAgendaState();
@@ -366,6 +427,7 @@ function Settings({ nouvelle }: { nouvelle: boolean }) {
 					))}
 				</select>
 			</label>
+			<WorkHours nouvelle={nouvelle} />
 			{perm !== "unsupported" && (
 				<div className={`flex items-center gap-1.5 px-1 text-[12px] ${t.muted}`}>
 					<Bell className="h-3.5 w-3.5 shrink-0" />

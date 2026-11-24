@@ -31,6 +31,7 @@ import { agendaStore, useAgendaState } from "@/components/outlook-calendar/agend
 import EventEditor, { type EditorTarget, blankInput } from "@/components/outlook-calendar/event-editor";
 import EventPopover from "@/components/outlook-calendar/event-popover";
 import { purgeFormBackups, recentFormBackup } from "@/lib/form-backup";
+import { zoomStep } from "@/lib/agenda-zoom";
 import { agendaDateParam } from "@/lib/invite-preview";
 
 // Reouverture de l'editeur apres un rechargement : une fois par chargement de la page web (pas a
@@ -41,7 +42,7 @@ const refOf = (s: CalendarSource): SourceRef => (s.kind === "own" ? { kind: "own
 
 export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookCalendarBox[]; nouvelle: boolean }) {
 	const st = useAgendaState();
-	const { view, anchor, boxId, newEvent, loaded, extra, version, tz } = st;
+	const { view, anchor, boxId, newEvent, loaded, extra, version, tz, hourHeight, workStart, workEnd } = st;
 	// Agendas d'une autre boite (changement de boite) : pas melanges a celle-ci.
 	const sources = st.sourcesBox === boxId ? st.sources : [];
 	const [categories, setCategories] = useState<OutlookCategory[]>([]);
@@ -263,7 +264,9 @@ export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookC
 	if (!loaded || !boxId) return <div className="flex min-h-0 flex-1 flex-col" />;
 
 	// Periode qui contient aujourd'hui : l'heure actuelle au tiers haut ; sinon 8 h.
-	const startForScroll = list.includes(todayInParis(new Date(), tz)) ? minutesNowInParis(new Date(), tz) : 8 * 60;
+	const startForScroll = list.includes(todayInParis(new Date(), tz)) ? minutesNowInParis(new Date(), tz) : workStart;
+	const zoomIn = zoomStep(hourHeight, 1) !== hourHeight ? () => agendaStore.setHourHeight(zoomStep(hourHeight, 1)) : null;
+	const zoomOut = zoomStep(hourHeight, -1) !== hourHeight ? () => agendaStore.setHourHeight(zoomStep(hourHeight, -1)) : null;
 	const shownError = sourcesError ?? error;
 
 	return (
@@ -279,6 +282,8 @@ export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookC
 					onView={(v) => agendaStore.setView(v)}
 					onReload={reload}
 					loading={loading}
+					onZoomIn={view === "month" ? undefined : zoomIn}
+					onZoomOut={view === "month" ? undefined : zoomOut}
 					extra={
 						boxes.length > 1 ? (
 							<NativeSelect
@@ -321,7 +326,7 @@ export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookC
 						agendaStore.setAnchor(d);
 						agendaStore.setView(1);
 					}}
-					onSlot={(d) => openNew(d, 9 * 60)}
+					onSlot={(d) => openNew(d, workStart)}
 					onMove={(e, to) => void move(e, to)}
 					tz={tz}
 					onEventClick={(event, rect) => {
@@ -340,6 +345,10 @@ export default function OutlookAgendaPage({ boxes, nouvelle }: { boxes: OutlookC
 					scrollTo={startForScroll}
 					scrollKey={`${view}|${list[0]}|${tz}`}
 					tz={tz}
+					hourHeight={hourHeight}
+					onZoom={(h) => agendaStore.setHourHeight(h)}
+					workStart={workStart}
+					workEnd={workEnd}
 					onSlot={(d, m) => openNew(d, m)}
 					onRange={(d, a, b) => openNew(d, a, b)}
 					onAllDaySlot={(d) => openNew(d, null)}

@@ -9,6 +9,9 @@
 //   duree ; un simple clic : detail.
 // Les propositions pas encore creees (ghost) sont en pointilles, celle en cours d'edition
 // (active) en plein. Rendu des deux interfaces (classes k-* en Outlook).
+// Zoom (Samuel le 24/11/2026) : hourHeight vient de la page, Ctrl+molette le change par onZoom
+// en gardant sous le pointeur l'heure qui y etait ; plus on zoome, plus les lignes et les heures
+// ecrites descendent au quart d'heure. Hors des heures de travail (workStart, workEnd), fond grise.
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { addDays } from "@common/thread-agenda";
 import {
@@ -22,6 +25,7 @@ import {
 	todayInParis,
 	weekday,
 } from "@common/outlook-calendar";
+import { anchoredScrollTop, gridLineStep, labelStep, wheelZoomStep, zoomStep } from "@/lib/agenda-zoom";
 
 export type MoveTarget = { allDay: boolean; start: string; end: string };
 
@@ -52,6 +56,11 @@ export type CalendarGridProps = {
 	className?: string;
 	/** Fuseau d'affichage (ligne de l'heure courante). */
 	tz?: string;
+	/** Heures de travail (minutes) : en dehors, fond grise. */
+	workStart?: number;
+	workEnd?: number;
+	/** Nouveau cran de zoom demande par Ctrl+molette sur la grille (sans lui, pas de zoom). */
+	onZoom?: (hourHeight: number) => void;
 };
 
 const theme = (n: boolean) => ({
@@ -145,6 +154,9 @@ export default function CalendarGrid({
 	loading,
 	className = "",
 	tz,
+	workStart,
+	workEnd,
+	onZoom,
 }: CalendarGridProps) {
 	const t = theme(nouvelle);
 	const now = useNow(tz);
@@ -157,6 +169,44 @@ export default function CalendarGrid({
 	// Appui d'un doigt sur une colonne : la creation attend le click (voir la colonne).
 	const tapSlot = useRef(false);
 	const many = days.length > 7;
+
+	// Zoom : l'heure qui etait sous le pointeur (Ctrl+molette) ou au milieu (boutons) y reste.
+	const zoomAnchor = useRef<number | null>(null);
+	const prevHour = useRef(hourHeight);
+	useLayoutEffect(() => {
+		const el = scroller.current;
+		const prev = prevHour.current;
+		prevHour.current = hourHeight;
+		if (!el || prev === hourHeight) return;
+		el.scrollTop = anchoredScrollTop(prev, hourHeight, el.scrollTop, zoomAnchor.current ?? el.clientHeight / 2);
+		zoomAnchor.current = null;
+	}, [hourHeight]);
+	// Ctrl+molette (et pincement du pave tactile) : ecouteur natif non passif, sinon le
+	// navigateur zoome toute la page.
+	const zoomRef = useRef({ hourHeight, onZoom, acc: 0 });
+	zoomRef.current.hourHeight = hourHeight;
+	zoomRef.current.onZoom = onZoom;
+	const canZoom = !!onZoom;
+	useEffect(() => {
+		const el = scroller.current;
+		if (!el || !canZoom) return;
+		const wheel = (ev: WheelEvent) => {
+			if (!ev.ctrlKey && !ev.metaKey) return;
+			ev.preventDefault();
+			const z = zoomRef.current;
+			if (dragRef.current || !z.onZoom) return; // pas de zoom pendant un glisser
+			const dy = ev.deltaMode === 1 ? ev.deltaY * 16 : ev.deltaY;
+			const r = wheelZoomStep(z.acc, dy);
+			z.acc = r.acc;
+			if (!r.step) return;
+			const next = zoomStep(z.hourHeight, r.step);
+			if (next === z.hourHeight) return;
+			zoomAnchor.current = ev.clientY - el.getBoundingClientRect().top;
+			z.onZoom(next);
+		};
+		el.addEventListener("wheel", wheel, { passive: false });
+		return () => el.removeEventListener("wheel", wheel);
+	}, [canZoom]);
 
 	// Position de defilement : a l'ouverture et quand l'heure demandee change (proposition deplacee hors champ).
 	const lastKey = useRef<string | undefined>(undefined);
@@ -268,6 +318,9 @@ export default function CalendarGrid({
 			: events;
 
 	const gutter = "w-12 shrink-0";
+	const lineStep = gridLineStep(hourHeight);
+	const lblStep = labelStep(hourHeight);
+	const work = workStart !== undefined && workEnd !== undefined && workStart < workEnd ? { start: workStart, end: workEnd } : null;
 
 	return (
 		<div className={`flex min-h-0 flex-col text-[12px] ${t.ink} ${drag?.moved ? "select-none" : ""} ${className}`} aria-busy={loading || undefined}>
@@ -323,9 +376,13 @@ export default function CalendarGrid({
 			<div ref={scroller} className="k-scroll relative min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
 				<div className="relative flex" style={{ height: 24 * hourHeight }}>
 					<div className={`${gutter} relative`}>
-						{Array.from({ length: 23 }, (_, i) => i + 1).map((h) => (
-							<div key={h} className={`absolute right-1.5 -translate-y-1/2 text-[10.5px] ${t.muted}`} style={{ top: h * hourHeight }}>
-								{String(h).padStart(2, "0")}:00
+						{Array.from({ length: (24 * 60) / lblStep - 1 }, (_, i) => (i + 1) * lblStep).map((m) => (
+							<div
+								key={m}
+								className={`absolute right-1.5 -translate-y-1/2 ${m % 60 ? "text-[9.5px] opacity-70" : "text-[10.5px]"} ${t.muted}`}
+								style={{ top: (m / 60) * hourHeight }}
+							>
+								{hhmm(m)}
 							</div>
 						))}
 					</div>
@@ -376,12 +433,24 @@ export default function CalendarGrid({
 										: undefined
 								}
 							>
-								{/* lignes des heures et demi-heures */}
-								{Array.from({ length: 24 }, (_, h) => (
-									<React.Fragment key={`h${h}`}>
-										<div className={`pointer-events-none absolute inset-x-0 border-t ${t.line}`} style={{ top: h * hourHeight }} />
-										<div className={`pointer-events-none absolute inset-x-0 border-t border-dotted opacity-50 ${t.line}`} style={{ top: h * hourHeight + hourHeight / 2 }} />
-									</React.Fragment>
+								{/* hors des heures de travail : fond grise (le week-end l'est deja en entier) */}
+								{work && !wk && (
+									<>
+										<div data-off-hours="" className={`pointer-events-none absolute inset-x-0 top-0 ${t.weekend}`} style={{ height: (work.start / 60) * hourHeight }} />
+										<div
+											data-off-hours=""
+											className={`pointer-events-none absolute inset-x-0 bottom-0 ${t.weekend}`}
+											style={{ top: (work.end / 60) * hourHeight }}
+										/>
+									</>
+								)}
+								{/* lignes des heures, demi-heures (pointilles) et quarts d'heure quand on zoome */}
+								{Array.from({ length: (24 * 60) / lineStep }, (_, i) => i * lineStep).map((m) => (
+									<div
+										key={`l${m}`}
+										className={`pointer-events-none absolute inset-x-0 border-t ${t.line} ${m % 60 === 0 ? "" : m % 30 === 0 ? "border-dotted opacity-50" : "border-dotted opacity-25"}`}
+										style={{ top: (m / 60) * hourHeight }}
+									/>
 								))}
 								{drag?.kind === "create" && drag.day === d && (
 									<div

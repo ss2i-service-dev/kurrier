@@ -13,6 +13,8 @@
 // en gardant sous le pointeur l'heure qui y etait ; plus on zoome, plus les lignes et les heures
 // ecrites descendent au quart d'heure. Hors des heures de travail (workStart, workEnd), fond grise.
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { User, Users, Video } from "lucide-react";
+import { guestBuddies } from "@common/meeting-guests";
 import { addDays } from "@common/thread-agenda";
 import {
 	type CalendarEvent,
@@ -115,8 +117,44 @@ function ProposalBadge() {
 	);
 }
 
+/**
+ * Reunion avec d'autres personnes (Samuel le 24/11/2026 : « ca depend de quelqu'un d'autre ») :
+ * camera si un lien de visio est connu, sinon deux bonshommes. Rien pour une entree perso.
+ */
+export function MeetingBadge({ event, className = "" }: { event: CalendarEvent; className?: string }) {
+	const n = event.guests?.length ?? 0;
+	if (!n) return null;
+	const Icon = event.joinUrl ? Video : Users;
+	return (
+		<Icon
+			aria-label={`Réunion avec ${n} personne${n > 1 ? "s" : ""}`}
+			className={`mr-1 inline-block h-3 w-3 shrink-0 -translate-y-px align-middle ${className}`}
+			strokeWidth={2.4}
+		/>
+	);
+}
+
+/** Un petit bonhomme par invite (4 et « +N » au-dela de 5). */
+export function GuestBuddies({ event, className = "" }: { event: CalendarEvent; className?: string }) {
+	const { shown, more } = guestBuddies(event.guests?.length ?? 0);
+	if (!shown) return null;
+	return (
+		<span data-guests="" className={`flex items-center gap-px opacity-80 ${className}`}>
+			{Array.from({ length: shown }, (_, i) => (
+				<User key={i} aria-hidden className="h-2.5 w-2.5 shrink-0" strokeWidth={2.6} />
+			))}
+			{more > 0 && <span className="ml-0.5 text-[9.5px] font-semibold">+{more}</span>}
+		</span>
+	);
+}
+
+/** Liseré des reunions : contour fin en plus de la couleur de l'agenda. */
+export const meetingRing = (e: CalendarEvent) => (e.guests?.length && !e.ghost && !e.active ? "ring-1 ring-inset ring-current/30" : "");
+
+const guestNames = (e: CalendarEvent) => (e.guests ?? []).map((g) => g.name ?? g.address).join(", ");
+
 const tooltip = (e: CalendarEvent) =>
-	[e.proposals?.length ? `Nouvel horaire proposé par ${e.proposals.map((p) => p.name ?? p.address).join(", ")}` : "", e.title, e.allDay ? "Journée entière" : `${e.start.slice(11, 16)} – ${e.end.slice(11, 16)}`, e.location, e.organizer && `Organisateur : ${e.organizer}`]
+	[e.proposals?.length ? `Nouvel horaire proposé par ${e.proposals.map((p) => p.name ?? p.address).join(", ")}` : "", e.title, e.allDay ? "Journée entière" : `${e.start.slice(11, 16)} – ${e.end.slice(11, 16)}`, e.location, e.organizer && `Organisateur : ${e.organizer}`, e.guests?.length ? `Avec : ${guestNames(e)}` : ""]
 		.filter(Boolean)
 		.join("\n");
 
@@ -362,8 +400,10 @@ export default function CalendarGrid({
 										title={tooltip(e)}
 										onClick={clickEvent(e)}
 										style={colorStyle(e)}
-										className={`block w-full truncate rounded-[4px] px-1 py-px text-left text-[11px] leading-4 ${eventClass(e, t)}`}
+										data-meeting={e.guests?.length ? "" : undefined}
+										className={`block w-full truncate rounded-[4px] px-1 py-px text-left text-[11px] leading-4 ${eventClass(e, t)} ${meetingRing(e)}`}
 									>
+										<MeetingBadge event={e} />
 										{e.title}
 									</button>
 								))}
@@ -474,7 +514,8 @@ export default function CalendarGrid({
 											title={tooltip(p.event)}
 											onClick={clickEvent(p.event)}
 											onPointerDown={startDrag(p.event, d, p.top, p.bottom, "move")}
-											className={`group absolute overflow-hidden rounded-[5px] px-1 text-left leading-[1.15] ${eventClass(p.event, t)} ${
+											data-meeting={p.event.guests?.length ? "" : undefined}
+											className={`group absolute overflow-hidden rounded-[5px] px-1 text-left leading-[1.15] ${eventClass(p.event, t)} ${meetingRing(p.event)} ${
 												p.event.active ? "z-20" : p.event.ghost ? "z-10" : ""
 											} ${draggable ? "cursor-grab active:cursor-grabbing" : ""}`}
 											style={{
@@ -487,6 +528,7 @@ export default function CalendarGrid({
 										>
 											<span className={`block truncate font-medium ${short ? "text-[10.5px]" : "text-[11.5px]"}`}>
 												{!!p.event.proposals?.length && <ProposalBadge />}
+												<MeetingBadge event={p.event} />
 												{short ? `${hhmm(p.top)} ${p.event.title}` : p.event.title}
 											</span>
 											{!short && h >= 44 && !!p.event.proposals?.length && (
@@ -498,6 +540,7 @@ export default function CalendarGrid({
 													{p.event.location && !many ? ` · ${p.event.location}` : ""}
 												</span>
 											)}
+											{h >= 40 && <GuestBuddies event={p.event} className="mt-0.5" />}
 											{draggable && (
 												<span
 													aria-hidden

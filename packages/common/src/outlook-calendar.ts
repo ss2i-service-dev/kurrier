@@ -54,6 +54,8 @@ export type CalendarEvent = {
 	reminderMinutes?: number | null;
 	hasAttachments?: boolean;
 	/** Autres horaires proposes par des participants (reunion que j'organise). */
+	/** Autres personnes de la reunion (organisateur et invites, sans moi ni les salles) ; absent : entree perso. */
+	guests?: { address: string; name?: string }[];
 	proposals?: { address: string; name?: string; start: string; end: string }[];
 };
 

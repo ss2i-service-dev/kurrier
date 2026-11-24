@@ -14,6 +14,7 @@
 import { AGENDA_TIMEZONE, AgendaError, type GraphConfig, REMINDERS_PROPERTY_ID, addDays, graphToken } from "./thread-agenda";
 import { type ReminderSource, parseReminderOffsets } from "./meeting-reminders";
 import { graphJoinUrl } from "./meeting-link";
+import { meetingGuests } from "./meeting-guests";
 import { type BusyBlock, type CalendarEvent, checkRange, convertZone, fromGraphEvent, safeTimeZone } from "./outlook-calendar";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -472,8 +473,10 @@ function proposalsOf(raw: any, tz: string): CalendarEvent["proposals"] {
 }
 
 /** Champs de liste en plus de fromGraphEvent (reponse, Teams, serie, propositions). */
-function listExtras(raw: any, tz: string = AGENDA_TIMEZONE): Partial<CalendarEvent> {
+function listExtras(raw: any, tz: string = AGENDA_TIMEZONE, mailbox?: string): Partial<CalendarEvent> {
+	const guests = mailbox !== undefined ? meetingGuests(raw, mailbox) : [];
 	return {
+		...(guests.length ? { guests } : {}),
 		proposals: proposalsOf(raw, tz),
 		isOrganizer: raw?.isOrganizer !== false,
 		responseStatus: String(raw?.responseStatus?.response ?? "none") as CalendarEvent["responseStatus"],
@@ -524,7 +527,7 @@ export async function listCalendarEvents(
 		const data = await graph(cfg, mailbox, "GET", path, undefined, "Agenda", tz);
 		for (const raw of Array.isArray(data?.value) ? data.value : []) {
 			const ev = fromGraphEvent(raw);
-			if (ev) out.push({ ...ev, ...listExtras(raw, tz), calendarId });
+			if (ev) out.push({ ...ev, ...listExtras(raw, tz, mailbox), calendarId });
 		}
 		const next = typeof data?.["@odata.nextLink"] === "string" ? data["@odata.nextLink"] : null;
 		// nextLink est une URL complete : on garde le chemin apres /users/{boite}

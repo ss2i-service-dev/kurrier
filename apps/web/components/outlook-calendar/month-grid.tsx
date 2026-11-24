@@ -6,7 +6,7 @@
 // modifiable se glisse sur un autre jour (memes heures, meme duree).
 import React, { useState } from "react";
 import { type CalendarEvent, JOURS_COURTS, eventsOfDay, shiftToDay, todayInParis, weekday } from "@common/outlook-calendar";
-import type { MoveTarget } from "@/components/outlook-calendar/calendar-grid";
+import { MeetingBadge, type MoveTarget } from "@/components/outlook-calendar/calendar-grid";
 
 const MAX_PER_DAY = 4;
 const ORDER = [1, 2, 3, 4, 5, 6, 0];
@@ -122,7 +122,8 @@ export default function MonthGrid({
 												ev.stopPropagation();
 												onEventClick(e, (ev.currentTarget as HTMLElement).getBoundingClientRect());
 											}}
-											title={e.title}
+											title={e.guests?.length ? `${e.title}\nAvec : ${e.guests.map((g) => g.name ?? g.address).join(", ")}` : e.title}
+											data-meeting={e.guests?.length ? "" : undefined}
 											style={e.allDay && e.color ? { background: `color-mix(in srgb, ${e.color} 20%, transparent)` } : undefined}
 											className={`flex w-full min-w-0 items-center gap-1 rounded-[4px] px-1 py-px text-left text-[11px] leading-4 ${
 												e.allDay ? chip : "hover:bg-black/5 dark:hover:bg-white/10"
@@ -133,7 +134,10 @@ export default function MonthGrid({
 											{!!e.proposals?.length && (
 												<span title="Un participant propose un autre horaire" className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
 											)}
-											<span className="truncate">{e.title}</span>
+											<span className="truncate">
+												<MeetingBadge event={e} />
+												{e.title}
+											</span>
 										</button>
 									))}
 									{more > 0 && (

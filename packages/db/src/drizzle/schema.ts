@@ -2095,14 +2095,13 @@ export const cleanupRules = pgTable(
 		uniqueIndex("ux_cleanup_rules_scope").on(
 			t.identityId,
 			sql`coalesce(${t.mailboxId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
-			sql`lower(btrim(${t.query}))`,
+			sql`lower(btrim(${t.query}, E' \\t\\r\\n'))`,
 			t.hasAttachment,
 			t.onlyUnread,
 		),
 		index("ix_cleanup_rules_identity").on(t.identityId),
 		check("cleanup_rules_retention_days_check", sql`${t.retentionDays} BETWEEN 1 AND 3650`),
-		check("cleanup_rules_query_length_check", sql`char_length(btrim(${t.query})) BETWEEN 3 AND 200`),
-		check("cleanup_rules_query_not_all_check", sql`btrim(${t.query}) <> '*'`),
+		check("cleanup_rules_query_length_check", sql`char_length(btrim(${t.query}, E' \\t\\r\\n')) BETWEEN 3 AND 200`),
 		pgPolicy("cleanup_rules_select_owner", {
 			for: "select",
 			to: "kurrier",
@@ -2116,13 +2115,13 @@ export const cleanupRules = pgTable(
 		pgPolicy("cleanup_rules_insert_owner", {
 			for: "insert",
 			to: "kurrier",
-			withCheck: sql`${t.ownerId} = ${authUid} AND exists (select 1 from identities i where i.id = ${t.identityId} and i.owner_id = ${authUid})`,
+			withCheck: sql`${t.ownerId} = ${authUid} AND exists (select 1 from identities i where i.id = ${t.identityId} and i.owner_id = ${authUid}) AND (${t.mailboxId} IS NULL OR exists (select 1 from mailboxes m where m.id = ${t.mailboxId} and m.identity_id = ${t.identityId}))`,
 		}),
 		pgPolicy("cleanup_rules_update_owner", {
 			for: "update",
 			to: "kurrier",
 			using: sql`${t.ownerId} = ${authUid}`,
-			withCheck: sql`${t.ownerId} = ${authUid} AND exists (select 1 from identities i where i.id = ${t.identityId} and i.owner_id = ${authUid})`,
+			withCheck: sql`${t.ownerId} = ${authUid} AND exists (select 1 from identities i where i.id = ${t.identityId} and i.owner_id = ${authUid}) AND (${t.mailboxId} IS NULL OR exists (select 1 from mailboxes m where m.id = ${t.mailboxId} and m.identity_id = ${t.identityId}))`,
 		}),
 	],
 ).enableRLS();

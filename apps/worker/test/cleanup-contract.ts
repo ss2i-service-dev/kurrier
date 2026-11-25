@@ -2,7 +2,7 @@
 // cleanup_rules (migration ss2i_012), constantes de @common, champ cleanupRuleId du job de move.
 import { assert } from "./mcp-test-env";
 import { createUserFixture } from "./mcp-fixtures";
-import { cleanupRules, db, identities, workspaceIdentityMembers } from "@db";
+import { cleanupRules, db, identities, mailboxes, workspaceIdentityMembers } from "@db";
 import {
 	CLEANUP_ALLOWED_KINDS,
 	CLEANUP_BATCH,
@@ -14,19 +14,35 @@ import {
 	CLEANUP_PREVIEW_CAP,
 	CLEANUP_PRESETS,
 } from "@common";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = join(__dirname, "..", "..", "..");
 
-// Vrai si l'insertion est refusee par la base (contrainte, doublon, RLS).
-async function refused(run: () => Promise<unknown>): Promise<boolean> {
+// Code SQLSTATE d'une erreur de la base (drizzle l'enveloppe dans cause selon la version).
+const codeOf = (err: any): string | undefined => err?.code ?? err?.cause?.code;
+
+// Vrai si l'instruction est refusee par la base avec ce code : 23514 CHECK, 23505 doublon, 42501 RLS.
+// Une autre erreur (syntaxe, colonne inconnue) ne compte pas comme un refus : elle est affichee.
+async function refused(run: () => Promise<unknown>, code: "23514" | "23505" | "42501"): Promise<boolean> {
 	try {
 		await run();
 		return false;
-	} catch {
+	} catch (err) {
+		if (codeOf(err) !== code) console.error(`refus attendu ${code}, vu ${codeOf(err)} :`, err);
+		return codeOf(err) === code;
+	}
+}
+
+// Vrai si l'instruction passe sans erreur.
+async function accepted(run: () => Promise<unknown>): Promise<boolean> {
+	try {
+		await run();
 		return true;
+	} catch (err) {
+		console.error(err);
+		return false;
 	}
 }
 
@@ -74,18 +90,22 @@ async function main() {
 	});
 
 	// Contraintes de la table.
-	assert(!(await refused(() => db.insert(cleanupRules).values(rule()))), "règle valide acceptée");
-	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "autre", retentionDays: 0 }))), "retention_days 0 refusé");
-	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "autre", retentionDays: 3651 }))), "retention_days 3651 refusé");
-	assert(!(await refused(() => db.insert(cleanupRules).values(rule({ query: "un an", retentionDays: 3650 })))), "retention_days 3650 accepté");
-	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "ab" }))), "requête de 2 caractères refusée");
-	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "  a  " }))), "requête de 1 caractère entourée d'espaces refusée");
-	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "*" }))), "requête * refusée");
-	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "x".repeat(201) }))), "requête de 201 caractères refusée");
-	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "  NewsLetter  ", retentionDays: 90 }))), "doublon de portée (casse, espaces) refusé");
-	assert(!(await refused(() => db.insert(cleanupRules).values(rule({ hasAttachment: true })))), "même texte avec pièce jointe : autre portée");
-	assert(!(await refused(() => db.insert(cleanupRules).values(rule({ mailboxId: a.inbox.id })))), "même texte sur un dossier : autre portée");
-	assert(await refused(() => db.insert(cleanupRules).values(rule({ mailboxId: a.inbox.id }))), "doublon de portée sur un dossier refusé");
+	assert(await accepted(() => db.insert(cleanupRules).values(rule())), "règle valide acceptée");
+	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "autre", retentionDays: 0 })), "23514"), "retention_days 0 refusé (CHECK)");
+	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "autre", retentionDays: 3651 })), "23514"), "retention_days 3651 refusé (CHECK)");
+	assert(await accepted(() => db.insert(cleanupRules).values(rule({ query: "un an", retentionDays: 3650 }))), "retention_days 3650 accepté");
+	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "ab" })), "23514"), "requête de 2 caractères refusée (CHECK)");
+	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "  a  " })), "23514"), "requête de 1 caractère entourée d'espaces refusée (CHECK)");
+	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "*" })), "23514"), "requête * refusée (CHECK de longueur)");
+	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "x".repeat(201) })), "23514"), "requête de 201 caractères refusée (CHECK)");
+	// btrim ne retire que les espaces : la table coupe aussi tabulation, retour chariot et saut de ligne.
+	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "\tab\t" })), "23514"), "2 caractères entourés de tabulations refusés (CHECK)");
+	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "\r\nab\n" })), "23514"), "2 caractères entourés de sauts de ligne refusés (CHECK)");
+	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "  NewsLetter  ", retentionDays: 90 })), "23505"), "doublon de portée (casse, espaces) refusé (index unique)");
+	assert(await refused(() => db.insert(cleanupRules).values(rule({ query: "\tNewsLetter\r\n", retentionDays: 90 })), "23505"), "doublon de portée (tabulation, saut de ligne) refusé (index unique)");
+	assert(await accepted(() => db.insert(cleanupRules).values(rule({ hasAttachment: true }))), "même texte avec pièce jointe : autre portée");
+	assert(await accepted(() => db.insert(cleanupRules).values(rule({ mailboxId: a.inbox.id }))), "même texte sur un dossier : autre portée");
+	assert(await refused(() => db.insert(cleanupRules).values(rule({ mailboxId: a.inbox.id })), "23505"), "doublon de portée sur un dossier refusé (index unique)");
 	const first = (await db.select().from(cleanupRules).where(eq(cleanupRules.identityId, a.identity.id))).find((r) => !r.hasAttachment && !r.mailboxId);
 	assert(
 		!!first && first.paused === false && first.onlyUnread === false && first.trashedCount === 0 && first.lastRunAt === null && first.lastTrashedAt === null,
@@ -112,13 +132,14 @@ async function main() {
 	const visible = await asUser(b.user.id, a.workspace.id, (tx) => tx.select().from(identities).where(eq(identities.id, a.identity.id)));
 	assert(visible.length === 1, "RLS : l'identité de a est bien visible du collègue (le refus ci-dessous vient de la règle)");
 	assert(
-		await refused(() =>
-			asUser(b.user.id, a.workspace.id, (tx) => tx.insert(cleanupRules).values(rule({ ownerId: b.user.id, query: "intrus" }))),
+		await refused(
+			() => asUser(b.user.id, a.workspace.id, (tx) => tx.insert(cleanupRules).values(rule({ ownerId: b.user.id, query: "intrus" }))),
+			"42501",
 		),
 		"RLS : INSERT refusé sur l'identité d'autrui, même visible et avec son propre owner_id",
 	);
 	assert(
-		await refused(() => asUser(b.user.id, a.workspace.id, (tx) => tx.insert(cleanupRules).values(rule({ query: "usurpation" })))),
+		await refused(() => asUser(b.user.id, a.workspace.id, (tx) => tx.insert(cleanupRules).values(rule({ query: "usurpation" }))), "42501"),
 		"RLS : INSERT refusé avec l'owner_id d'autrui",
 	);
 	const deleted = await asUser(b.user.id, a.workspace.id, (tx) =>
@@ -128,12 +149,54 @@ async function main() {
 	const own = await asUser(a.user.id, a.workspace.id, (tx) => tx.select().from(cleanupRules).where(eq(cleanupRules.identityId, a.identity.id)));
 	assert(own.length === 4, "RLS : le propriétaire voit ses règles");
 	assert(
-		!(await refused(() =>
+		await accepted(() =>
 			asUser(b.user.id, b.workspace.id, (tx) =>
 				tx.insert(cleanupRules).values({ ownerId: b.user.id, identityId: b.identity.id, query: "legitime", retentionDays: 7 }),
 			),
-		)),
+		),
 		"RLS : INSERT accepté sur sa propre identité",
+	);
+
+	// Le dossier d'une règle appartient à son identité : un dossier d'une autre identité, même à soi, est refusé.
+	const [other] = await db
+		.insert(identities)
+		.values({ ownerId: a.user.id, workspaceId: a.workspace.id, kind: "email", value: `other-${Date.now()}@test.invalid`, status: "verified" })
+		.returning();
+	const [otherBox] = await db
+		.insert(mailboxes)
+		.values({ ownerId: a.user.id, workspaceId: a.workspace.id, identityId: other.id, kind: "inbox", name: "Inbox", slug: "inbox", isDefault: true, metaData: {} })
+		.returning();
+	await db.insert(workspaceIdentityMembers).values({ workspaceId: a.workspace.id, identityId: other.id, userId: a.user.id });
+	assert(
+		await accepted(() =>
+			asUser(a.user.id, a.workspace.id, (tx) => tx.insert(cleanupRules).values(rule({ query: "dossier propre", mailboxId: a.inbox.id }))),
+		),
+		"RLS : INSERT accepté avec un dossier de sa propre identité",
+	);
+	assert(
+		await refused(
+			() => asUser(a.user.id, a.workspace.id, (tx) => tx.insert(cleanupRules).values(rule({ query: "dossier etranger", mailboxId: otherBox.id }))),
+			"42501",
+		),
+		"RLS : INSERT refusé avec le dossier d'une autre identité du même propriétaire",
+	);
+	assert(
+		await refused(
+			() =>
+				asUser(a.user.id, a.workspace.id, (tx) =>
+					tx.update(cleanupRules).set({ mailboxId: otherBox.id }).where(and(eq(cleanupRules.identityId, a.identity.id), eq(cleanupRules.query, "dossier propre"))),
+				),
+			"42501",
+		),
+		"RLS : UPDATE refusé vers le dossier d'une autre identité",
+	);
+	assert(
+		await accepted(() =>
+			asUser(a.user.id, a.workspace.id, (tx) =>
+				tx.update(cleanupRules).set({ retentionDays: 60 }).where(and(eq(cleanupRules.identityId, a.identity.id), eq(cleanupRules.query, "dossier propre"))),
+			),
+		),
+		"RLS : UPDATE de la durée accepté sur sa propre règle",
 	);
 
 	// Suppression de l'identité -> règles supprimées.

@@ -33,6 +33,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isUuid = (v: unknown): v is string => typeof v === "string" && UUID.test(v);
 const ZERO_UUID = sql.raw(`'00000000-0000-0000-0000-000000000000'::uuid`);
 const kinds = `{${CLEANUP_ALLOWED_KINDS.join(",")}}`;
+// Meme jeu de caracteres que la CHECK et l'index unique de ss2i_012 : l'expression de l'on conflict doit
+// etre celle de l'index. Le litteral E'' porte les barres obliques, Postgres les interprete.
+const TRIM = sql.raw(`E' \\t\\r\\n'`);
 
 // Dossiers nettoyables de l'identite (allow-list), restreints a un dossier s'il est pose. Tableau vide
 // plutot que null : une regle sans dossier nettoyable ne fait simplement rien.
@@ -120,8 +123,9 @@ const toRecord = (r: any): CleanupRuleRecord => ({
 // Creation d'une regle, utilisable sans RLS : l'instruction elle-meme exige que l'identite soit a
 // ownerId (zero ligne sinon) et que le dossier eventuel soit un dossier nettoyable de cette identite.
 // Meme portee (identite, dossier, requete sans casse, filtres) : la duree est mise a jour et la pause
-// levee, jamais sur la ligne d'un autre utilisateur (identite qui a change de proprietaire). Plafond
-// de CLEANUP_MAX_RULES_PER_IDENTITY regles, qui ne bloque pas la mise a jour d'une regle existante.
+// levee. Si la ligne est celle d'un ancien proprietaire (l'identite a change de main : le tick ne
+// l'executait plus), le proprietaire actuel la reprend (owner_id). Plafond de
+// CLEANUP_MAX_RULES_PER_IDENTITY regles, qui ne bloque pas la mise a jour d'une regle existante.
 export async function insertCleanupRule(
 	dbh: Dbh,
 	o: {
@@ -143,14 +147,14 @@ export async function insertCleanupRule(
 	const forbidden = { ok: false, reason: "forbidden", message: "Une règle de nettoyage ne se crée que sur vos propres boîtes." } as const;
 	const mailboxId = o.mailboxId ?? null;
 	if (!isUuid(o.ownerId) || !isUuid(o.identityId) || (mailboxId !== null && !isUuid(mailboxId))) return forbidden;
-	// Requete enregistree passee au trim() JS (btrim de la base ne retire que les espaces).
+	// Requete enregistree passee au trim() JS, qui retire au moins ce que coupe btrim(query, TRIM) de la base.
 	const query = String(o.query).trim();
 	const att = Boolean(o.hasAttachment);
 	const unread = Boolean(o.onlyUnread);
 	const box = sql`${mailboxId}::uuid`;
 	const sameScope = sql`c.identity_id = i.id
 		and coalesce(c.mailbox_id, ${ZERO_UUID}) = coalesce(${box}, ${ZERO_UUID})
-		and lower(btrim(c.query)) = lower(btrim(${query}::text))
+		and lower(btrim(c.query, ${TRIM})) = lower(btrim(${query}::text, ${TRIM}))
 		and c.has_attachment = ${att}::boolean and c.only_unread = ${unread}::boolean`;
 
 	const rows = (await dbh.execute(sql`
@@ -164,9 +168,10 @@ export async function insertCleanupRule(
 		  ))
 		  and ((select count(*) from cleanup_rules c where c.identity_id = i.id) < ${CLEANUP_MAX_RULES_PER_IDENTITY}
 			or exists (select 1 from cleanup_rules c where ${sameScope}))
-		on conflict (identity_id, coalesce(mailbox_id, ${ZERO_UUID}), lower(btrim(query)), has_attachment, only_unread)
-		do update set retention_days = excluded.retention_days, paused = false, updated_at = now()
+		on conflict (identity_id, coalesce(mailbox_id, ${ZERO_UUID}), lower(btrim(query, ${TRIM})), has_attachment, only_unread)
+		do update set owner_id = excluded.owner_id, retention_days = excluded.retention_days, paused = false, updated_at = now()
 		where cleanup_rules.owner_id = excluded.owner_id
+		   or not exists (select 1 from identities io where io.id = cleanup_rules.identity_id and io.owner_id = cleanup_rules.owner_id)
 		returning *
 	`)) as any[];
 	if (rows[0]) return { ok: true, rule: toRecord(rows[0]) };

@@ -21,20 +21,22 @@ CREATE TABLE IF NOT EXISTS public.cleanup_rules (
 	created_at timestamptz NOT NULL DEFAULT now(),
 	updated_at timestamptz NOT NULL DEFAULT now(),
 	CONSTRAINT cleanup_rules_retention_days_check CHECK (retention_days BETWEEN 1 AND 3650),
-	CONSTRAINT cleanup_rules_query_length_check CHECK (char_length(btrim(query)) BETWEEN 3 AND 200),
-	CONSTRAINT cleanup_rules_query_not_all_check CHECK (btrim(query) <> '*')
+	-- btrim(query, E' \t\r\n') : btrim seul ne retire que les espaces, le code enregistre la requete passee au trim() JS.
+	-- Un `*` seul ou une requete trop courte tombent sous la longueur minimale de 3 : pas de contrainte a part.
+	CONSTRAINT cleanup_rules_query_length_check CHECK (char_length(btrim(query, E' \t\r\n')) BETWEEN 3 AND 200)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_cleanup_rules_scope ON public.cleanup_rules
-	(identity_id, coalesce(mailbox_id, '00000000-0000-0000-0000-000000000000'::uuid), lower(btrim(query)), has_attachment, only_unread);
+	(identity_id, coalesce(mailbox_id, '00000000-0000-0000-0000-000000000000'::uuid), lower(btrim(query, E' \t\r\n')), has_attachment, only_unread);
 CREATE INDEX IF NOT EXISTS ix_cleanup_rules_identity ON public.cleanup_rules (identity_id);
 GRANT ALL ON public.cleanup_rules TO kurrier;
 ALTER TABLE public.cleanup_rules ENABLE ROW LEVEL SECURITY;
--- Propriete verrouillee dans la table : la regle et l'identite appartiennent au meme utilisateur.
+-- Propriete verrouillee dans la table : la regle et l'identite appartiennent au meme utilisateur, et le
+-- dossier eventuel est un dossier de cette identite.
 DROP POLICY IF EXISTS "cleanup_rules_select_owner" ON public.cleanup_rules;
 CREATE POLICY "cleanup_rules_select_owner" ON public.cleanup_rules AS PERMISSIVE FOR SELECT TO "kurrier" USING ("cleanup_rules"."owner_id" = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid);
 DROP POLICY IF EXISTS "cleanup_rules_delete_owner" ON public.cleanup_rules;
 CREATE POLICY "cleanup_rules_delete_owner" ON public.cleanup_rules AS PERMISSIVE FOR DELETE TO "kurrier" USING ("cleanup_rules"."owner_id" = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid);
 DROP POLICY IF EXISTS "cleanup_rules_insert_owner" ON public.cleanup_rules;
-CREATE POLICY "cleanup_rules_insert_owner" ON public.cleanup_rules AS PERMISSIVE FOR INSERT TO "kurrier" WITH CHECK ("cleanup_rules"."owner_id" = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid AND exists (select 1 from public.identities i where i.id = "cleanup_rules"."identity_id" and i.owner_id = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid));
+CREATE POLICY "cleanup_rules_insert_owner" ON public.cleanup_rules AS PERMISSIVE FOR INSERT TO "kurrier" WITH CHECK ("cleanup_rules"."owner_id" = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid AND exists (select 1 from public.identities i where i.id = "cleanup_rules"."identity_id" and i.owner_id = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid) AND ("cleanup_rules"."mailbox_id" IS NULL OR exists (select 1 from public.mailboxes m where m.id = "cleanup_rules"."mailbox_id" and m.identity_id = "cleanup_rules"."identity_id")));
 DROP POLICY IF EXISTS "cleanup_rules_update_owner" ON public.cleanup_rules;
-CREATE POLICY "cleanup_rules_update_owner" ON public.cleanup_rules AS PERMISSIVE FOR UPDATE TO "kurrier" USING ("cleanup_rules"."owner_id" = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid) WITH CHECK ("cleanup_rules"."owner_id" = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid AND exists (select 1 from public.identities i where i.id = "cleanup_rules"."identity_id" and i.owner_id = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid));
+CREATE POLICY "cleanup_rules_update_owner" ON public.cleanup_rules AS PERMISSIVE FOR UPDATE TO "kurrier" USING ("cleanup_rules"."owner_id" = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid) WITH CHECK ("cleanup_rules"."owner_id" = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid AND exists (select 1 from public.identities i where i.id = "cleanup_rules"."identity_id" and i.owner_id = nullif(current_setting('request.jwt.claim.sub', true), '')::uuid) AND ("cleanup_rules"."mailbox_id" IS NULL OR exists (select 1 from public.mailboxes m where m.id = "cleanup_rules"."mailbox_id" and m.identity_id = "cleanup_rules"."identity_id")));

@@ -156,6 +156,8 @@ async function main() {
 	assert(again.ok && again.rule.id === rule.id && again.rule.retentionDays === 91 && again.rule.paused === false, "doublon : même règle, 91 jours, plus en pause");
 	const same = (await rulesOf(a.identity.id)).filter((r) => r.mailboxId === null && !r.hasAttachment && !r.onlyUnread);
 	assert(same.length === 1 && same[0].retentionDays === 91, "doublon : une seule ligne en base");
+	const tabbed = await insertCleanupRule(db, input({ query: "\t Relevé de compte\r\n", retentionDays: 182 }));
+	assert(tabbed.ok && tabbed.rule.id === rule.id && tabbed.rule.query === "Relevé de compte" && tabbed.rule.retentionDays === 182, "doublon avec tabulation et saut de ligne autour : même règle");
 
 	console.log("# proprietaire non membre de sa propre identite non partagee");
 	const lone = await newIdentity("email", "cleanup-lone");
@@ -190,10 +192,17 @@ async function main() {
 	await db.update(identities).set({ ownerId: b.user.id }).where(eq(identities.id, moved.identity.id));
 	assert(movedRes.ok && (await loadCleanupRule(db, movedRes.rule.id)) === null, "après : loadCleanupRule rend null");
 	assert((await resolveCleanupScope(db, { ownerId: a.user.id, identityId: moved.identity.id, mailboxId: null })) === null, "après : l'ancien propriétaire ne résout plus l'identité");
-	const takeover = await insertCleanupRule(db, input({ ownerId: b.user.id, identityId: moved.identity.id }));
-	assert(!takeover.ok && takeover.reason === "conflict", "nouveau propriétaire, même portée : refus typé, la ligne d'autrui n'est pas modifiée");
-	const [old] = await db.select().from(cleanupRules).where(eq(cleanupRules.id, movedRes.ok ? movedRes.rule.id : ""));
-	assert(!!old && old.ownerId === a.user.id && old.retentionDays === 30, "ligne de l'ancien propriétaire inchangée");
+	await db.update(cleanupRules).set({ paused: true }).where(eq(cleanupRules.id, movedRes.ok ? movedRes.rule.id : ""));
+	const takeover = await insertCleanupRule(db, input({ ownerId: b.user.id, identityId: moved.identity.id, retentionDays: 91 }));
+	assert(
+		takeover.ok && movedRes.ok && takeover.rule.id === movedRes.rule.id && takeover.rule.ownerId === b.user.id && takeover.rule.retentionDays === 91 && takeover.rule.paused === false,
+		"nouveau propriétaire, même portée : reprend la ligne de l'ancien (owner_id, durée, pause levée)",
+	);
+	const taken = takeover.ok ? await loadCleanupRule(db, takeover.rule.id) : null;
+	assert(!!taken && taken.ownerId === b.user.id && taken.retentionDays === 91, "la règle reprise est chargée pour le nouveau propriétaire");
+	assert((await rulesOf(moved.identity.id)).filter((r) => r.mailboxId === null && !r.hasAttachment && !r.onlyUnread).length === 1, "une seule ligne sur cette portée");
+	const unrelated = await insertCleanupRule(db, input({ ownerId: a.user.id, identityId: moved.identity.id, query: "ancien propriétaire" }));
+	assert(!unrelated.ok && unrelated.reason === "forbidden", "l'ancien propriétaire ne crée plus rien sur l'identité");
 	const fresh = await insertCleanupRule(db, input({ ownerId: b.user.id, identityId: moved.identity.id, query: "autre recherche" }));
 	assert(fresh.ok && !!(await loadCleanupRule(db, fresh.rule.id)), "nouveau propriétaire : autre portée créée et chargée");
 

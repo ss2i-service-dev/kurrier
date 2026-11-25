@@ -14,6 +14,7 @@ import { useParams, useRouter } from "next/navigation";
 import ManageLabels from "@/components/dashboard/labels/manage-labels";
 import { LabelEntity } from "@db";
 import { useDynamicContext } from "@/hooks/use-dynamic-context";
+import { SidebarSectionTitle, useSidebarSection } from "@/components/k/sidebar-section";
 
 type LabelWithCount = LabelEntity & {
 	threadCount?: number;
@@ -144,18 +145,20 @@ function KLabels() {
 	};
 
 	const tree = useTree();
+	// ss2i : section « Libelles » pliable, etat memorise sur le poste
+	const section = useSidebarSection("libelles");
 
 	return (
 		<div className="flex h-full flex-col">
 			<div className="mb-1 mt-5 flex items-center justify-between px-2.5">
-				<div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-k-ink-3">Libellés</div>
+				<SidebarSectionTitle label="Libellés" open={section.open} onToggle={section.toggle} />
 				<div className="flex items-center gap-1">
 					<AddNewLabel globalLabels={labels} />
 					<ManageLabels globalLabels={labels} />
 				</div>
 			</div>
 
-			<div className="pb-4 [&_.mantine-Tree-root]:space-y-px">
+			<div className={`pb-4 [&_.mantine-Tree-root]:space-y-px ${section.open ? "" : "hidden"}`}>
 				{treeData.length === 0 && <p className="px-2.5 py-1 text-[12.5px] text-k-ink-3">Aucun libellé</p>}
 				<Tree
 					selectOnClick

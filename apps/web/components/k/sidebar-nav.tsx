@@ -28,6 +28,7 @@ import {
 import { MailboxKind } from "@schema";
 import { outboxSidebarCount, showsSidebarCount } from "@/lib/folder-unread-counts";
 import { outboxSlot } from "@/lib/outbox-view";
+import { SidebarSectionTitle, useSidebarSection } from "@/components/k/sidebar-section";
 import { useOutboxRefresh } from "@/components/mailbox/default/outbox-list";
 import {
 	IdentityEntity,
@@ -250,6 +251,8 @@ export default function KSidebarNav({
 		identityPublicId?: string;
 		mailboxSlug?: string;
 	};
+	// ss2i : section « Dossiers » pliable, etat memorise sur le poste
+	const folders = useSidebarSection("dossiers");
 
 	// Dossier courant : le segment qui suit l'identite dans l'URL (et non le
 	// dernier segment, qui vaut l'id du fil quand un fil est ouvert).
@@ -426,18 +429,20 @@ export default function KSidebarNav({
 
 			<div>
 				<div className="mb-1 flex items-center justify-between px-2.5">
-					<span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-k-ink-3">Dossiers</span>
+					<SidebarSectionTitle label="Dossiers" open={folders.open} onToggle={folders.toggle} />
 					<AddNewFolder mailboxes={mailboxes} identity={identity} />
 				</div>
-				<div className="space-y-px">
-					{custom.length === 0 ? (
-						<p className="px-2.5 py-1 text-[12.5px] text-k-ink-3">Aucun dossier</p>
-					) : (
-						custom.map((m) => (
-							<Item key={m.id} m={m} identityPublicId={identity.publicId} identity={identity} />
-						))
-					)}
-				</div>
+				{folders.open && (
+					<div className="space-y-px">
+						{custom.length === 0 ? (
+							<p className="px-2.5 py-1 text-[12.5px] text-k-ink-3">Aucun dossier</p>
+						) : (
+							custom.map((m) => (
+								<Item key={m.id} m={m} identityPublicId={identity.publicId} identity={identity} />
+							))
+						)}
+					</div>
+				)}
 			</div>
 		</nav>
 	);

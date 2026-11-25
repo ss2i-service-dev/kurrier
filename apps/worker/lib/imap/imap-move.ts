@@ -38,6 +38,9 @@ type MoveJob = {
 	// valide, cf. parseExpiry) ; `expiry` marque le job de Corbeille poste par mail:expire-tick.
 	expiresAt?: string | null;
 	expiry?: boolean;
+	// ss2i (nettoyage-auto-recherche) : id de la regle de nettoyage qui a poste le job (op trash).
+	// Declare seulement : relu sous lock par moveMail dans une micro-tache suivante.
+	cleanupRuleId?: string;
 };
 
 // Job du tick : l'echeance a change entre la verification du debut et la transaction.

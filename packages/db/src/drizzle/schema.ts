@@ -2065,3 +2065,64 @@ export const blockedSenders = pgTable(
 		}),
 	],
 ).enableRLS();
+
+// ss2i : regles de nettoyage automatique depuis une recherche (migration 012, docs/plans/
+// nettoyage-auto-recherche.md). mailbox_id null = tous les dossiers nettoyables. Aucun slug ni
+// workspace stocke : le worker relit tout depuis l'identite, qui doit rester a l'auteur de la regle.
+export const cleanupRules = pgTable(
+	"cleanup_rules",
+	{
+		id: uuid("id").defaultRandom().primaryKey(),
+		ownerId: uuid("owner_id")
+			.references(() => users.id, { onDelete: "cascade" })
+			.notNull(),
+		identityId: uuid("identity_id")
+			.references(() => identities.id, { onDelete: "cascade" })
+			.notNull(),
+		mailboxId: uuid("mailbox_id").references(() => mailboxes.id, { onDelete: "cascade" }),
+		query: text("query").notNull(),
+		hasAttachment: boolean("has_attachment").notNull().default(false),
+		onlyUnread: boolean("only_unread").notNull().default(false),
+		retentionDays: integer("retention_days").notNull(),
+		paused: boolean("paused").notNull().default(false),
+		lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+		lastTrashedAt: timestamp("last_trashed_at", { withTimezone: true }),
+		trashedCount: integer("trashed_count").notNull().default(0),
+		createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+	},
+	(t) => [
+		uniqueIndex("ux_cleanup_rules_scope").on(
+			t.identityId,
+			sql`coalesce(${t.mailboxId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+			sql`lower(btrim(${t.query}))`,
+			t.hasAttachment,
+			t.onlyUnread,
+		),
+		index("ix_cleanup_rules_identity").on(t.identityId),
+		check("cleanup_rules_retention_days_check", sql`${t.retentionDays} BETWEEN 1 AND 3650`),
+		check("cleanup_rules_query_length_check", sql`char_length(btrim(${t.query})) BETWEEN 3 AND 200`),
+		check("cleanup_rules_query_not_all_check", sql`btrim(${t.query}) <> '*'`),
+		pgPolicy("cleanup_rules_select_owner", {
+			for: "select",
+			to: "kurrier",
+			using: sql`${t.ownerId} = ${authUid}`,
+		}),
+		pgPolicy("cleanup_rules_delete_owner", {
+			for: "delete",
+			to: "kurrier",
+			using: sql`${t.ownerId} = ${authUid}`,
+		}),
+		pgPolicy("cleanup_rules_insert_owner", {
+			for: "insert",
+			to: "kurrier",
+			withCheck: sql`${t.ownerId} = ${authUid} AND exists (select 1 from identities i where i.id = ${t.identityId} and i.owner_id = ${authUid})`,
+		}),
+		pgPolicy("cleanup_rules_update_owner", {
+			for: "update",
+			to: "kurrier",
+			using: sql`${t.ownerId} = ${authUid}`,
+			withCheck: sql`${t.ownerId} = ${authUid} AND exists (select 1 from identities i where i.id = ${t.identityId} and i.owner_id = ${authUid})`,
+		}),
+	],
+).enableRLS();

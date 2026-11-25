@@ -20,3 +20,4 @@ export * from "./outbox";
 export * from "./thread-expiry";
 export * from "./cleanup-rules";
 export * from "./cleanup-store";
+export * from "./cleanup-eligible";

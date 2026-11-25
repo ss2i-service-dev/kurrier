@@ -71,6 +71,28 @@ test("suppression avec confirmation, action en cours visible, erreur affichee", 
 	assert.match(list, /toast\.success\(/);
 });
 
+test("une action qui lance une exception : toast.error, jamais de bouton bloque (WEB-7)", () => {
+	for (const fn of ["togglePause", "remove"]) {
+		const body = list.match(new RegExp(`const ${fn} = async[\\s\\S]*?\\n    \\};\\n`))?.[0] ?? "";
+		assert.ok(body, `${fn} absente`);
+		assert.match(body, /try\s*\{/, `${fn} : try`);
+		assert.match(body, /catch\s*(\([^)]*\)\s*)?\{[\s\S]*toast\.error\(/, `${fn} : catch avec toast.error`);
+		assert.match(body, /finally\s*\{[\s\S]*setRowBusy\(row\.id,\s*null\)/, `${fn} : ligne liberee dans finally`);
+	}
+});
+
+test("action en cours suivie par ligne : deux lignes ne s'effacent pas (WEB-7)", () => {
+	assert.doesNotMatch(list, /setBusy\(null\)/);
+	assert.match(list, /useState<Record<string,/);
+	assert.match(list, /busy\[row\.id\]/);
+});
+
+test("portee « Tous les dossiers » : meme libelle que le formulaire (WEB-6)", () => {
+	assert.match(list, /CLEANUP_ALL_FOLDERS_LABEL/);
+	assert.match(list, /@\/lib\/cleanup-form/);
+	assert.doesNotMatch(list, /"Tous les dossiers"/);
+});
+
 test("liste vide : phrase qui renvoie a la recherche", () => {
 	assert.match(list, /depuis une recherche/);
 });

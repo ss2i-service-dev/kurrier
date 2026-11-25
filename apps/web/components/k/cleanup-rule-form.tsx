@@ -59,6 +59,18 @@ export default function KCleanupRule({ identityPublicId, mailboxSlug, mailboxNam
 	const key = days === null ? null : previewKey(input(days));
 	const can = canCreateCleanup({ preview, previewKey: pKey, key, busy: loading || creating });
 
+	// Changer la saisie libre ou l'unite rend l'apercu affiche faux pour ce que le champ dit : on l'efface,
+	// avec la duree choisie, et une reponse encore en vol est ignoree.
+	function resetPreview() {
+		seq.current += 1;
+		setDays(null);
+		setPreview(null);
+		setPKey(null);
+		setLoading(false);
+		setError(null);
+		setFreeError(null);
+	}
+
 	async function choose(d: number) {
 		const n = ++seq.current;
 		setDays(d);
@@ -116,7 +128,7 @@ export default function KCleanupRule({ identityPublicId, mailboxSlug, mailboxNam
 	if (created) {
 		return (
 			<div className="flex flex-col gap-3 text-[13px]">
-				<p>La règle est créée. Elle s'applique à chaque passage du nettoyage, toutes les 15 minutes ; les premiers fils partent à la Corbeille au prochain.</p>
+				<p>La règle est créée. Elle s'applique à chaque passage du nettoyage, toutes les 15 minutes ; les premiers fils partent à la Corbeille à partir du prochain passage, par lots de 200.</p>
 				<Link href={settingsHref} className="underline">
 					Voir les règles de nettoyage
 				</Link>
@@ -157,7 +169,10 @@ export default function KCleanupRule({ identityPublicId, mailboxSlug, mailboxNam
 						size="xs"
 						w={110}
 						value={freeText}
-						onChange={(e) => setFreeText(e.currentTarget.value)}
+						onChange={(e) => {
+							setFreeText(e.currentTarget.value);
+							resetPreview();
+						}}
 						onKeyDown={(e) => {
 							if (e.key === "Enter") applyFree();
 						}}
@@ -168,7 +183,10 @@ export default function KCleanupRule({ identityPublicId, mailboxSlug, mailboxNam
 						size="xs"
 						data={CLEANUP_UNITS.map((u) => ({ value: u.id, label: u.label }))}
 						value={unit}
-						onChange={(e) => setUnit(e.currentTarget.value as CleanupUnit)}
+						onChange={(e) => {
+							setUnit(e.currentTarget.value as CleanupUnit);
+							resetPreview();
+						}}
 						disabled={Boolean(queryError) || creating}
 					/>
 					<Button size="xs" variant="default" onClick={applyFree} disabled={Boolean(queryError) || creating}>

@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CLEANUP_PRESETS } from "../../../packages/common/src/cleanup-rules";
 import {
+	CLEANUP_ALL_FOLDERS_LABEL,
 	canCreateCleanup,
 	cleanupFormPresets,
 	cleanupFreeDays,
@@ -54,7 +55,22 @@ test("saisie libre : unites jour, semaine, mois, an, bornee a 1..3650 jours", ()
 	assert.deepEqual(cleanupFreeDays("1", "year"), { days: 365 });
 	assert.deepEqual(cleanupFreeDays("1,5", "month"), { days: 45 });
 	assert.deepEqual(cleanupFreeDays(" 10 ", "year"), { days: 3650 });
-	assert.deepEqual(cleanupFreeDays("99", "year"), { days: 3650 });
+	assert.deepEqual(cleanupFreeDays("3650", "day"), { days: 3650 });
+	assert.deepEqual(cleanupFreeDays("0.5", "day"), { days: 1 }, "0,5 jour arrondit a 1 jour, dans la plage");
+});
+
+test("saisie libre : un arrondi hors 1..3650 jours est refuse (WEB-2), jamais borne", () => {
+	for (const [v, unit] of [["99", "year"], ["3651", "day"], ["11", "year"], ["10,1", "year"], ["0,1", "day"], ["0,4", "day"], ["0,001", "year"], ["1000000", "year"]] as const) {
+		const r = cleanupFreeDays(v, unit);
+		assert.ok("error" in r && r.error === "La durée va de 1 à 3650 jours.", `« ${v} ${unit} » : ${JSON.stringify(r)}`);
+	}
+});
+
+test("saisie libre : seul ^\\d+([.,]\\d+)?$ est accepte (WEB-2)", () => {
+	for (const v of ["1e2", "0x10", "1_000", "1 000", "+3", ".5", "5.", "1,2,3", "1.2.3", "١٢", "3 jours", "--1", "1e-1", " "]) {
+		const r = cleanupFreeDays(v, "day");
+		assert.ok("error" in r && r.error.length > 0, `« ${v} » doit etre refusee : ${JSON.stringify(r)}`);
+	}
 });
 
 test("saisie libre : vide, zero, negative, non numerique, infinie : refusee, jamais une duree", () => {
@@ -101,7 +117,9 @@ test("recapitulatif : texte, portee, comptes, suite, etoiles, Corbeille 30 jours
 	assert.match(all, /banque/);
 	assert.match(all, /Boîte de réception/);
 	assert.ok(lines.some((l) => /12 fils correspondent exactement \(sans tolérance aux fautes de frappe\)/.test(l)), all);
-	assert.ok(lines.some((l) => /3 fils partent à la Corbeille dans le quart d'heure/.test(l)), all);
+	assert.ok(lines.some((l) => /3 fils partent à la Corbeille à partir du prochain passage, par lots de 200 toutes les 15 minutes/.test(l)), all);
+	assert.ok(!/quart d'heure/.test(all), "WEB-5 : jamais « dans le quart d'heure »");
+	assert.ok(lines.some((l) => /Dossiers? : Tous les dossiers|Dossier : Boîte de réception/.test(l)), all);
 	assert.ok(lines.some((l) => /ensuite, chaque fil sans nouveau message depuis 1 mois/i.test(l)), all);
 	assert.ok(lines.some((l) => /fils étoilés (ne sont jamais concernés|restent)/i.test(l)), all);
 	assert.ok(lines.some((l) => /Corbeille se vide au bout de 30 jours/.test(l)), all);
@@ -110,21 +128,23 @@ test("recapitulatif : texte, portee, comptes, suite, etoiles, Corbeille 30 jours
 test("recapitulatif : pluriel et zero", () => {
 	const one = cleanupSummary({ ...BASE, preview: { matching: 1, dueNow: 1, truncated: false } }).map(nb).join("\n");
 	assert.match(one, /1 fil correspond exactement/);
-	assert.match(one, /1 fil part à la Corbeille/);
+	assert.match(one, /1 fil part à la Corbeille à partir du prochain passage/);
 	const zero = cleanupSummary({ ...BASE, preview: { matching: 0, dueNow: 0, truncated: false } }).map(nb).join("\n");
 	assert.match(zero, /Aucun fil ne correspond exactement/);
-	assert.match(zero, /Aucun fil ne part à la Corbeille dans le quart d'heure/);
+	assert.match(zero, /Aucun fil ne part à la Corbeille pour l'instant/);
 });
 
-test("recapitulatif : apercu tronque, « plus de N »", () => {
+test("recapitulatif : apercu tronque, « plus de N », par lots de 200 (WEB-5)", () => {
 	const all = cleanupSummary({ ...BASE, preview: { matching: 5000, dueNow: 2000, truncated: true } }).map(nb).join("\n");
-	assert.match(all, /Plus de 2 000 fils partent à la Corbeille/);
+	assert.match(all, /Plus de 2 000 fils partent à la Corbeille à partir du prochain passage, par lots de 200 toutes les 15 minutes/);
 	assert.match(all, /5 000 fils correspondent exactement/);
+	assert.doesNotMatch(all, /quart d'heure/);
 });
 
-test("recapitulatif : portee et filtres", () => {
+test("recapitulatif : portee et filtres (libelle « Tous les dossiers » complet, WEB-6)", () => {
 	const all = cleanupSummary({ ...BASE, allFolders: true, hasAttachment: true, onlyUnread: true, preview: { matching: 2, dueNow: 0, truncated: false } }).map(nb).join("\n");
-	assert.match(all, /Tous les dossiers/);
+	assert.match(all, /Tous les dossiers \(réception, archives et vos dossiers\)/);
+	assert.equal(CLEANUP_ALL_FOLDERS_LABEL, "Tous les dossiers (réception, archives et vos dossiers)");
 	assert.match(all, /avec pièce jointe/);
 	assert.match(all, /non lus/);
 	const sans = cleanupSummary({ ...BASE, preview: { matching: 2, dueNow: 0, truncated: false } }).map(nb).join("\n");
@@ -168,6 +188,23 @@ test("composant : saisie libre par cleanupFreeDays, erreur du serveur affichee t
 	assert.match(form, /settings\/cleanup/);
 	assert.match(form, /useNouvelle\(\)/);
 	assert.match(form, /CLEANUP_MAX_DAYS|cleanupFreeDays/);
+});
+
+test("composant : modifier la saisie libre ou l'unite invalide l'apercu (WEB-3)", () => {
+	const reset = form.match(/function resetPreview\([\s\S]*?\n\t\}\n/)?.[0] ?? "";
+	assert.ok(reset, "resetPreview absente");
+	for (const s of ["seq.current", "setPreview(null)", "setPKey(null)", "setDays(null)", "setLoading(false)", "setError(null)"]) {
+		assert.ok(reset.includes(s), `resetPreview doit appeler ${s}`);
+	}
+	const input = form.match(/<TextInput\b[\s\S]*?\/>/)?.[0] ?? "";
+	assert.match(input, /onChange=\{[^]*?resetPreview\(\)/);
+	const select = form.match(/<NativeSelect\b[\s\S]*?\/>/)?.[0] ?? "";
+	assert.match(select, /onChange=\{[^]*?resetPreview\(\)/);
+});
+
+test("composant : message de creation sans « quart d'heure » (WEB-5)", () => {
+	assert.doesNotMatch(form, /quart d'heure/);
+	assert.match(form, /par lots de 200/);
 });
 
 test("composant : jamais d'etoile, d'identifiant de dossier ni de workspace transmis", () => {

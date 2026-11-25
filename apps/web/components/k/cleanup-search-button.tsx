@@ -10,7 +10,7 @@ import { useDisclosure } from "@mantine/hooks";
 import { Eraser } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import KCleanupRule from "@/components/k/cleanup-rule-form";
-import { cleanupButtonState } from "@/lib/cleanup-search-button";
+import { cleanupButtonState, isCleanableKind } from "@/lib/cleanup-search-button";
 
 export default function KCleanupSearchButton({
 	identityPublicId,
@@ -35,7 +35,8 @@ export default function KCleanupSearchButton({
 	const onlyUnread = sp.get("unread") === "1";
 	const starred = sp.get("starred") === "1";
 	const allFolders = false;
-	const state = cleanupButtonState({ isOwner, query, starred, mailboxKind, allFolders });
+	// Sur cette page le filtre etoile s'affiche en pastille « Étoilés » et la recherche ne s'etend pas ici.
+	const state = cleanupButtonState({ isOwner, query, starred, mailboxCleanable: isCleanableKind(mailboxKind), allFolders, starredLabel: "Étoilés", canExtend: false });
 	if (!state.show) return null;
 
 	return (

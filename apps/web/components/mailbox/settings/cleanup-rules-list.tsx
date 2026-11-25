@@ -5,6 +5,7 @@ import { Badge, Button } from "@mantine/core";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { CLEANUP_PRESETS } from "@common/cleanup-rules";
+import { CLEANUP_ALL_FOLDERS_LABEL } from "@/lib/cleanup-form";
 import { deleteCleanupRule, setCleanupRulePaused, type CleanupRuleItem } from "@/lib/actions/cleanup-rules";
 
 // ss2i : regles de nettoyage automatique de l'identite (docs/plans/nettoyage-auto-recherche.md, MT9). Une
@@ -20,7 +21,13 @@ const durationLabel = (days: number) =>
 
 export default function CleanupRulesList({ rows }: { rows: CleanupRuleItem[] }) {
     const router = useRouter();
-    const [busy, setBusy] = useState<{ id: string; action: "pause" | "delete" } | null>(null);
+    // Action en cours par ligne : deux lignes peuvent travailler en meme temps sans se couper l'etat.
+    const [busy, setBusy] = useState<Record<string, "pause" | "delete">>({});
+    const setRowBusy = (id: string, action: "pause" | "delete" | null) =>
+        setBusy((b) => {
+            const { [id]: _drop, ...rest } = b;
+            return action ? { ...rest, [id]: action } : rest;
+        });
 
     if (!rows.length) {
         return (
@@ -30,35 +37,47 @@ export default function CleanupRulesList({ rows }: { rows: CleanupRuleItem[] }) 
         );
     }
 
+    // Une action serveur qui lance une exception (reseau, session expiree) finit en toast d'erreur, et la
+    // ligne est toujours liberee : jamais un bouton qui tourne indefiniment.
     const togglePause = async (row: CleanupRuleItem) => {
-        setBusy({ id: row.id, action: "pause" });
-        const res = await setCleanupRulePaused(row.id, !row.paused);
-        setBusy(null);
-        if (res.success) {
-            toast.success(row.paused ? "Règle reprise" : "Règle suspendue", { position: "bottom-left" });
-            router.refresh();
-        } else {
-            toast.error(res.error ?? "Le changement a échoué", { position: "bottom-left" });
+        setRowBusy(row.id, "pause");
+        try {
+            const res = await setCleanupRulePaused(row.id, !row.paused);
+            if (res.success) {
+                toast.success(row.paused ? "Règle reprise" : "Règle suspendue", { position: "bottom-left" });
+                router.refresh();
+            } else {
+                toast.error(res.error ?? "Le changement a échoué", { position: "bottom-left" });
+            }
+        } catch (e: any) {
+            toast.error(e?.message ?? "Le changement a échoué", { position: "bottom-left" });
+        } finally {
+            setRowBusy(row.id, null);
         }
     };
 
     const remove = async (row: CleanupRuleItem) => {
         if (!window.confirm(`Supprimer la règle « ${row.query} » ? Les fils déjà envoyés à la Corbeille y restent.`)) return;
-        setBusy({ id: row.id, action: "delete" });
-        const res = await deleteCleanupRule(row.id);
-        setBusy(null);
-        if (res.success) {
-            toast.success("Règle supprimée", { position: "bottom-left" });
-            router.refresh();
-        } else {
-            toast.error(res.error ?? "La suppression a échoué", { position: "bottom-left" });
+        setRowBusy(row.id, "delete");
+        try {
+            const res = await deleteCleanupRule(row.id);
+            if (res.success) {
+                toast.success("Règle supprimée", { position: "bottom-left" });
+                router.refresh();
+            } else {
+                toast.error(res.error ?? "La suppression a échoué", { position: "bottom-left" });
+            }
+        } catch (e: any) {
+            toast.error(e?.message ?? "La suppression a échoué", { position: "bottom-left" });
+        } finally {
+            setRowBusy(row.id, null);
         }
     };
 
     return (
         <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {rows.map((row) => {
-                const mine = busy?.id === row.id;
+                const rowBusy = busy[row.id];
                 return (
                     <li key={row.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
                         <div className="min-w-0 space-y-1">
@@ -72,7 +91,7 @@ export default function CleanupRulesList({ rows }: { rows: CleanupRuleItem[] }) 
                             </div>
                             <p className="text-[13px] text-neutral-600 dark:text-neutral-400">
                                 {[
-                                    row.allFolders ? "Tous les dossiers" : `Dossier ${row.mailboxName}`,
+                                    row.allFolders ? CLEANUP_ALL_FOLDERS_LABEL : `Dossier ${row.mailboxName}`,
                                     row.onlyUnread ? "non lus seulement" : null,
                                     row.hasAttachment ? "avec pièce jointe" : null,
                                     `au-delà de ${durationLabel(row.retentionDays)} sans nouveau message`,
@@ -90,8 +109,8 @@ export default function CleanupRulesList({ rows }: { rows: CleanupRuleItem[] }) 
                             <Button
                                 size="compact-xs"
                                 variant="light"
-                                loading={mine && busy?.action === "pause"}
-                                disabled={mine && busy?.action !== "pause"}
+                                loading={rowBusy === "pause"}
+                                disabled={Boolean(rowBusy) && rowBusy !== "pause"}
                                 onClick={() => togglePause(row)}
                             >
                                 {row.paused ? "Reprendre" : "Suspendre"}
@@ -100,8 +119,8 @@ export default function CleanupRulesList({ rows }: { rows: CleanupRuleItem[] }) 
                                 size="compact-xs"
                                 variant="light"
                                 color="red"
-                                loading={mine && busy?.action === "delete"}
-                                disabled={mine && busy?.action !== "delete"}
+                                loading={rowBusy === "delete"}
+                                disabled={Boolean(rowBusy) && rowBusy !== "delete"}
                                 onClick={() => remove(row)}
                             >
                                 Supprimer

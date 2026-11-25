@@ -44,16 +44,37 @@ test("bouton Nettoyage auto... : requete non vide et proprietaire seulement", ()
 	assert.match(search, /Nettoyage auto\.\.\./);
 	assert.match(search, /data-ss2i="search-cleanup"/);
 	// Le serveur ne passe `cleanup` qu'au proprietaire de l'identite : sans lui, aucun bouton.
-	assert.match(search, /cleanup\s*&&\s*query\.trim\(\)/);
+	// La requete vide masque le bouton par cleanupButtonState (show: false).
+	assert.match(search, /cleanup\s*&&\s*cleanupState\.show/);
+	assert.match(search, /isOwner:\s*!!cleanup/);
+	assert.match(search, /query,\s*\n\s*starred:/);
 });
 
-test("bouton desactive avec la raison : filtre favoris, dossier non nettoyable", () => {
-	assert.match(search, /isStarred/);
-	assert.match(search, /Favoris uniquement/);
-	assert.match(search, /mailboxCleanable/);
-	assert.match(search, /disabled=\{!!cleanupBlocked\}/);
+test("bouton desactive avec la raison : texte unique de cleanupButtonState, libelle reel du filtre (WEB-4)", () => {
+	assert.match(search, /import \{ cleanupButtonState \} from "@\/lib\/cleanup-search-button"/);
+	const call = search.match(/cleanupButtonState\(\{[\s\S]*?\}\)/)?.[0] ?? "";
+	assert.ok(call, "appel de cleanupButtonState absent");
+	assert.match(call, /starred:\s*isStarred/);
+	assert.match(call, /mailboxCleanable:\s*!!cleanup\?\.mailboxCleanable/);
+	assert.match(call, /canExtend:\s*true/);
+	// Le libelle cite est celui du Badge affiche a l'ecran, dans les deux langues.
+	assert.match(call, /starredLabel:\s*k\("Starred only",\s*"Favoris uniquement"\)/);
+	assert.match(search, /\{k\("Starred only",\s*"Favoris uniquement"\)\}/);
+	assert.match(search, /disabled=\{Boolean\(cleanupState\.disabledReason\)\}/);
 	// La raison est affichee (un bouton desactive n'a pas d'infobulle fiable), pas seulement en title.
-	assert.match(search, /\{cleanupBlocked\s*&&/);
+	assert.match(search, /\{cleanupState\.disabledReason\s*&&/);
+	// Plus de seconde copie des textes dans le composant.
+	assert.doesNotMatch(search, /Un fil étoilé n'est jamais nettoyé|Ce dossier ne se nettoie pas/);
+});
+
+test("« Étendre à tous les dossiers » a cote du bouton, meme quand il y a des resultats (WEB-1)", () => {
+	const row = search.match(/data-ss2i="search-cleanup"[\s\S]*?search-cleanup-reason[\s\S]*?<\/div>/)?.[0] ?? "";
+	assert.ok(row, "ligne du bouton absente");
+	assert.match(row, /data-ss2i="search-cleanup-extend"/);
+	assert.match(row, /Étendre à tous les dossiers/);
+	assert.match(row, /setAllFolders\(true\)/);
+	// affiche seulement hors tous les dossiers quand le dossier courant ne se nettoie pas
+	assert.match(row, /!allFolders\s*&&\s*!cleanup\.mailboxCleanable/);
 });
 
 test("transmet query, allFolders, filtres et dossier courant, jamais starred", () => {
@@ -92,6 +113,14 @@ test("note Nouveautes presente : recherche, duree, fils etoiles, Corbeille 30 jo
 	assert.match(t, /30 jours/);
 	assert.match(t, /Nettoyage automatique/);
 	assert.doesNotMatch(t, /\p{Extended_Pictographic}/u);
+	// WEB-5 : le debit reel est 200 fils par passage de 15 minutes.
+	assert.doesNotMatch(t, /quart d'heure/);
+	assert.match(t, /par lots de 200 toutes les 15 minutes/);
+	// WEB-1 : le libelle du bouton d'extension et la nouvelle interface (dossier courant seulement).
+	assert.match(t, /Étendre à tous les dossiers/);
+	assert.match(t, /nouvelle interface[^\n]*dossier courant/i);
+	// WEB-4 : plus de libelle de filtre qui n'existe pas a l'ecran.
+	assert.doesNotMatch(t, /Favoris uniquement/);
 });
 
 if (failed) {

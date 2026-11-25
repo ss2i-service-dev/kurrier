@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupButtonState } from "../lib/cleanup-search-button";
+import { cleanupButtonState, isCleanableKind } from "../lib/cleanup-search-button";
 
 let failed = 0;
 function test(name: string, fn: () => void) {
@@ -25,12 +25,15 @@ const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\
 const raw = (p: string) => (existsSync(join(ROOT, p)) ? readFileSync(join(ROOT, p), "utf8") : "");
 const read = (p: string) => strip(raw(p));
 
-const BASE = { isOwner: true, query: "banque", starred: false, mailboxKind: "inbox", allFolders: false };
+const BASE = { isOwner: true, query: "banque", starred: false, mailboxCleanable: true, allFolders: false, starredLabel: "Étoilés", canExtend: false };
+
+test("isCleanableKind : inbox, archive, custom seulement", () => {
+	for (const k of ["inbox", "archive", "custom"]) assert.equal(isCleanableKind(k), true, k);
+	for (const k of ["trash", "spam", "drafts", "sent", "outbox", "junk", "", null, undefined]) assert.equal(isCleanableKind(k), false, String(k));
+});
 
 test("visible : requete non vide et proprietaire, dossier nettoyable", () => {
-	for (const mailboxKind of ["inbox", "archive", "custom"]) {
-		assert.deepEqual(cleanupButtonState({ ...BASE, mailboxKind }), { show: true, disabledReason: null }, mailboxKind);
-	}
+	assert.deepEqual(cleanupButtonState(BASE), { show: true, disabledReason: null });
 });
 
 test("masque : requete vide ou blanche, ou non proprietaire", () => {
@@ -39,19 +42,31 @@ test("masque : requete vide ou blanche, ou non proprietaire", () => {
 	assert.deepEqual(cleanupButtonState({ ...BASE, isOwner: false }), { show: false });
 });
 
-test("desactive avec explication : filtre etoile actif, meme en tous les dossiers", () => {
+test("desactive avec explication : filtre etoile actif, meme en tous les dossiers, libelle reel du filtre (WEB-4)", () => {
 	for (const allFolders of [false, true]) {
 		const s = cleanupButtonState({ ...BASE, starred: true, allFolders });
 		assert.ok(s.show && s.disabledReason && /étoilé/.test(s.disabledReason), JSON.stringify(s));
+		assert.match(s.disabledReason!, /« Étoilés »/);
 	}
+	// l'interface classique affiche « Starred only » : c'est ce libelle que la raison cite
+	const classic = cleanupButtonState({ ...BASE, starred: true, starredLabel: "Starred only" });
+	assert.ok(classic.show && classic.disabledReason && /« Starred only »/.test(classic.disabledReason), JSON.stringify(classic));
+	assert.doesNotMatch(classic.disabledReason!, /Favoris|Étoilés/);
 });
 
 test("desactive avec explication : dossier non nettoyable hors tous les dossiers", () => {
-	for (const mailboxKind of ["trash", "spam", "drafts", "sent", "outbox", "junk", null]) {
-		const s = cleanupButtonState({ ...BASE, mailboxKind });
-		assert.ok(s.show && s.disabledReason && /dossier/.test(s.disabledReason), `${mailboxKind} : ${JSON.stringify(s)}`);
-		assert.deepEqual(cleanupButtonState({ ...BASE, mailboxKind, allFolders: true }), { show: true, disabledReason: null }, `${mailboxKind} en tous les dossiers`);
-	}
+	const s = cleanupButtonState({ ...BASE, mailboxCleanable: false });
+	assert.ok(s.show && s.disabledReason && /dossier/.test(s.disabledReason), JSON.stringify(s));
+	assert.doesNotMatch(s.disabledReason!, /Étendre|étendez/i, "sans moyen d'etendre, la raison ne le propose pas");
+	assert.deepEqual(cleanupButtonState({ ...BASE, mailboxCleanable: false, allFolders: true }), { show: true, disabledReason: null });
+});
+
+test("dossier non nettoyable avec moyen d'etendre : la raison cite le bouton « Étendre à tous les dossiers » (WEB-1)", () => {
+	const s = cleanupButtonState({ ...BASE, mailboxCleanable: false, canExtend: true });
+	assert.ok(s.show && s.disabledReason && /« Étendre à tous les dossiers »/.test(s.disabledReason), JSON.stringify(s));
+	// le filtre etoile passe avant
+	const both = cleanupButtonState({ ...BASE, mailboxCleanable: false, canExtend: true, starred: true });
+	assert.ok(both.show && both.disabledReason && /étoilé/.test(both.disabledReason));
 });
 
 const BTN = "apps/web/components/k/cleanup-search-button.tsx";
@@ -93,6 +108,12 @@ test("bouton : visible seulement sur la page de resultats, desactive avec l'expl
 	assert.match(btn, /\/search/);
 	assert.match(btn, /disabled=\{Boolean\(state\.disabledReason\)\}/);
 	assert.match(btn, /state\.disabledReason/);
+});
+
+test("bouton : cite le filtre « Étoilés » de la page k, dossier juge par isCleanableKind, aucun moyen d'etendre (WEB-4)", () => {
+	assert.match(btn, /starredLabel:\s*"Étoilés"/);
+	assert.match(btn, /mailboxCleanable:\s*isCleanableKind\(mailboxKind\)/);
+	assert.match(btn, /canExtend:\s*false/);
 });
 
 test("en-tete k : proprietaire et dossier relus en base, transmis au bouton", () => {

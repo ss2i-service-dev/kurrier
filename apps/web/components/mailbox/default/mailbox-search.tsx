@@ -19,6 +19,7 @@ import { useRouter } from 'next/navigation'
 import { selectedPageText } from "@/lib/page-selection";
 import { Modal } from "@mantine/core";
 import KCleanupRule from "@/components/k/cleanup-rule-form";
+import { cleanupButtonState } from "@/lib/cleanup-search-button";
 
 const DEBOUNCE_MS = 250;
 
@@ -60,7 +61,7 @@ export default function MailboxSearch({
 
 	// ss2i : la regle de nettoyage part de la recherche telle qu'a l'ecran, prise au clic (la recherche se
 	// ferme, la Modal Mantine ne tient pas dans le dialogue de la palette). Jamais d'etoile : un fil etoile
-	// n'est jamais nettoye, le filtre « Favoris uniquement » desactive donc le bouton.
+	// n'est jamais nettoye, le filtre « Starred only » desactive donc le bouton.
 	const [cleanupOpen, setCleanupOpen] = React.useState(false);
 	const [cleanupSnap, setCleanupSnap] = React.useState({ query: "", allFolders: false, hasAttachment: false, onlyUnread: false });
 
@@ -180,13 +181,17 @@ export default function MailboxSearch({
 
 	const router = useRouter()
 
-	const cleanupBlocked = !cleanup
-		? null
-		: isStarred
-			? "Un fil étoilé n'est jamais nettoyé : désactivez « Favoris uniquement »."
-			: !allFolders && !cleanup.mailboxCleanable
-				? "Ce dossier ne se nettoie pas : étendez la recherche à tous les dossiers."
-				: null;
+	// Meme logique et memes textes que le bouton de la nouvelle interface (lib/cleanup-search-button.ts) ; le
+	// libelle cite est celui du filtre affiche ci-dessous, et le bouton « Étendre » est a cote du bouton.
+	const cleanupState = cleanupButtonState({
+		isOwner: !!cleanup,
+		query,
+		starred: isStarred,
+		mailboxCleanable: !!cleanup?.mailboxCleanable,
+		allFolders,
+		starredLabel: k("Starred only", "Favoris uniquement"),
+		canExtend: true,
+	});
 
 	return (
 		<>
@@ -305,12 +310,12 @@ export default function MailboxSearch({
 							(allFolders ? k(" · all folders", " · tous les dossiers") : "")}
 				</div>
 
-				{cleanup && query.trim() && (
+				{cleanup && cleanupState.show && (
 					<div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 pb-2 text-xs text-muted-foreground">
 						<button
 							type="button"
 							data-ss2i="search-cleanup"
-							disabled={!!cleanupBlocked}
+							disabled={Boolean(cleanupState.disabledReason)}
 							onMouseDown={(e) => e.preventDefault()}
 							onClick={() => {
 								setCleanupSnap({ query: query.trim(), allFolders, hasAttachment, onlyUnread });
@@ -321,7 +326,21 @@ export default function MailboxSearch({
 						>
 							Nettoyage auto...
 						</button>
-						{cleanupBlocked && <span data-ss2i="search-cleanup-reason">{cleanupBlocked}</span>}
+						{!allFolders && !cleanup.mailboxCleanable && (
+							<button
+								type="button"
+								data-ss2i="search-cleanup-extend"
+								onMouseDown={(e) => e.preventDefault()}
+								onClick={() => {
+									setAllFolders(true);
+									inputRef.current?.focus();
+								}}
+								className="rounded-md border px-3 py-1 text-sm font-medium text-foreground hover:bg-muted"
+							>
+								Étendre à tous les dossiers
+							</button>
+						)}
+						{cleanupState.disabledReason && <span data-ss2i="search-cleanup-reason">{cleanupState.disabledReason}</span>}
 					</div>
 				)}
 

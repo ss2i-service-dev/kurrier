@@ -1,7 +1,7 @@
 "use client";
-// SS2i : coque de la messagerie. Barre laterale unique (compte, nouveau message,
-// dossiers, libelles, autres espaces), puis la zone de travail a droite.
-// Sur mobile, la barre devient un tiroir ouvert depuis l'en-tete de la liste.
+// SS2i : coque de la messagerie. Colonne des espaces tout a gauche (icones,
+// nom au survol), barre laterale (compte, nouveau message, dossiers, libelles),
+// puis la zone de travail. Sur mobile, colonne et barre forment un tiroir.
 import React, { createContext, useContext, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
@@ -72,25 +72,31 @@ export default function KMailShell({
 	return (
 		<ShellContext.Provider value={{ openNav: () => setNavOpen(true) }}>
 			<div className="k-root flex h-svh w-full overflow-hidden bg-k-canvas text-k-ink">
+				<div className="hidden md:flex">
+					<AppRail workspacePublicId={workspacePublicId} />
+				</div>
 				<aside className="hidden w-[248px] shrink-0 flex-col md:flex">{sidebar}</aside>
 				<Drawer
 					opened={navOpen}
 					onClose={() => setNavOpen(false)}
-					size={290}
+					size={342}
 					withCloseButton={false}
 					padding={0}
 					styles={{ body: { height: "100%", background: "var(--k-canvas)" } }}
 				>
 					{/* tiroir mobile : sans bouton « nouveau message » (deja en bas de la liste) */}
-					<div className="flex h-full flex-col">
-						<SidebarContent
-							workspacePublicId={workspacePublicId}
-							identities={identities}
-							workspaces={workspaces}
-							userEmail={userEmail}
-							compose={null}
-							nav={nav}
-						/>
+					<div className="flex h-full">
+						<AppRail workspacePublicId={workspacePublicId} />
+						<div className="flex min-w-0 flex-1 flex-col">
+							<SidebarContent
+								workspacePublicId={workspacePublicId}
+								identities={identities}
+								workspaces={workspaces}
+								userEmail={userEmail}
+								compose={null}
+								nav={nav}
+							/>
+						</div>
 					</div>
 				</Drawer>
 				<main className="flex min-w-0 flex-1 md:py-2 md:pr-2">{children}</main>
@@ -116,19 +122,10 @@ function SidebarContent({
 }) {
 	const params = useParams() as { identityPublicId?: string };
 	const router = useRouter();
-	const pathname = usePathname() ?? "";
 	const { mode, setMode } = useAppearance();
 	const current = identities.find((i) => i.publicId === params.identityPublicId) ?? identities[0];
 	const currentWs = workspaces.find((w) => w.publicId === workspacePublicId);
 	const base = `/w/${workspacePublicId}/dashboard`;
-
-	const apps = [
-		{ href: `${base}/mail`, label: "Messagerie", icon: Mail, match: "/mail" },
-		{ href: `${base}/agenda`, label: "Agenda", icon: CalendarDays, match: "/agenda" },
-		{ href: `${base}/contacts`, label: "Contacts", icon: Contact, match: "/contacts" },
-		{ href: `${base}/drive`, label: "Drive", icon: HardDrive, match: "/drive" },
-		{ href: `${base}/platform/overview`, label: "Plateforme", icon: LayoutGrid, match: "/platform" },
-	];
 
 	return (
 		<div className="flex h-full min-h-0 flex-col px-3 pb-3 pt-3">
@@ -227,32 +224,46 @@ function SidebarContent({
 			<div className="mb-4">{compose}</div>
 
 			<div className="k-scroll -mx-1 min-h-0 flex-1 overflow-y-auto px-1">{nav}</div>
+		</div>
+	);
+}
 
-			{/* Autres espaces : icones seules (5 espaces dans 248 px), nom en infobulle et
-			    sous l'icone de l'espace courant. */}
-			<div className="mt-3 flex items-center gap-1 border-t border-k-line pt-3">
-				{apps.map(({ href, label, icon: Icon, match }) => {
-					const active = pathname.includes(match);
-					return (
-						<Tooltip key={href} label={label} openDelay={250} withArrow>
-							<Link
-								href={href}
-								aria-label={label}
-								aria-current={active ? "page" : undefined}
-								className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-k-sm py-1.5 text-[10.5px] leading-tight transition-colors ${
-									active ? "bg-k-surface text-k-ink shadow-k-pane" : "text-k-ink-3 hover:bg-k-hover hover:text-k-ink"
-								}`}
-							>
-								<Icon size={17} />
-								{active && <span className="max-w-full truncate px-0.5">{label}</span>}
-							</Link>
-						</Tooltip>
-					);
-				})}
-				{/* ss2i (OI 10363) : Nouveautes, avec la pastille des notes non vues */}
+/** Colonne des espaces (messagerie, agenda...), tout a gauche a la maniere
+ *  d'Outlook : icones empilees, nom en infobulle au survol. */
+function AppRail({ workspacePublicId }: { workspacePublicId?: string }) {
+	const pathname = usePathname() ?? "";
+	const base = `/w/${workspacePublicId}/dashboard`;
+	const apps = [
+		{ href: `${base}/mail`, label: "Messagerie", icon: Mail, match: "/mail" },
+		{ href: `${base}/agenda`, label: "Agenda", icon: CalendarDays, match: "/agenda" },
+		{ href: `${base}/contacts`, label: "Contacts", icon: Contact, match: "/contacts" },
+		{ href: `${base}/drive`, label: "Drive", icon: HardDrive, match: "/drive" },
+		{ href: `${base}/platform/overview`, label: "Plateforme", icon: LayoutGrid, match: "/platform" },
+	];
+	return (
+		<nav aria-label="Espaces" className="flex w-[52px] shrink-0 flex-col items-center gap-1 border-r border-k-line py-3">
+			{apps.map(({ href, label, icon: Icon, match }) => {
+				const active = pathname.includes(match);
+				return (
+					<Tooltip key={href} label={label} position="right" openDelay={250} withArrow>
+						<Link
+							href={href}
+							aria-label={label}
+							aria-current={active ? "page" : undefined}
+							className={`k-focus flex h-9 w-9 items-center justify-center rounded-k-sm transition-colors ${
+								active ? "bg-k-surface text-k-ink shadow-k-pane" : "text-k-ink-3 hover:bg-k-hover hover:text-k-ink"
+							}`}
+						>
+							<Icon size={18} />
+						</Link>
+					</Tooltip>
+				);
+			})}
+			{/* ss2i (OI 10363) : Nouveautes, avec la pastille des notes non vues, en bas de la colonne */}
+			<div className="mt-auto">
 				<WhatsNewButton variant="k" />
 			</div>
-		</div>
+		</nav>
 	);
 }
 

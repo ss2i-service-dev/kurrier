@@ -109,7 +109,7 @@ export function useWhatsNew() {
 
 /**
  * Bouton « Nouveautes » avec la pastille des notes non vues. `classic` : barre laterale de
- * l'interface Gmail (meme gabarit que ses boutons) ; `k` : barre laterale d'Outlook.
+ * l'interface Gmail (meme gabarit que ses boutons) ; `k` : colonne des espaces d'Outlook.
  */
 export function WhatsNewButton({ variant }: { variant: "classic" | "k" }) {
 	const { unseen, total, open } = useWhatsNew();
@@ -128,7 +128,7 @@ export function WhatsNewButton({ variant }: { variant: "classic" | "k" }) {
 	const label = unseen > 0 ? `Nouveautés (${unseen} non vue${unseen > 1 ? "s" : ""})` : "Nouveautés";
 	if (variant === "k") {
 		return (
-			<Tooltip label={label} openDelay={250} withArrow>
+			<Tooltip label={label} position="right" openDelay={250} withArrow>
 				<button
 					type="button"
 					aria-label={label}

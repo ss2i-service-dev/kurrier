@@ -41,7 +41,7 @@ async function folderOf(f: Fixture, kind: "archive" | "custom", name: string) {
 async function msgIn(
 	f: Fixture,
 	mailboxId: string,
-	o: { date: Date; createdAt?: Date; thread?: string; seen?: boolean; attach?: boolean },
+	o: { date: Date; createdAt?: Date; thread?: string; seen?: boolean; attach?: boolean; messageId?: string },
 ): Promise<string> {
 	const threadId =
 		o.thread ?? (await db.insert(threads).values({ ownerId: f.user.id, workspaceId: f.workspace.id, lastMessageDate: o.date }).returning())[0].id;
@@ -52,7 +52,7 @@ async function msgIn(
 			workspaceId: f.workspace.id,
 			mailboxId,
 			threadId,
-			messageId: `<cleanup-${Math.random().toString(36).slice(2)}@x>`,
+			messageId: o.messageId ?? `<cleanup-${Math.random().toString(36).slice(2)}@x>`,
 			subject: "fil",
 			text: "corps",
 			date: o.date,
@@ -207,6 +207,36 @@ async function main() {
 		has(await elig(scope({ identityId: g.identity.id, mailboxIds: [g.inbox.id] }), [foreign]), foreign, g.inbox.id),
 		"le meme fil dans le scope de son identite : eligible",
 	);
+
+	// Gmail : l'archive est « Tous les messages » (\All), qui liste aussi les Envoyes ; un MOVE vers la
+	// Corbeille y retire tous les libelles, Envoyes compris. Une ligne dont un message a son jumeau (meme
+	// message_id) dans un dossier Envoyes de l'identite ne part jamais, que le jumeau soit dans le fil ou non.
+	console.log("# Gmail : message de l'archive avec son jumeau en Envoyes");
+	const mid = (tag: string) => `<cleanup-${tag}-${Math.random().toString(36).slice(2)}@x>`;
+	const twinOwnThread = mid("twin");
+	const allMailSent = await msgIn(f, archive.id, { date: OLD, messageId: twinOwnThread });
+	await msgIn(f, f.sent.id, { date: OLDER, messageId: twinOwnThread });
+	assert(!(await elig(scope(), [allMailSent])).length, "archive, jumeau en Envoyes dans un autre fil : non");
+	const twinSameThread = mid("twin-thread");
+	const allMailReply = await msgIn(f, archive.id, { date: OLDER });
+	await msgIn(f, archive.id, { date: OLD, thread: allMailReply, messageId: twinSameThread });
+	await msgIn(f, f.sent.id, { date: OLD, thread: allMailReply, messageId: twinSameThread });
+	assert(!(await elig(scope(), [allMailReply])).length, "archive, jumeau en Envoyes dans le meme fil : non");
+	const inboxTwin = mid("inbox-twin");
+	const selfSent = await msgIn(f, f.inbox.id, { date: OLD, messageId: inboxTwin });
+	await msgIn(f, f.sent.id, { date: OLD, messageId: inboxTwin });
+	assert(!(await elig(scope(), [selfSent])).length, "Inbox, jumeau en Envoyes (envoi a soi-meme) : non");
+	const noTwin = await msgIn(f, archive.id, { date: OLD });
+	rows = await elig(scope(), [noTwin]);
+	assert(rows.length === 1 && has(rows, noTwin, archive.id), "archive sans jumeau en Envoyes : eligible");
+	const otherIdentityTwin = mid("other-twin");
+	const foreignTwin = await msgIn(f, archive.id, { date: OLD, messageId: otherIdentityTwin });
+	await msgIn(g, g.sent.id, { date: OLD, messageId: otherIdentityTwin });
+	assert(has(await elig(scope(), [foreignTwin]), foreignTwin, archive.id), "jumeau dans les Envoyes d'une autre identite : eligible");
+	const draftTwin = mid("draft-twin");
+	const notSentTwin = await msgIn(f, archive.id, { date: OLD, messageId: draftTwin });
+	await msgIn(f, custom.id, { date: OLD, messageId: draftTwin });
+	assert(has(await elig(scope(), [notSentTwin]), notSentTwin, archive.id), "jumeau dans un dossier perso (pas Envoyes) : eligible");
 
 	console.log("# entrees vides ou invalides, ordre");
 	let calls = 0;

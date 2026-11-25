@@ -16,6 +16,11 @@ import {
 // l'identite n'est etoilee, recente ou reportee. Un report compte comme une activite : la ligne reste
 // recente jusqu'a la duree apres snoozed_until, ou apres unsnoozed_at quand le report est leve (le fil
 // revient alors en tete de liste).
+// Une ligne dont un message a son jumeau (meme message_id) dans un dossier Envoyes de l'identite ne part
+// jamais : sur Gmail, l'archive est « Tous les messages » (\All, discover-mailboxes.ts), qui liste aussi
+// les Envoyes (imap-delta-fetch.ts y cree la ligne d'un envoi pas encore connu), et un MOVE vers la
+// Corbeille retire tous les libelles, Envoyes compris ; meme chose pour un envoi a soi-meme en Inbox. Les
+// dossiers Envoyes sont lus une fois (array), le jumeau par uniq_mailbox_message_id (mailbox_id, message_id).
 // L'age d'un message est messages.date seul : depuis d7d0ac62, a la reception (IMAP, Stalwart), elle vaut
 // la date interne IMAP, heure d'arrivee sur le serveur, que l'expediteur ne peut pas antidater
 // (parseAndStoreEmail). Avant, elle venait de l'en-tete Date (ou de l'heure d'ingestion) : un en-tete
@@ -24,7 +29,9 @@ import {
 // courrier importe ; il ne sert qu'a un message sans date. Une date dans le futur retient le fil.
 // forUpdate (transaction du move) : apres l'attente d'un verrou, Postgres ne relit que la ligne
 // verrouillee, les sous-requetes gardent la photo de l'instruction ; l'age, l'etoile et le report sont
-// donc aussi ecrits directement sur mt (meme raisonnement que dueExpiredThreads).
+// donc aussi ecrits directement sur mt (meme raisonnement que dueExpiredThreads). Le jumeau en Envoyes
+// garde la photo de l'instruction : un jumeau commite pendant l'attente du verrou n'est pas vu, comme un
+// jumeau pas encore ingere (Envoyes synchronise apres l'archive).
 
 type Dbh = { execute: (q: any) => Promise<any> };
 
@@ -72,6 +79,14 @@ export async function eligibleCleanupThreads(
 		  and not exists (
 			select 1 from messages m
 			where m.thread_id = mt.thread_id and coalesce(m.date, m.created_at) > ${cutoff}::timestamptz
+		  )
+		  and not exists (
+			select 1 from messages m
+			join messages s on s.message_id = m.message_id
+			where m.thread_id = mt.thread_id and m.mailbox_id = mt.mailbox_id
+			  and s.mailbox_id = any(array(
+				select sb.id from mailboxes sb where sb.identity_id = ${scope.identityId}::uuid and sb.kind = 'sent'
+			  ))
 		  )
 		order by mt.last_activity_at, mt.thread_id
 		${o.forUpdate ? sql`for update of mt` : sql``}

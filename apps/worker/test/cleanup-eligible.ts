@@ -157,9 +157,21 @@ async function main() {
 	const snoozed = await msgIn(f, f.inbox.id, { date: OLD });
 	await setRow(snoozed, f.inbox.id, { snoozedUntil: new Date(now.getTime() + DAY) });
 	assert(!(await elig(scope(), [snoozed])).length, "report dans le futur : non");
+	// Sortie de report (common-worker : snoozedUntil null, unsnoozedAt maintenant) : le fil revient en
+	// tete de liste, il compte comme actif depuis ce moment.
+	const unsnoozed = await msgIn(f, f.inbox.id, { date: OLD });
+	await setRow(unsnoozed, f.inbox.id, { snoozedUntil: null, unsnoozedAt: ago(1) });
+	assert(!(await elig(scope(), [unsnoozed])).length, "sorti de report hier, activite ancienne : non");
+	const snoozeDue = await msgIn(f, f.inbox.id, { date: OLD });
+	await setRow(snoozeDue, f.inbox.id, { snoozedUntil: ago(1) });
+	assert(!(await elig(scope(), [snoozeDue])).length, "report echu hier, pas encore leve : non");
 	const snoozeOver = await msgIn(f, f.inbox.id, { date: OLD });
-	await setRow(snoozeOver, f.inbox.id, { snoozedUntil: new Date(now.getTime() - DAY) });
-	assert(has(await elig(scope(), [snoozeOver]), snoozeOver, f.inbox.id), "report echu : eligible");
+	await setRow(snoozeOver, f.inbox.id, { snoozedUntil: ago(40), unsnoozedAt: ago(40) });
+	assert(has(await elig(scope(), [snoozeOver]), snoozeOver, f.inbox.id), "report echu et leve depuis plus que la duree : eligible");
+	const unsnoozedSister = await msgIn(f, f.inbox.id, { date: OLD });
+	await msgIn(f, custom.id, { date: OLD, thread: unsnoozedSister });
+	await setRow(unsnoozedSister, custom.id, { unsnoozedAt: ago(1) });
+	assert(!(await elig(scope(), [unsnoozedSister])).length, "ligne soeur sortie de report hier : aucune ligne du fil");
 	const snoozedSister = await msgIn(f, f.inbox.id, { date: OLD });
 	await msgIn(f, custom.id, { date: OLD, thread: snoozedSister });
 	await setRow(snoozedSister, custom.id, { snoozedUntil: new Date(now.getTime() + DAY) });
@@ -201,6 +213,10 @@ async function main() {
 	const counting = { execute: async () => (calls++, []) };
 	assert((await eligibleCleanupThreads(counting, scope(), { now, threadIds: [] })).length === 0 && calls === 0, "threadIds vide : [] sans requete");
 	assert((await eligibleCleanupThreads(counting, scope({ mailboxIds: [] }), { now, threadIds: [oldInbox] })).length === 0 && calls === 0, "aucun dossier : [] sans requete");
+	assert((await eligibleCleanupThreads(counting, scope(), { now, threadIds: [oldInbox], mailboxId: "" })).length === 0 && calls === 0, "mailboxId vide : [] sans requete (pas tous les dossiers)");
+	for (const days of [0, 3651, 1.5, Number.NaN]) {
+		assert((await eligibleCleanupThreads(counting, scope({ retentionDays: days }), { now, threadIds: [oldInbox] })).length === 0 && calls === 0, `duree ${days} hors 1..3650 : [] sans requete`);
+	}
 	rows = await elig(scope(), ["pas-un-uuid", oldInbox]);
 	assert(rows.length === 1 && has(rows, oldInbox, f.inbox.id), "identifiant invalide ignore, sans erreur SQL");
 	const older = await msgIn(f, f.inbox.id, { date: OLDER });
@@ -215,7 +231,9 @@ async function main() {
 	const gate = new Promise<void>((r) => (release = r));
 	let holding!: () => void;
 	const held = new Promise<void>((r) => (holding = r));
+	let writerPid = 0;
 	const writer = db.transaction(async (tx) => {
+		writerPid = Number(((await tx.execute(sql`select pg_backend_pid() as pid`)) as any[])[0]?.pid);
 		await tx.execute(sql`update mailbox_threads set starred = true where thread_id = ${starLate}::uuid and mailbox_id = ${f.inbox.id}::uuid`);
 		await tx.execute(sql`update mailbox_threads set last_activity_at = now() where thread_id = ${bumpLate}::uuid and mailbox_id = ${f.inbox.id}::uuid`);
 		holding();
@@ -224,11 +242,12 @@ async function main() {
 	try {
 		await held;
 		const reader = db.transaction((tx) => eligibleCleanupThreads(tx, scope(), { now, threadIds: [starLate, bumpLate, control], mailboxId: f.inbox.id, forUpdate: true }));
+		// Une session bloquee par celle du writer, et seulement elle (un autre test peut emettre la meme requete).
 		let waiting = false;
 		for (let i = 0; i < 100 && !waiting; i++) {
 			const [w] = (await db.execute(sql`
 				select count(*)::int as n from pg_stat_activity
-				where wait_event_type = 'Lock' and query ilike '%for update of mt%'
+				where pg_blocking_pids(pid) @> array[${writerPid}::int]
 			`)) as any[];
 			waiting = Number(w?.n) > 0;
 			if (!waiting) await new Promise((r) => setTimeout(r, 50));

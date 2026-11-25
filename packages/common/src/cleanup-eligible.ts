@@ -1,14 +1,25 @@
 import { sql } from "drizzle-orm";
-import { CLEANUP_ALLOWED_KINDS, cleanupCutoff, type CleanupRow, type CleanupScope } from "./cleanup-rules";
+import {
+	CLEANUP_ALLOWED_KINDS,
+	CLEANUP_MAX_DAYS,
+	CLEANUP_MIN_DAYS,
+	cleanupCutoff,
+	type CleanupRow,
+	type CleanupScope,
+} from "./cleanup-rules";
 
 // ss2i : nettoyage automatique, eligibilite d'un fil (docs/plans/nettoyage-auto-recherche.md, MT3).
 // Typesense ne fournit que des candidats (threadIds) : ce SQL decide, au compte a la creation, au tick
 // et dans la transaction du move. Une ligne mailbox_threads du scope part si son fil est vieux, c'est-a-
 // dire si aucun de ses messages, dans aucun dossier (Envoyes et Brouillons compris : une reponse ou un
 // brouillon recent retient le fil), n'a une date apres la date limite, et si aucune ligne du fil dans
-// l'identite n'est etoilee, recente ou reportee.
-// L'age d'un message est messages.date seul : a la reception (IMAP, Stalwart), elle vaut la date interne
-// IMAP, heure d'arrivee sur le serveur, que l'expediteur ne peut pas antidater (parseAndStoreEmail).
+// l'identite n'est etoilee, recente ou reportee. Un report compte comme une activite : la ligne reste
+// recente jusqu'a la duree apres snoozed_until, ou apres unsnoozed_at quand le report est leve (le fil
+// revient alors en tete de liste).
+// L'age d'un message est messages.date seul : depuis d7d0ac62, a la reception (IMAP, Stalwart), elle vaut
+// la date interne IMAP, heure d'arrivee sur le serveur, que l'expediteur ne peut pas antidater
+// (parseAndStoreEmail). Avant, elle venait de l'en-tete Date (ou de l'heure d'ingestion) : un en-tete
+// antidate sur ces lignes ne peut que faire partir plus tot des messages qui ont deja plus de 53 jours.
 // created_at n'est pas lu : avant d7d0ac62 il valait l'heure d'ingestion et retiendrait a tort tout le
 // courrier importe ; il ne sert qu'a un message sans date. Une date dans le futur retient le fil.
 // forUpdate (transaction du move) : apres l'attente d'un verrou, Postgres ne relit que la ligne
@@ -30,9 +41,13 @@ export async function eligibleCleanupThreads(
 ): Promise<CleanupRow[]> {
 	// Identifiants venus de l'index : un seul invalide ferait echouer le cast de tout le lot.
 	const threadIds = [...new Set(o.threadIds.filter(isUuid))];
+	// mailboxId vide ou invalide ne doit pas elargir la portee a tous les dossiers.
+	if (o.mailboxId !== undefined && !isUuid(o.mailboxId)) return [];
+	const days = scope.retentionDays;
+	if (!Number.isInteger(days) || days < CLEANUP_MIN_DAYS || days > CLEANUP_MAX_DAYS) return [];
 	const boxIds = scope.mailboxIds.filter((id) => isUuid(id) && (!o.mailboxId || id === o.mailboxId));
 	if (!threadIds.length || !boxIds.length || !isUuid(scope.identityId)) return [];
-	const cutoff = cleanupCutoff(o.now, scope.retentionDays).toISOString();
+	const cutoff = cleanupCutoff(o.now, days).toISOString();
 	const now = o.now.toISOString();
 	const rows = await dbh.execute(sql`
 		select mt.thread_id, mt.mailbox_id, mt.expires_at
@@ -44,7 +59,7 @@ export async function eligibleCleanupThreads(
 			select 1 from mailboxes mb
 			where mb.id = mt.mailbox_id and mb.identity_id = mt.identity_id and mb.kind::text = any(${kinds}::text[])
 		  )
-		  and mt.last_activity_at <= ${cutoff}::timestamptz
+		  and greatest(mt.last_activity_at, mt.unsnoozed_at, mt.snoozed_until) <= ${cutoff}::timestamptz
 		  and not mt.starred
 		  and (mt.snoozed_until is null or mt.snoozed_until <= ${now}::timestamptz)
 		  ${scope.onlyUnread ? sql`and mt.unread_count > 0` : sql``}
@@ -52,7 +67,7 @@ export async function eligibleCleanupThreads(
 		  and not exists (
 			select 1 from mailbox_threads s
 			where s.thread_id = mt.thread_id and s.identity_id = mt.identity_id
-			  and (s.starred or s.last_activity_at > ${cutoff}::timestamptz or s.snoozed_until > ${now}::timestamptz)
+			  and (s.starred or greatest(s.last_activity_at, s.unsnoozed_at, s.snoozed_until) > ${cutoff}::timestamptz)
 		  )
 		  and not exists (
 			select 1 from messages m

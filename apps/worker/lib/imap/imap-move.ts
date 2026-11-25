@@ -1,5 +1,5 @@
 import { db, mailboxes, mailboxSync, messages, mailboxThreads } from "@db";
-import { upsertMailboxThreadItem } from "@common";
+import { eligibleCleanupThreads, loadCleanupRule, upsertMailboxThreadItem, type CleanupRuleCtx } from "@common";
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { ImapFlow } from "imapflow";
 import { initSmtpClient } from "./imap-client";
@@ -38,8 +38,8 @@ type MoveJob = {
 	// valide, cf. parseExpiry) ; `expiry` marque le job de Corbeille poste par mail:expire-tick.
 	expiresAt?: string | null;
 	expiry?: boolean;
-	// ss2i (nettoyage-auto-recherche) : id de la regle de nettoyage qui a poste le job (op trash).
-	// Declare seulement : relu sous lock par moveMail dans une micro-tache suivante.
+	// ss2i (nettoyage-auto-recherche) : id de la regle de nettoyage qui a poste le job (op trash,
+	// mail:cleanup-tick) ; regle et fils reverifies au debut puis sous verrou par moveMail.
 	cleanupRuleId?: string;
 };
 
@@ -76,6 +76,19 @@ export const moveMail = async (
 	if (data.expiry) {
 		if (srcMailbox.kind !== "archive" || op !== "trash") return;
 		ids = (await dueExpiredThreads(db, { now, mailboxId: fromMailboxId, threadIds: ids })).map((t) => t.threadId);
+		if (!ids.length) return;
+	}
+
+	// ss2i (nettoyage-auto-recherche) : job de mail:cleanup-tick. Regle relue (null si supprimee ou si
+	// son identite n'est plus a son auteur) ; en pause, autre op que trash ou dossier source hors de sa
+	// portee : rien. Seuls les fils encore eligibles partent (etoile, message recent, report depuis le
+	// tick : rien), en entier (messageIds ignore). Reverifie sous verrou dans la transaction. `!= null` :
+	// un id vide ou invalide ne devient jamais une Corbeille ordinaire.
+	let rule: CleanupRuleCtx | null = null;
+	if (data.cleanupRuleId != null) {
+		rule = op === "trash" ? await loadCleanupRule(db, String(data.cleanupRuleId)) : null;
+		if (!rule || rule.paused || !rule.mailboxIds.includes(fromMailboxId)) return;
+		ids = (await eligibleCleanupThreads(db, rule, { now, threadIds: ids, mailboxId: fromMailboxId })).map((t) => t.threadId);
 		if (!ids.length) return;
 	}
 
@@ -147,7 +160,7 @@ export const moveMail = async (
 	if (threadMsgs.length === 0) return;
 
 	// Grain du message : seuls les messages demandes sont deplaces.
-	const plan = data.messageIds?.length && !data.expiry
+	const plan = data.messageIds?.length && !data.expiry && !rule
 		? planMessageMove(threadMsgs, data.messageIds)
 		: null;
 	if (plan && !plan.messageIds.length) return;
@@ -278,6 +291,22 @@ export const moveMail = async (
 			for (const t of still) srcExpiry.set(t.threadId, t.expiresAt);
 		}
 
+		// ss2i (nettoyage-auto-recherche) : job de nettoyage, meme principe. La regle est verrouillee
+		// (for share : une pause ou une suppression attend la fin du move) puis relue sous ce verrou
+		// (duree, filtres, proprietaire de l'identite) ; regle partie ou en pause, fil etoile, reactive
+		// ou reporte depuis le debut du job : tout est annule et le job recommence. L'echeance d'une
+		// ligne Archive est gardee pour la remettre si le serveur refuse le MOVE (resettleThread).
+		if (rule) {
+			const [locked] = (await tx.execute(
+				sql`select 1 from cleanup_rules where id = ${rule.ruleId}::uuid and not paused for share`,
+			)) as any[];
+			const live = locked ? await loadCleanupRule(tx, rule.ruleId) : null;
+			if (!live || live.paused || !live.mailboxIds.includes(fromMailboxId)) throw new ExpiryChanged();
+			const still = await eligibleCleanupThreads(tx, live, { now, threadIds: ids, mailboxId: fromMailboxId, forUpdate: true });
+			if (still.length !== ids.length) throw new ExpiryChanged();
+			if (srcMailbox.kind === "archive") for (const t of still) if (t.expiresAt) srcExpiry.set(t.threadId, t.expiresAt);
+		}
+
 		if (plan) {
 			// Les recapitulatifs de fil sont par dossier : ceux de la destination sont recalcules,
 			// ceux de la source aussi (fil partiel) ou supprimes (fil parti en entier).
@@ -343,37 +372,66 @@ export const moveMail = async (
 		},
 	);
 	if (expiryChanged) {
-		if (expiryRetry >= 3) throw new Error(`[mail:move] echeances changees pendant le job (${fromMailboxId}) : rien deplace, rejoue plus tard`);
+		if (expiryRetry >= 3) throw new Error(`[mail:move] ${rule ? "regle ou fils de nettoyage changes" : "echeances changees"} pendant le job (${fromMailboxId}) : rien deplace, rejoue plus tard`);
 		return moveMail(data, imapInstances, expiryRetry + 1);
 	}
 
-	if (!moveImap) return;
-	if (!byPath.size || !client) {
-		console.debug(
-			"[mail:move] No IMAP-backed UIDs to move; DB-only move was applied.",
-		);
-		return;
-	}
+	// ss2i (nettoyage-auto-recherche) : compteur de la regle, a chaque sortie, MOVE IMAP fait, refuse
+	// ou en erreur (finally) : ce qui est parti compte, ce qui est remis dans la source comptera au
+	// job rejoue.
+	try {
+		if (!moveImap) return;
+		if (!byPath.size || !client) {
+			console.debug(
+				"[mail:move] No IMAP-backed UIDs to move; DB-only move was applied.",
+			);
+			return;
+		}
 
-	const ctx: MoveCtx = {
-		src: srcMailbox,
-		dest: destMailboxRow,
-		destPath,
-		movingIds: new Set(toMove.map((m) => m.id)),
-		dupIds,
-		threadOf: new Map(toMove.map((m) => [m.id, m.threadId])),
-		srcExpiry,
-		expiry: !!data.expiry,
-	};
-	let reverted = 0;
-	for (const g of byPath.values()) reverted += await moveGroupOnImap(client, g, ctx);
-	if (reverted) {
-		// Le job echoue (donc rejoue par BullMQ) : les messages remis dans la source repartiront.
-		throw new Error(
-			`[mail:move] ${reverted} message(s) non deplaces sur IMAP (${srcMailbox.name} -> ${destPath}), remis dans ${srcMailbox.name} en base`,
-		);
+		const ctx: MoveCtx = {
+			src: srcMailbox,
+			dest: destMailboxRow,
+			destPath,
+			movingIds: new Set(toMove.map((m) => m.id)),
+			dupIds,
+			threadOf: new Map(toMove.map((m) => [m.id, m.threadId])),
+			srcExpiry,
+			expiry: !!data.expiry,
+			cleanup: !!rule,
+		};
+		let reverted = 0;
+		for (const g of byPath.values()) reverted += await moveGroupOnImap(client, g, ctx);
+		if (reverted) {
+			// Le job echoue (donc rejoue par BullMQ) : les messages remis dans la source repartiront.
+			throw new Error(
+				`[mail:move] ${reverted} message(s) non deplaces sur IMAP (${srcMailbox.name} -> ${destPath}), remis dans ${srcMailbox.name} en base`,
+			);
+		}
+	} finally {
+		if (rule) await countCleanup(rule.ruleId, ids, fromMailboxId);
 	}
 };
+
+// ss2i (nettoyage-auto-recherche) : fils du job qui n'ont plus aucun message dans le dossier source
+// (partis en entier : ni etoiles \Flagged ni refuses par le serveur, tous deux remis dans la source)
+// ajoutes au compteur de la regle ; rien d'ecrit s'il n'y en a aucun. Une erreur ici ne fait pas
+// echouer le job : le deplacement est fait, seul le compteur serait faux.
+async function countCleanup(ruleId: string, threadIds: string[], fromMailboxId: string) {
+	try {
+		await db.execute(sql`
+			update cleanup_rules c
+			set trashed_count = c.trashed_count + g.n, last_trashed_at = now()
+			from (
+				select count(*)::int as n
+				from unnest(${`{${threadIds.join(",")}}`}::uuid[]) as t(id)
+				where not exists (select 1 from messages m where m.thread_id = t.id and m.mailbox_id = ${fromMailboxId}::uuid)
+			) g
+			where c.id = ${ruleId}::uuid and g.n > 0
+		`);
+	} catch (err) {
+		console.error(`[mail:move] compteur de la regle de nettoyage ${ruleId} non mis a jour`, err);
+	}
+}
 
 // Tranches : Postgres refuse plus de 65 534 parametres par requete, et un seul job peut porter
 // plusieurs dizaines de milliers de messages (archivage du 04/11 : 54 119).
@@ -396,6 +454,8 @@ type MoveCtx = {
 	// ss2i (archive-duree-de-vie) : job du tick, echeance de chaque fil dans l'Archive source.
 	srcExpiry: Map<string, Date>;
 	expiry: boolean;
+	// ss2i (nettoyage-auto-recherche) : job d'une regle de nettoyage (garde \Flagged comme expiry).
+	cleanup: boolean;
 };
 
 /**
@@ -454,8 +514,9 @@ async function moveGroupOnImap(
 		// les nouveaux UID : la base l'ignore. Drapeaux lus ici, sous le verrou, avant le MOVE : un
 		// fil dont un message porte \Flagged ne part pas, aucun de ses messages (trouves ou non) ; il
 		// est remis dans la source en base, etoile, sans echeance, et ne compte pas comme un echec
-		// du job. Lot vide ensuite : aucun MOVE. Lecture en erreur : catch, tout est remis.
-		if (ctx.expiry && wanted.size) {
+		// du job. Lot vide ensuite : aucun MOVE. Lecture en erreur : catch, tout est remis. Meme garde
+		// pour le job d'une regle de nettoyage (ctx.cleanup), en Inbox comme ailleurs.
+		if ((ctx.expiry || ctx.cleanup) && wanted.size) {
 			const starIds = [...(await flaggedAt(client, [...wanted.keys()]))].map((u) => wanted.get(u)!);
 			const keep = new Set(starIds.map((id) => ctx.threadOf.get(id)));
 			if (keep.size) {
@@ -469,7 +530,7 @@ async function moveGroupOnImap(
 				for (const [uid, id] of wanted) if (keep.has(ctx.threadOf.get(id))) wanted.delete(uid);
 				rows = rows.filter((r) => !keep.has(ctx.threadOf.get(r.id)));
 				console.warn(
-					`[mail:move] ${keep.size} fil(s) etoile(s) sur le serveur (\\Flagged) dans ${srcPath} (${tag}) : echeance annulee, laisses dans la source, etoiles en base`,
+					`[mail:move] ${keep.size} fil(s) etoile(s) sur le serveur (\\Flagged) dans ${srcPath} (${tag}) : ${ctx.expiry ? "echeance annulee" : "nettoyage annule"}, laisses dans la source, etoiles en base`,
 					[...keep].slice(0, 20),
 				);
 			}

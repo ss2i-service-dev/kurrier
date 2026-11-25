@@ -221,6 +221,10 @@ export const moveMail = async (
 	// source en base (moveGroupOnImap), au lieu de laisser la base mentir.
 	const dupIds = new Set<string>();
 	const srcExpiry = new Map<string, Date>();
+	// ss2i (nettoyage-auto-recherche) : dossiers de la regle relue sous verrou, et fils du job qui n'y
+	// ont plus aucun message a la fin de la transaction (candidats au compteur, cf. countCleanup).
+	let ruleBoxes: string[] = [];
+	let cleanupLeft: string[] = [];
 	const expiryChanged = await db.transaction(async (tx) => {
 		// ss2i (OI 10286) : copie deja presente a l'arrivee (meme Message-ID : envoi a soi-meme,
 		// copie des Envoyes deja rangee la) : l'index unique (mailbox_id, message_id) faisait
@@ -305,6 +309,7 @@ export const moveMail = async (
 			const still = await eligibleCleanupThreads(tx, live, { now, threadIds: ids, mailboxId: fromMailboxId, forUpdate: true });
 			if (still.length !== ids.length) throw new ExpiryChanged();
 			if (srcMailbox.kind === "archive") for (const t of still) if (t.expiresAt) srcExpiry.set(t.threadId, t.expiresAt);
+			ruleBoxes = live.mailboxIds;
 		}
 
 		if (plan) {
@@ -364,10 +369,24 @@ export const moveMail = async (
 			await refreshThreadIn(tx, t, destMailboxRow.id);
 		}
 		await setArrivalExpiry(tx, [...clash], destMailboxRow.id, exp);
+		// ss2i (nettoyage-auto-recherche) : lu apres l'ecriture de la ligne Corbeille du fil, point ou
+		// deux jobs de la meme regle sur deux dossiers du meme fil se succedent (collision ci-dessous) :
+		// seul le dernier voit le fil sorti de tous les dossiers de la regle.
+		if (rule) cleanupLeft = await outOfRule(tx, ids, ruleBoxes);
 	}).then(
 		() => false,
 		(err) => {
 			if (err instanceof ExpiryChanged) return true;
+			// ss2i (nettoyage-auto-recherche) : deux jobs de la meme regle (un par dossier, smtp-worker
+			// en concurrence 4) pour un fil present dans deux dossiers creent chacun sa ligne Corbeille
+			// (plain) : le second percute la cle (thread_id, mailbox_id) une fois le premier commite
+			// (23505), ou les deux s'interbloquent sur plusieurs fils (40P01). Rejoue comme une echeance
+			// changee : le debut du job voit alors la ligne Corbeille et fusionne (clash).
+			const code = (err as any)?.code ?? (err as any)?.cause?.code;
+			if (rule && (code === "23505" || code === "40P01")) {
+				console.info(`[mail:move] nettoyage ${rule.ruleId} : collision avec un autre job (${code}), rejoue`);
+				return true;
+			}
 			throw err;
 		},
 	);
@@ -408,25 +427,37 @@ export const moveMail = async (
 			);
 		}
 	} finally {
-		if (rule) await countCleanup(rule.ruleId, ids, fromMailboxId);
+		if (rule) await countCleanup(rule.ruleId, cleanupLeft, ruleBoxes);
 	}
 };
 
-// ss2i (nettoyage-auto-recherche) : fils du job qui n'ont plus aucun message dans le dossier source
-// (partis en entier : ni etoiles \Flagged ni refuses par le serveur, tous deux remis dans la source)
-// ajoutes au compteur de la regle ; rien d'ecrit s'il n'y en a aucun. Une erreur ici ne fait pas
+// ss2i (nettoyage-auto-recherche) : fils de threadIds qui n'ont plus aucun message dans les dossiers
+// boxIds (ceux de la regle).
+async function outOfRule(dbh: { execute: (q: any) => Promise<any> }, threadIds: string[], boxIds: string[]) {
+	if (!threadIds.length) return [];
+	const rows = await dbh.execute(sql`
+		select t.id
+		from unnest(${`{${threadIds.join(",")}}`}::uuid[]) as t(id)
+		where not exists (
+			select 1 from messages m where m.thread_id = t.id and m.mailbox_id = any(${`{${boxIds.join(",")}}`}::uuid[])
+		)
+	`);
+	return (rows as any[]).map((r) => String(r.id));
+}
+
+// ss2i (nettoyage-auto-recherche) : compteur de la regle, un par fil sorti de tous ses dossiers (un
+// fil present en Inbox et en Archive compte une fois, au dernier des deux jobs). Les candidats de la
+// transaction sont relus apres le MOVE IMAP : un fil etoile \Flagged ou refuse par le serveur est
+// remis dans la source et ne compte pas. Rien d'ecrit s'il n'y en a aucun. Une erreur ici ne fait pas
 // echouer le job : le deplacement est fait, seul le compteur serait faux.
-async function countCleanup(ruleId: string, threadIds: string[], fromMailboxId: string) {
+async function countCleanup(ruleId: string, candidates: string[], boxIds: string[]) {
 	try {
+		const n = (await outOfRule(db, candidates, boxIds)).length;
+		if (!n) return;
 		await db.execute(sql`
-			update cleanup_rules c
-			set trashed_count = c.trashed_count + g.n, last_trashed_at = now()
-			from (
-				select count(*)::int as n
-				from unnest(${`{${threadIds.join(",")}}`}::uuid[]) as t(id)
-				where not exists (select 1 from messages m where m.thread_id = t.id and m.mailbox_id = ${fromMailboxId}::uuid)
-			) g
-			where c.id = ${ruleId}::uuid and g.n > 0
+			update cleanup_rules
+			set trashed_count = trashed_count + ${n}, last_trashed_at = now()
+			where id = ${ruleId}::uuid
 		`);
 	} catch (err) {
 		console.error(`[mail:move] compteur de la regle de nettoyage ${ruleId} non mis a jour`, err);

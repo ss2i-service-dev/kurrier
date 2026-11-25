@@ -297,6 +297,45 @@ async function main() {
 	assert((await gone(k1.threadId, f.inbox.id, trash.id)) && k1t?.messageCount === 2, `collision en Corbeille : ligne fusionnee (${k1t?.messageCount})`);
 	assert((await counterOf(rule.id)).n === beforeClash + 1, "collision : le fil compte");
 
+	console.log("# fil present en Inbox et en Archive : compte une fois ; deux jobs concurrents, collision rejouee");
+	{
+		const d = await msgIn(f, f.inbox.id);
+		await msgIn(f, archive.id, { thread: d.threadId });
+		const n0 = (await counterOf(rule.id)).n;
+		await moveMail(job(rule.id, [d.threadId], f.inbox.id), new Map());
+		assert((await counterOf(rule.id)).n === n0, "job Inbox : le fil a encore un message en Archive, pas compte");
+		await moveMail(job(rule.id, [d.threadId], archive.id), new Map());
+		assert((await gone(d.threadId, archive.id, trash.id)) && !(await threadRow(d.threadId, f.inbox.id)), "job Archive : fil entier en Corbeille");
+		assert((await counterOf(rule.id)).n === n0 + 1, `fil de deux dossiers : compte une fois (${(await counterOf(rule.id)).n - n0})`);
+	}
+	{
+		// Le job Inbox d'un autre worker (simule) a deja ecrit la ligne Corbeille du fil, pas encore
+		// commitee : le job Archive passe par plain et attend la cle (thread_id, mailbox_id), puis 23505.
+		const u = await msgIn(f, f.inbox.id);
+		await msgIn(f, archive.id, { thread: u.threadId });
+		const n0 = (await counterOf(rule.id)).n;
+		const h = await holding(async (tx) => {
+			await tx.update(messages).set({ mailboxId: trash.id }).where(and(eq(messages.threadId, u.threadId), eq(messages.mailboxId, f.inbox.id)));
+			await tx
+				.update(mailboxThreads)
+				.set({ mailboxId: trash.id, mailboxSlug: "trash" })
+				.where(and(eq(mailboxThreads.threadId, u.threadId), eq(mailboxThreads.mailboxId, f.inbox.id)));
+		});
+		const mv = moveMail(job(rule.id, [u.threadId], archive.id), new Map());
+		assert(await waitsOnLock(), "collision : le job attend la ligne Corbeille de l'autre transaction");
+		h.release();
+		await h.done;
+		let failed: unknown = null;
+		await mv.catch((err) => (failed = err));
+		assert(!failed, `collision (23505) : le job aboutit (${failed})`);
+		const rows = await db.select().from(mailboxThreads).where(eq(mailboxThreads.threadId, u.threadId));
+		assert(
+			(await boxesOf(u.threadId)).every((b) => b === trash.id) && rows.length === 1 && rows[0].mailboxId === trash.id && rows[0].messageCount === 2,
+			`collision : fil en Corbeille une seule fois, 2 messages (${rows.map((r) => `${r.mailboxSlug}:${r.messageCount}`)})`,
+		);
+		assert((await counterOf(rule.id)).n === n0 + 1, "collision : le fil compte une fois");
+	}
+
 	console.log("# sous verrou : etoile posee pendant l'attente, regle suspendue ou duree allongee pendant l'attente");
 	{
 		const r1 = await msgIn(f, f.inbox.id);
@@ -326,20 +365,31 @@ async function main() {
 		assert((await counterOf(rule.id)).n === n0, `${label} pendant le job : compteur inchange`);
 		await db.update(cleanupRules).set(undo).where(eq(cleanupRules.id, rule.id));
 	}
+	{
+		const doomed = await ruleOf(f, "regle supprimee pendant le job");
+		const t = await msgIn(f, f.inbox.id);
+		const h = await holding((tx) => tx.delete(cleanupRules).where(eq(cleanupRules.id, doomed.id)));
+		const mv = moveMail(job(doomed.id, [t.threadId], f.inbox.id), new Map());
+		assert(await waitsOnLock(), "regle supprimee : le job attend le verrou de la regle");
+		h.release();
+		await h.done;
+		await mv;
+		assert(await stays(t.threadId, f.inbox.id, trash.id), "regle supprimee pendant le job : le fil reste");
+	}
 
 	console.log("# IMAP : garde \\Flagged, MOVE refuse");
 	{
 		const g = await createUserFixture("cleanup-move-imap");
 		const gArchive = await folderOf(g, "archive", "Archive");
 		const gTrash = await folderOf(g, "trash", "Deleted Items");
-		for (const [mailboxId, last] of [[gArchive.id, 50], [gTrash.id, 0]] as const) {
+		for (const [mailboxId, last] of [[gArchive.id, 50], [gTrash.id, 0], [g.inbox.id, 60]] as const) {
 			await db.insert(mailboxSync).values({ identityId: g.identity.id, mailboxId, uidValidity: BigInt(1), lastSeenUid: last });
 		}
 		const gRule = await ruleOf(g, "fil");
 		const tA = await msgIn(g, gArchive.id, { uid: 40, path: "Archive" });
 		const tA2 = await msgIn(g, gArchive.id, { uid: 41, path: "Archive", thread: tA.threadId });
 		const tB = await msgIn(g, gArchive.id, { uid: 42, path: "Archive" });
-		const imap = new FakeImap({ Archive: [[40, tA.mid], [41, tA2.mid], [42, tB.mid]], "Deleted Items": [] });
+		const imap = new FakeImap({ Archive: [[40, tA.mid], [41, tA2.mid], [42, tB.mid]], "Deleted Items": [], INBOX: [] });
 		imap.flagged.add(tA2.mid);
 		const on = new Map([[g.identity.id, imap as unknown as ImapFlow]]);
 		await moveMail(job(gRule.id, [tA.threadId, tB.threadId], gArchive.id, true), on);
@@ -367,10 +417,31 @@ async function main() {
 			`MOVE refuse : ligne revenue en Archive avec son echeance (${back?.expiresAt})`,
 		);
 		assert((await counterOf(gRule.id)).n === 1, "MOVE refuse : compteur inchange");
+
+		imap.refuseMove = false;
+		const tI = await msgIn(g, g.inbox.id, { uid: 50, path: "INBOX" });
+		const tI2 = await msgIn(g, g.inbox.id, { uid: 51, path: "INBOX", thread: tI.threadId });
+		const tJ = await msgIn(g, g.inbox.id, { uid: 52, path: "INBOX" });
+		const inbox = imap.folders.get("INBOX")!;
+		for (const [uid, mid] of [[50, tI.mid], [51, tI2.mid], [52, tJ.mid]] as const) inbox.msgs.set(uid, mid);
+		inbox.uidNext = 53;
+		imap.flagged.add(tI2.mid);
+		await moveMail(job(gRule.id, [tI.threadId, tJ.threadId], g.inbox.id, true), on);
+		const keptI = await threadRow(tI.threadId, g.inbox.id);
+		assert(
+			(await stays(tI.threadId, g.inbox.id, gTrash.id)) && keptI?.starred === true && inbox.msgs.get(50) === tI.mid && inbox.msgs.get(51) === tI2.mid,
+			`Inbox : fil etoile sur le serveur (\\Flagged) reste dans l'Inbox, etoile en base, rien deplace sur IMAP (${keptI?.starred})`,
+		);
+		assert(
+			(await gone(tJ.threadId, g.inbox.id, gTrash.id)) && [...imap.folders.get("Deleted Items")!.msgs.values()].includes(tJ.mid),
+			"Inbox : l'autre fil part en Corbeille, sur IMAP aussi",
+		);
+		assert((await counterOf(gRule.id)).n === 2, `Inbox : compteur augmente du seul fil parti (${(await counterOf(gRule.id)).n})`);
 	}
 
 	const src = readFileSync(new URL("../lib/imap/imap-move.ts", import.meta.url), "utf8");
 	assert(/if \(\(ctx\.expiry \|\| ctx\.cleanup\) && wanted\.size\)/.test(src), "source : garde \\Flagged cablee pour le nettoyage (ctx.expiry || ctx.cleanup)");
+	assert(/rule && \(code === "23505" \|\| code === "40P01"\)/.test(src), "source : collision et interblocage entre jobs de nettoyage rejoues");
 }
 
 main()

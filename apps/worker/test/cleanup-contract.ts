@@ -48,7 +48,7 @@ async function main() {
 		"constantes de débit et de bornes",
 	);
 
-	// Le job de move déclare cleanupRuleId (type seulement : le champ n'est pas encore lu).
+	// Le job de move déclare cleanupRuleId, lu et revérifié sous verrou par moveMail (MT5, test cleanup-move.ts).
 	const moveSrc = readFileSync(join(root, "apps/worker/lib/imap/imap-move.ts"), "utf8");
 	assert(/type MoveJob = \{[\s\S]*?cleanupRuleId\?: string;[\s\S]*?\n\};/.test(moveSrc), "MoveJob déclare cleanupRuleId?: string");
 

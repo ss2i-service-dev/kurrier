@@ -31,8 +31,23 @@ const jobOpts = (ruleId: string, mailboxId: string, now: Date) => ({
 // plafond au milieu de ses dossiers passe quand meme en fin de rotation : sinon une regle a plus de
 // 10 dossiers dus reprendrait la tete a chaque tick et affamerait les autres ; ses dossiers restants
 // sont repris a son prochain tour (les jobs deja postes ont le meme jobId dans l'heure). Une erreur
-// sur une regle (Typesense indisponible) est journalisee, la regle garde son rang, les autres passent.
+// sur une regle (reponse d'erreur de Typesense, avec httpStatus) est journalisee, la regle garde son rang,
+// les autres passent. Une erreur de transport (sans httpStatus : Typesense injoignable, delai depasse)
+// arrete le tick : le common-worker tourne en concurrence 1 et chaque regle attendrait son propre delai
+// (~10 s) ; les regles gardent leur rang et repassent au tick suivant.
+// Le plafond compte les jobs postes, pas ceux qui ajoutent quelque chose : un enqueue sans effet (jobId
+// deja present, BullMQ ne cree rien) consomme quand meme un des CLEANUP_MAX_JOBS_PER_TICK.
 export async function runCleanupTick({ now, enqueue, search }: { now: Date; enqueue: Enqueue; search: Search }) {
+	// Erreur venue de Typesense sans httpStatus : transport. Les erreurs SQL ne passent pas par ici.
+	let transportDown = false;
+	const guarded: Search = async (params) => {
+		try {
+			return await search(params);
+		} catch (err: any) {
+			if (err?.httpStatus == null) transportDown = true;
+			throw err;
+		}
+	};
 	// Seul l'identifiant vient de cette lecture, et seulement si l'auteur possede toujours l'identite ;
 	// loadCleanupRule refait la jointure de propriete et relit portee, requete et pause.
 	const due = (await db.execute(sql`
@@ -49,7 +64,7 @@ export async function runCleanupTick({ now, enqueue, search }: { now: Date; enqu
 		try {
 			const rule = await loadCleanupRule(db, ruleId);
 			if (!rule || rule.paused) continue;
-			const { rows, truncated } = await matchCleanup({ search, dbh: db }, rule, {
+			const { rows, truncated } = await matchCleanup({ search: guarded, dbh: db }, rule, {
 				now,
 				limit: CLEANUP_BATCH,
 				maxPages: CLEANUP_MAX_PAGES,
@@ -57,9 +72,11 @@ export async function runCleanupTick({ now, enqueue, search }: { now: Date; enqu
 			const byBox = new Map<string, string[]>();
 			for (const r of rows) byBox.set(r.mailboxId, [...(byBox.get(r.mailboxId) ?? []), r.threadId]);
 			// Moins de CLEANUP_BATCH fils mais tronque : les CLEANUP_MAX_PAGES pages de candidats sont
-			// epuisees (candidats ineligibles en tete de l'index). Identifiant seul, jamais le texte cherche.
+			// epuisees (candidats ineligibles en tete de l'index). matchCleanup repart de la page 1 a chaque
+			// tick : les fils au-dela ne sont pas examines tant que la tete de l'index ne change pas.
+			// Identifiant seul, jamais le texte cherche.
 			if (truncated && new Set(rows.map((r) => r.threadId)).size < CLEANUP_BATCH) {
-				console.warn(`[mail:cleanup-tick] regle ${ruleId} : ${CLEANUP_MAX_PAGES} pages de candidats lues sans atteindre ${CLEANUP_BATCH} fils, la suite au prochain passage`);
+				console.warn(`[mail:cleanup-tick] regle ${ruleId} : ${CLEANUP_MAX_PAGES} pages de candidats lues sans atteindre ${CLEANUP_BATCH} fils, fils suivants non examines, la regle n'avance pas tant que la tete de l'index ne change pas`);
 			}
 			for (const [mailboxId, ids] of byBox) {
 				if (jobs >= CLEANUP_MAX_JOBS_PER_TICK) break;
@@ -75,6 +92,7 @@ export async function runCleanupTick({ now, enqueue, search }: { now: Date; enqu
 			rules++;
 		} catch (err: any) {
 			console.error(`[mail:cleanup-tick] regle ${ruleId} : ${err?.message ?? err}`);
+			if (transportDown) break;
 		}
 	}
 	return { rules, jobs };

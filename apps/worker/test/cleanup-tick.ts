@@ -3,7 +3,8 @@
 // recemment passee a la plus recente. Pour chacune : loadCleanupRule (portee relue en base), puis
 // matchCleanup (Typesense strict, simule ici ; le SQL decide), puis un job mail:move op trash avec
 // cleanupRuleId par dossier : 200 fils au plus, jobId stable dans l'heure, priorite 100. 10 jobs au
-// plus par tick ; une erreur sur une regle n'arrete pas les autres. Le tick n'ecrit que
+// plus par tick ; une erreur sur une regle n'arrete pas les autres, sauf une erreur de transport
+// Typesense (sans httpStatus) qui arrete le tick. Le tick n'ecrit que
 // cleanup_rules.last_run_at, jamais mailbox_threads (moveMail decide et deplace).
 // La base de test est partagee : d'autres tests y laissent des regles actives. Le faux Typesense ne
 // sert que les identites de ce test, les assertions portent sur nos regles et sur les jobs.
@@ -100,15 +101,18 @@ async function fingerprint(identityIds: string[]) {
 }
 
 // Faux Typesense : par identite (identityPublicId du filtre), les fils a servir dans l'ordre de
-// l'index, par pages de per_page groupes ; "throw" : indisponible ; "endless" : pages pleines de fils
-// inconnus de la base. Identite absente (regles laissees par d'autres tests) : aucun resultat.
-const served = new Map<string, string[] | "throw" | "endless">();
+// l'index, par pages de per_page groupes ; "throw" : reponse d'erreur de Typesense (httpStatus 503, propre
+// a la requete) ; "down" : erreur de transport sans httpStatus (connexion refusee, delai depasse) ;
+// "endless" : pages pleines de fils inconnus de la base. Identite absente (regles laissees par d'autres
+// tests) : aucun resultat.
+const served = new Map<string, string[] | "throw" | "down" | "endless">();
 let calls: string[] = [];
 async function search(params: any) {
 	const pid = /identityPublicId:="([^"]+)"/.exec(String(params?.filter_by ?? ""))?.[1] ?? "";
 	calls.push(pid);
 	const s = served.get(pid);
-	if (s === "throw") throw new Error("typesense indisponible (test)");
+	if (s === "throw") throw Object.assign(new Error("typesense en erreur (test)"), { httpStatus: 503 });
+	if (s === "down") throw new Error("connect ECONNREFUSED (test)");
 	const group = (id: string) => ({ group_key: [id], hits: [{ document: { threadId: id } }] });
 	if (s === "endless") return { found: 1_000_000, grouped_hits: Array.from({ length: params.per_page }, () => group(randomUUID())) };
 	const ids = s ?? [];
@@ -171,8 +175,11 @@ async function main() {
 	const I = await createUserFixture("cleanup-tick-i");
 	const i1 = await msgIn(I, I.inbox.id);
 	const J = await createUserFixture("cleanup-tick-j");
+	const M = await createUserFixture("cleanup-tick-m");
+	const N = await createUserFixture("cleanup-tick-n");
+	const n1 = await msgIn(N, N.inbox.id);
 
-	const all = [A, B, C, D, E, F, G, K, L, H, I, J].map((f) => f.identity.id);
+	const all = [A, B, C, D, E, F, G, K, L, H, I, J, M, N].map((f) => f.identity.id);
 	const before = await fingerprint(all);
 
 	// --- 1. Jobs postes : un par dossier, donnees et options du contrat, portee relue en base.
@@ -344,8 +351,44 @@ async function main() {
 	assert((await ruleRow(RH))?.lastRunAt === null, "regle en erreur : last_run_at intact (repassera en tete)");
 	assert(calls.filter((p) => p === J.identity.publicId).length === CLEANUP_MAX_PAGES, `pages pleines de candidats ineligibles : ${CLEANUP_MAX_PAGES} pages au plus`);
 	assert(logs.some((l) => l.includes(RJ)), "plafond de pages atteint : avertissement avec l'identifiant de la regle");
+	assert(
+		logs.some((l) => l.includes(RJ) && l.includes("non examines") && l.includes("n'avance pas") && !l.includes("la suite au prochain passage")),
+		"avertissement : fils suivants non examines, la regle n'avance pas (matchCleanup repart de la page 1)",
+	);
 	assert(!logs.some((l) => l.includes("confidentiel")), "le texte cherche n'est jamais journalise");
 	assert((await ruleRow(RJ))?.lastRunAt?.getTime() === now.getTime(), "regle sans fil eligible : passee quand meme");
+	served.delete(H.identity.publicId);
+	served.delete(J.identity.publicId);
+	served.delete(I.identity.publicId);
+
+	// --- 8. Erreur de transport (sans httpStatus : Typesense injoignable) : le tick s'arrete, les regles
+	//        suivantes n'attendent pas chacune leur delai. Une erreur de Typesense avec httpStatus (section 7)
+	//        ne concerne que sa regle. La regle en erreur garde son rang, la suivante passe au tick d'apres.
+	const RM = await ruleOf(M, "facture");
+	const RN = await ruleOf(N, "facture");
+	await setLastRun(RN, LONG_AGO); // apres RM (jamais passee)
+	served.set(M.identity.publicId, "down");
+	served.set(N.identity.publicId, [n1]);
+	logs.length = 0;
+	console.error = (...a: any[]) => {
+		logs.push(a.map(String).join(" "));
+		error(...a);
+	};
+	calls = [];
+	let dn: { posted: Posted[] } | null = null;
+	try {
+		dn = await tick(now);
+	} finally {
+		console.error = error;
+	}
+	assert(!!dn && of(dn.posted, RN).length === 0, "Typesense injoignable : la regle suivante n'est pas traitee dans ce tick");
+	assert(calls.filter((p) => p === N.identity.publicId).length === 0, "Typesense injoignable : aucune requete pour les regles suivantes");
+	assert(logs.some((l) => l.includes(RM)), "erreur de transport journalisee avec l'identifiant de la regle");
+	assert((await ruleRow(RM))?.lastRunAt === null && (await ruleRow(RN))?.lastRunAt?.getTime() === LONG_AGO.getTime(), "last_run_at intact pour les deux regles");
+	served.delete(M.identity.publicId);
+	const up = await tick(now);
+	assert(of(up.posted, RN).length === 1 && same(of(up.posted, RN)[0].data.threadIds, [n1]), "Typesense revenu : la regle suivante poste son job");
+	served.delete(N.identity.publicId);
 
 	// --- Rien n'a ete ecrit sur mailbox_threads (aucun expires_at, aucune ligne deplacee).
 	assert((await fingerprint(all)) === before, "mailbox_threads strictement inchange apres tous les ticks");

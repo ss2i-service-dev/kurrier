@@ -17,6 +17,8 @@ import { useShowSnippet } from "@/components/mailbox/default/list-preview-contex
 import { initSearch } from "@/lib/actions/mailbox";
 import { useRouter } from 'next/navigation'
 import { selectedPageText } from "@/lib/page-selection";
+import { Modal } from "@mantine/core";
+import KCleanupRule from "@/components/k/cleanup-rule-form";
 
 const DEBOUNCE_MS = 250;
 
@@ -25,12 +27,16 @@ export default function MailboxSearch({
 										  mailboxSlug: requestedSlug,
 										  workspacePublicId,
 										  nouvelle = false,
+										  cleanup,
 									  }: {
 	publicId: string;
 	mailboxSlug?: string;
 	workspacePublicId: string;
 	// ss2i : bouton d'ouverture au style de la nouvelle interface (option par utilisateur).
 	nouvelle?: boolean;
+	// ss2i : « Nettoyage auto... » (docs/plans/nettoyage-auto-recherche.md, MT11). Donne par le serveur au seul
+	// proprietaire de l'identite (une regle est a son auteur) : sans lui, pas de bouton.
+	cleanup?: { mailboxName: string; mailboxCleanable: boolean };
 }) {
 
 	// ss2i : les pages sans dossier (parametres, programmes, snoozes) n'ont pas de mailboxSlug
@@ -51,6 +57,12 @@ export default function MailboxSearch({
 	React.useEffect(() => {
 		if (open) setAllFolders(false);
 	}, [open]);
+
+	// ss2i : la regle de nettoyage part de la recherche telle qu'a l'ecran, prise au clic (la recherche se
+	// ferme, la Modal Mantine ne tient pas dans le dialogue de la palette). Jamais d'etoile : un fil etoile
+	// n'est jamais nettoye, le filtre « Favoris uniquement » desactive donc le bouton.
+	const [cleanupOpen, setCleanupOpen] = React.useState(false);
+	const [cleanupSnap, setCleanupSnap] = React.useState({ query: "", allFolders: false, hasAttachment: false, onlyUnread: false });
 
 	const [loading, setLoading] = React.useState(false);
 	const [items, setItems] = React.useState<ThreadHit[]>([]);
@@ -168,6 +180,14 @@ export default function MailboxSearch({
 
 	const router = useRouter()
 
+	const cleanupBlocked = !cleanup
+		? null
+		: isStarred
+			? "Un fil étoilé n'est jamais nettoyé : désactivez « Favoris uniquement »."
+			: !allFolders && !cleanup.mailboxCleanable
+				? "Ce dossier ne se nettoie pas : étendez la recherche à tous les dossiers."
+				: null;
+
 	return (
 		<>
 			{nouvelle ? (
@@ -284,6 +304,26 @@ export default function MailboxSearch({
 						: k(`Threads: ${totalThreads} · Messages: ${totalMessages}`, `Fils : ${totalThreads} · Messages : ${totalMessages}`) +
 							(allFolders ? k(" · all folders", " · tous les dossiers") : "")}
 				</div>
+
+				{cleanup && query.trim() && (
+					<div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 pb-2 text-xs text-muted-foreground">
+						<button
+							type="button"
+							data-ss2i="search-cleanup"
+							disabled={!!cleanupBlocked}
+							onMouseDown={(e) => e.preventDefault()}
+							onClick={() => {
+								setCleanupSnap({ query: query.trim(), allFolders, hasAttachment, onlyUnread });
+								setOpen(false);
+								setCleanupOpen(true);
+							}}
+							className="rounded-md border px-3 py-1 text-sm font-medium text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+						>
+							Nettoyage auto...
+						</button>
+						{cleanupBlocked && <span data-ss2i="search-cleanup-reason">{cleanupBlocked}</span>}
+					</div>
+				)}
 
 				<div className="max-h-[60vh] overflow-auto px-2 pb-2">
 					{items.length === 0 && !loading ? (
@@ -407,6 +447,28 @@ export default function MailboxSearch({
 					</div>
 				</div>
 			</CommandDialog>
+
+			{cleanup && (
+				<Modal
+					centered
+					opened={cleanupOpen}
+					onClose={() => setCleanupOpen(false)}
+					title={<span className="text-[15px] font-semibold">Nettoyage automatique</span>}
+					size="md"
+					zIndex={1003}
+				>
+					<KCleanupRule
+						identityPublicId={publicId}
+						mailboxSlug={mailboxSlug}
+						mailboxName={cleanup.mailboxName}
+						allFolders={cleanupSnap.allFolders}
+						query={cleanupSnap.query}
+						hasAttachment={cleanupSnap.hasAttachment}
+						onlyUnread={cleanupSnap.onlyUnread}
+						onDone={() => setCleanupOpen(false)}
+					/>
+				</Modal>
+			)}
 		</>
 	);
 }

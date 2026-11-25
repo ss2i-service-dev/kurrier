@@ -224,6 +224,37 @@ async function main() {
 		.from(cleanupRules)
 		.where(and(eq(cleanupRules.identityId, a.identity.id), eq(cleanupRules.ownerId, b.user.id)));
 	assert(intruders.length === 0, "aucune règle du collègue sur l'identité de a");
+
+	// Reprise sous RLS : l'on conflict do update exige que la ligne existante passe les USING de SELECT et
+	// d'UPDATE, sinon Postgres leve une erreur au lieu de reprendre la regle de l'ancien proprietaire.
+	const movedRls = await newIdentity("email", "cleanup-moved-rls");
+	// Identite email non partagee : sous RLS, seuls ses membres la voient.
+	await db.insert(workspaceIdentityMembers).values([
+		{ workspaceId: a.workspace.id, identityId: movedRls.identity.id, userId: a.user.id },
+		{ workspaceId: a.workspace.id, identityId: movedRls.identity.id, userId: b.user.id },
+	]);
+	const asResult = (p: Promise<any>) => p.catch((err) => ({ ok: false, reason: "error", message: String(err?.cause?.message ?? err) }));
+	const orphan = await asUser(a.user.id, (tx) => insertCleanupRule(tx, input({ identityId: movedRls.identity.id, query: "reprise rls" })));
+	const orphan2 = await asUser(a.user.id, (tx) => insertCleanupRule(tx, input({ identityId: movedRls.identity.id, query: "orphelin rls" })));
+	await db.update(identities).set({ ownerId: b.user.id }).where(eq(identities.id, movedRls.identity.id));
+	const rlsTakeover = await asResult(
+		asUser(b.user.id, (tx) => insertCleanupRule(tx, input({ ownerId: b.user.id, identityId: movedRls.identity.id, query: "Reprise RLS", retentionDays: 91 }))),
+	);
+	assert(
+		orphan.ok && rlsTakeover.ok && rlsTakeover.rule.id === orphan.rule.id && rlsTakeover.rule.ownerId === b.user.id && rlsTakeover.rule.retentionDays === 91,
+		`sous RLS : le nouveau propriétaire de l'identité reprend la règle de l'ancien${rlsTakeover.ok ? "" : ` (${rlsTakeover.message})`}`,
+	);
+	const seenByOld = await asUser(a.user.id, (tx) => tx.select().from(cleanupRules).where(eq(cleanupRules.identityId, movedRls.identity.id)));
+	assert(orphan2.ok && seenByOld.length === 1 && seenByOld[0].id === orphan2.rule.id, "sous RLS : l'ancien propriétaire ne voit plus que sa règle orpheline");
+	const pauseOrphan = await asResult(
+		asUser(b.user.id, (tx) => tx.update(cleanupRules).set({ paused: true }).where(eq(cleanupRules.id, orphan2.ok ? orphan2.rule.id : "")).returning()),
+	);
+	const deleteOrphan = await asUser(b.user.id, (tx) => tx.delete(cleanupRules).where(eq(cleanupRules.id, orphan2.ok ? orphan2.rule.id : "")).returning());
+	const [orphanRow] = await db.select().from(cleanupRules).where(eq(cleanupRules.id, orphan2.ok ? orphan2.rule.id : ""));
+	assert(
+		(!Array.isArray(pauseOrphan) || pauseOrphan.length === 0) && deleteOrphan.length === 0 && !!orphanRow && orphanRow.ownerId === a.user.id && !orphanRow.paused,
+		"sous RLS : le nouveau propriétaire ne met en pause ni ne supprime une règle orpheline sans la reprendre",
+	);
 }
 
 main()

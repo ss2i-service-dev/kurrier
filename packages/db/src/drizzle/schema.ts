@@ -2102,10 +2102,12 @@ export const cleanupRules = pgTable(
 		index("ix_cleanup_rules_identity").on(t.identityId),
 		check("cleanup_rules_retention_days_check", sql`${t.retentionDays} BETWEEN 1 AND 3650`),
 		check("cleanup_rules_query_length_check", sql`char_length(btrim(${t.query}, E' \\t\\r\\n')) BETWEEN 3 AND 200`),
+		// SELECT et UPDATE (USING) voient aussi la regle d'un ancien proprietaire de l'identite, pour la reprise
+		// par l'on conflict do update d'insertCleanupRule ; le WITH CHECK reste owner_id = sub (ss2i_012).
 		pgPolicy("cleanup_rules_select_owner", {
 			for: "select",
 			to: "kurrier",
-			using: sql`${t.ownerId} = ${authUid}`,
+			using: sql`${t.ownerId} = ${authUid} OR exists (select 1 from identities i where i.id = ${t.identityId} and i.owner_id = ${authUid})`,
 		}),
 		pgPolicy("cleanup_rules_delete_owner", {
 			for: "delete",
@@ -2120,7 +2122,7 @@ export const cleanupRules = pgTable(
 		pgPolicy("cleanup_rules_update_owner", {
 			for: "update",
 			to: "kurrier",
-			using: sql`${t.ownerId} = ${authUid}`,
+			using: sql`${t.ownerId} = ${authUid} OR exists (select 1 from identities i where i.id = ${t.identityId} and i.owner_id = ${authUid})`,
 			withCheck: sql`${t.ownerId} = ${authUid} AND exists (select 1 from identities i where i.id = ${t.identityId} and i.owner_id = ${authUid}) AND (${t.mailboxId} IS NULL OR exists (select 1 from mailboxes m where m.id = ${t.mailboxId} and m.identity_id = ${t.identityId}))`,
 		}),
 	],

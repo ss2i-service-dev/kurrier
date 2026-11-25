@@ -18,8 +18,11 @@ tests() { # dossier, fichiers donnes -> liste a tester (les *-env.ts et mcp-fixt
 
 each() { # description, commande a lancer avant le fichier, fichiers...
   desc=$1; cmd=$2; shift 2
+  # Un fichier de sortie par appel (deux lancements simultanes dans le conteneur ne melangent pas leur sortie).
+  out=$(mktemp) || exit 2
+  trap 'rm -f "$out"' EXIT
   for t in "$@"; do
-    if $cmd "$t" >"$HOME/.test-out" 2>&1; then echo "ok   $t"; else echo "FAIL $t"; tail -15 "$HOME/.test-out"; fail=1; fi
+    if $cmd "$t" >"$out" 2>&1; then echo "ok   $t"; else echo "FAIL $t"; tail -15 "$out"; fail=1; fi
   done
   echo "$desc : $([ "$fail" = 0 ] && echo 'tout passe' || echo 'des tests echouent')"
 }

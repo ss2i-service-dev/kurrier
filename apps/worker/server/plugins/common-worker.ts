@@ -8,6 +8,8 @@ import { processWebhook } from "../../lib/webhooks/message.received";
 import { and, isNull, lte } from "drizzle-orm";
 import { processRules } from "../../lib/rules/rules-processor";
 import { runExpiryTick } from "../../lib/mail-expiry";
+import { runCleanupTick } from "../../lib/mail-cleanup";
+import typesense from "../../lib/get-typesense";
 
 export default defineNitroPlugin(async (nitroApp) => {
 	const connection = (await getRedis()).connection;
@@ -77,6 +79,17 @@ export default defineNitroPlugin(async (nitroApp) => {
 					});
 					return { success: true, ...res };
 				}
+				// ss2i (nettoyage automatique) : fils des regles de nettoyage non suspendues -> un job
+				// mail:move (Corbeille) par dossier, dans la file du smtp-worker.
+				case "mail:cleanup-tick": {
+					const { smtpQueue } = await getRedis();
+					const res = await runCleanupTick({
+						now: new Date(),
+						enqueue: (name, data, opts) => smtpQueue.add(name, data, opts),
+						search: (p) => typesense.collections("messages").documents().search(p),
+					});
+					return { success: true, ...res };
+				}
 				default:
 					return { success: true };
 			}
@@ -112,6 +125,18 @@ export default defineNitroPlugin(async (nitroApp) => {
 		{ override: true },
 	);
 
+	await scheduler.upsertJobScheduler(
+		"cleanup-tick-scheduler",
+		{ every: 15 * 60 * 1000 },
+		"mail:cleanup-tick",
+		{},
+		{
+			removeOnComplete: true,
+			removeOnFail: false,
+			attempts: 1,
+		},
+		{ override: true },
+	);
 
 	await scheduler.upsertJobScheduler(
 		"billing-sync-scheduler",

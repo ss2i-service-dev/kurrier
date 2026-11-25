@@ -44,7 +44,7 @@ const SCOPE: CleanupScope = {
 const NOW = new Date("2026-11-25T08:00:00Z");
 
 test("cleanupQueryError : refuse vide, court, joker, exclusions seules, tokens trop courts", () => {
-	for (const q of ["", "   ", "ab", " ab ", "*", " * ", "-banque", "- - -", "a b c", "-a -b -c"]) {
+	for (const q of ["", "   ", "ab", " ab ", "*", " * ", "-banque", "- - -", "a b c", "-a -b -c", '-"relevé de compte"', '-"relevé compte', '-"relevé compte"']) {
 		const e = cleanupQueryError(q);
 		assert.equal(typeof e, "string", `"${q}" doit etre refusee`);
 		assert.ok(e!.length > 0);
@@ -59,7 +59,7 @@ test("cleanupQueryError : refuse plus de 200 caracteres apres trim, accepte exac
 });
 
 test("cleanupQueryError : accepte une requete avec un token positif de 3 caracteres", () => {
-	for (const q of ["relevé de compte", "news@liste.org", "tdsynnex.com -promo", "abc", "-promo banque", "123"]) {
+	for (const q of ["relevé de compte", "news@liste.org", "tdsynnex.com -promo", "abc", "-promo banque", "123", '"relevé de compte"', 'banque -"offre spéciale"', 'banque -"offre']) {
 		assert.equal(cleanupQueryError(q), null, `"${q}" doit etre acceptee`);
 	}
 });
@@ -83,11 +83,17 @@ test("cleanupDaysFromFree : jour 1, semaine 7, mois 30, an 365", () => {
 	assert.equal(cleanupDaysFromFree(1, "year"), 365);
 });
 
+test("cleanupDaysFromFree : NaN rend null (l'appelant refuse), Infinity est borne au maximum", () => {
+	assert.equal(cleanupDaysFromFree(Number.NaN, "day"), null);
+	assert.equal(cleanupDaysFromFree(Number.NaN, "year"), null);
+	assert.equal(cleanupDaysFromFree(Number.POSITIVE_INFINITY, "day"), CLEANUP_MAX_DAYS);
+	assert.equal(cleanupDaysFromFree(Number.NEGATIVE_INFINITY, "day"), 1);
+});
+
 test("cleanupDaysFromFree : borne a 1..3650 jours", () => {
 	assert.equal(cleanupDaysFromFree(0, "day"), 1);
 	assert.equal(cleanupDaysFromFree(-5, "month"), 1);
 	assert.equal(cleanupDaysFromFree(0.4, "day"), 1);
-	assert.equal(cleanupDaysFromFree(Number.NaN, "day"), 1);
 	assert.equal(cleanupDaysFromFree(100, "year"), CLEANUP_MAX_DAYS);
 	assert.equal(cleanupDaysFromFree(3650, "day"), 3650);
 	assert.equal(cleanupDaysFromFree(3651, "day"), 3650);
@@ -104,7 +110,7 @@ test("cleanupSearchParams : les six parametres stricts et le reste a la valeur e
 	assert.equal(p!.drop_tokens_threshold, 0);
 	assert.equal(p!.typo_tokens_threshold, 0);
 	assert.equal(p!.split_join_tokens, "off");
-	assert.equal(p!.exhaustive_search, true);
+	assert.ok(!("exhaustive_search" in p!), "exhaustive_search annule drop_tokens_threshold 0 (Typesense 29) : requete en OU");
 	assert.equal(p!.sort_by, "createdAt:asc");
 	assert.equal(p!.group_by, "threadId");
 	assert.equal(p!.group_limit, 1);

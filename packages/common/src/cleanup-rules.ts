@@ -59,13 +59,15 @@ export type CleanupRow = {
 
 // Message a afficher si la recherche est trop large pour une regle permanente, sinon null. Un token
 // positif (sans « - » devant) doit porter 3 lettres ou chiffres de suite : « a b c », « -banque » ou
-// « * » attraperaient trop de fils (la contrainte de table et le matcher revalident).
+// « * » attraperaient trop de fils (la contrainte de table et le matcher revalident). Une exclusion de
+// phrase -"..." (guillemet fermant manquant compris) est retiree avant : Typesense la lit comme une
+// exclusion, pas comme un mot.
 export function cleanupQueryError(q: string): string | null {
 	const t = String(q ?? "").trim();
 	if (t.length < 3) return "Le texte cherché doit faire au moins 3 caractères.";
 	if (t.length > 200) return "Le texte cherché doit faire 200 caractères au plus.";
 	if (t === "*") return "Le texte cherché ne peut pas être un joker seul.";
-	const positive = t.split(/\s+/).filter((w) => !w.startsWith("-"));
+	const positive = t.replace(/(^|\s)-"[^"]*("|$)/g, " ").split(/\s+/).filter((w) => !w.startsWith("-"));
 	if (!positive.some((w) => /[\p{L}\p{N}]{3,}/u.test(w))) {
 		return "Le texte cherché doit contenir au moins un mot de 3 lettres ou chiffres, sans « - » devant.";
 	}
@@ -78,16 +80,18 @@ export function cleanupCutoff(now: Date, days: number): Date {
 	return new Date(now.getTime() - days * DAY_MS);
 }
 
-// Duree saisie librement (jour 1, semaine 7, mois 30, an 365), bornee a 1..3650 jours.
-export function cleanupDaysFromFree(n: number, unit: "day" | "week" | "month" | "year"): number {
+// Duree saisie librement (jour 1, semaine 7, mois 30, an 365), bornee a 1..3650 jours. null si la
+// saisie n'est pas un nombre : l'appelant refuse, jamais la duree la plus destructrice par defaut.
+export function cleanupDaysFromFree(n: number, unit: "day" | "week" | "month" | "year"): number | null {
 	const perUnit = { day: 1, week: 7, month: 30, year: 365 }[unit];
 	const days = Math.round(Number(n) * perUnit);
-	if (!Number.isFinite(days)) return CLEANUP_MIN_DAYS;
+	if (Number.isNaN(days)) return null;
 	return Math.min(CLEANUP_MAX_DAYS, Math.max(CLEANUP_MIN_DAYS, days));
 }
 
 // Parametres Typesense stricts : l'index ne fournit que des candidats (le SQL decide), mais il ne doit
-// pas en ajouter par tolerance aux fautes, prefixes ou mots retires. createdAt est en millisecondes
+// pas en ajouter par tolerance aux fautes, prefixes ou mots retires. Jamais exhaustive_search : sur
+// Typesense 29 il annule drop_tokens_threshold 0 et une requete a plusieurs mots devient un OU. createdAt est en millisecondes
 // (toSearchDoc). Filtre sur les UUID de dossiers relus en base, jamais sur des slugs. null si un
 // identifiant n'est pas un UUID ou si la liste de dossiers est vide.
 export function cleanupSearchParams(scope: CleanupScope, opts: { cutoff?: Date | null; page: number }) {
@@ -109,7 +113,6 @@ export function cleanupSearchParams(scope: CleanupScope, opts: { cutoff?: Date |
 		drop_tokens_threshold: 0,
 		typo_tokens_threshold: 0,
 		split_join_tokens: "off" as const,
-		exhaustive_search: true,
 		sort_by: "createdAt:asc",
 		group_by: "threadId",
 		group_limit: 1,

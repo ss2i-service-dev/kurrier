@@ -122,17 +122,27 @@ async function main() {
 	await setRow(sisterRow, archive.id, { lastActivityAt: RECENT });
 	assert(!(await elig(scope(), [sisterRow])).length, "ligne soeur Archive recente (last_activity_at seul) : aucune ligne du fil");
 
-	// Message date ancien mais cree recemment en base : la reception ne produit jamais cette ligne
-	// (date = created_at, date interne IMAP d'abord), seulement un brouillon ou une copie d'envoi.
-	// Ce cas prouve la clause max(date, created_at) sur les messages, pas une garde contre un en-tete
-	// Date antidate.
+	// Date ancienne, created_at recent : c'est le cas des lignes ingerees avant d7d0ac62 (created_at =
+	// heure d'ingestion, deux ans de courrier importes en octobre). L'age se lit sur messages.date seul.
 	const lateRow = await msgIn(f, f.inbox.id, { date: OLD });
 	await msgIn(f, f.drafts.id, { date: OLD, createdAt: RECENT, thread: lateRow });
 	assert(
 		(await rowOf(lateRow, f.drafts.id))?.lastActivityAt.getTime() === OLD.getTime() && (await rowOf(lateRow, f.inbox.id))?.lastActivityAt.getTime() === OLD.getTime(),
 		"precondition : toutes les lignes du fil ont un last_activity_at ancien",
 	);
-	assert(!(await elig(scope(), [lateRow])).length, "message du fil avec date ancienne et created_at recent : non (max des deux dates)");
+	rows = await elig(scope(), [lateRow]);
+	assert(rows.length === 1 && has(rows, lateRow, f.inbox.id), "message du fil avec date ancienne et created_at recent : eligible (created_at ignore)");
+
+	// Date dans le futur : retient le fil, jamais l'inverse. Sur la ligne elle-meme, puis sur un message
+	// seul (ligne Brouillons ramenee a une date ancienne : seule la clause sur les messages le voit).
+	const FUTURE = new Date(now.getTime() + 10 * DAY);
+	const futureSame = await msgIn(f, f.inbox.id, { date: OLD });
+	await msgIn(f, f.inbox.id, { date: FUTURE, thread: futureSame });
+	assert(!(await elig(scope(), [futureSame])).length, "message date dans le futur dans le meme dossier : non");
+	const futureMsg = await msgIn(f, f.inbox.id, { date: OLD });
+	await msgIn(f, f.drafts.id, { date: FUTURE, createdAt: OLD, thread: futureMsg });
+	await setRow(futureMsg, f.drafts.id, { lastActivityAt: OLD });
+	assert(!(await elig(scope(), [futureMsg])).length, "message date dans le futur, toutes les lignes anciennes : non");
 
 	console.log("# etoile et report");
 	const starredRow = await msgIn(f, f.inbox.id, { date: OLD });

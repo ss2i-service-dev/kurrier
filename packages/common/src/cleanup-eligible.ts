@@ -5,10 +5,12 @@ import { CLEANUP_ALLOWED_KINDS, cleanupCutoff, type CleanupRow, type CleanupScop
 // Typesense ne fournit que des candidats (threadIds) : ce SQL decide, au compte a la creation, au tick
 // et dans la transaction du move. Une ligne mailbox_threads du scope part si son fil est vieux, c'est-a-
 // dire si aucun de ses messages, dans aucun dossier (Envoyes et Brouillons compris : une reponse ou un
-// brouillon recent retient le fil), n'est apres la date limite, ni par sa date ni par son created_at, et
-// si aucune ligne du fil dans l'identite n'est etoilee, recente ou reportee.
-// A la reception, date et created_at valent la date interne IMAP (heure d'arrivee sur le serveur), a
-// defaut l'en-tete Date (parseAndStoreEmail) : un en-tete antidate ne compte que sans date interne.
+// brouillon recent retient le fil), n'a une date apres la date limite, et si aucune ligne du fil dans
+// l'identite n'est etoilee, recente ou reportee.
+// L'age d'un message est messages.date seul : a la reception (IMAP, Stalwart), elle vaut la date interne
+// IMAP, heure d'arrivee sur le serveur, que l'expediteur ne peut pas antidater (parseAndStoreEmail).
+// created_at n'est pas lu : avant d7d0ac62 il valait l'heure d'ingestion et retiendrait a tort tout le
+// courrier importe ; il ne sert qu'a un message sans date. Une date dans le futur retient le fil.
 // forUpdate (transaction du move) : apres l'attente d'un verrou, Postgres ne relit que la ligne
 // verrouillee, les sous-requetes gardent la photo de l'instruction ; l'age, l'etoile et le report sont
 // donc aussi ecrits directement sur mt (meme raisonnement que dueExpiredThreads).
@@ -54,7 +56,7 @@ export async function eligibleCleanupThreads(
 		  )
 		  and not exists (
 			select 1 from messages m
-			where m.thread_id = mt.thread_id and greatest(m.date, m.created_at) > ${cutoff}::timestamptz
+			where m.thread_id = mt.thread_id and coalesce(m.date, m.created_at) > ${cutoff}::timestamptz
 		  )
 		order by mt.last_activity_at, mt.thread_id
 		${o.forUpdate ? sql`for update of mt` : sql``}

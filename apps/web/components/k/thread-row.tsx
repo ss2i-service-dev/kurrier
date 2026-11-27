@@ -32,6 +32,7 @@ import { kHref } from "@/components/k/href";
 import { arrivedSinceRead, closeCompose, mailActions, setActiveThread, useMailStore } from "@/components/k/mail-store";
 import { refreshRowHover, useRowHot } from "@/components/k/row-hover";
 import { resolveRowOpen } from "@/components/k/open-prefs";
+import { lastSender, lastSenderLabel } from "@/lib/last-sender";
 import { getOpenPrefs, openTab, rememberSubject, tabFor } from "@/components/k/reader-tabs";
 
 type Props = {
@@ -105,7 +106,15 @@ export default function KThreadRow({
 				(_x, i) =>
 					i < (p.from?.length ?? 0) || (p.from ?? []).every((f) => ownAddresses.has(String(f.e).toLowerCase())),
 			);
-	const { label: whoRaw, primary } = correspondents(people, ownAddresses);
+	// ss2i : hors Envoyes et Brouillons, l'auteur du dernier message seul (Samuel le 27/11/2026).
+	const recipientsLabel = correspondents(people, ownAddresses);
+	const last = lastSender(p);
+	const whoRaw = outgoing ? recipientsLabel.label : lastSenderLabel(p, { own: ownAddresses, me: "moi" });
+	const primary = outgoing
+		? recipientsLabel.primary
+		: last && !ownAddresses.has(String(last.e).trim().toLowerCase())
+			? { n: last.n ?? undefined, e: String(last.e) }
+			: null;
 	const who = isDrafts ? `À : ${people.length ? whoRaw : "(aucun destinataire)"}` : whoRaw;
 	// L'extrait d'un brouillon peut arriver en HTML brut (« <p></p> ») : texte seul.
 	const preview = String(item.previewText ?? "")

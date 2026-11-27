@@ -47,6 +47,7 @@ import { useShowSnippet } from "@/components/mailbox/default/list-preview-contex
 import { DraftSendBadge, DraftTimesLabel, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
 
 import { LAST_VIEWED_CLASS } from "@/lib/list-return";
+import { lastSenderLabel } from "@/lib/last-sender";
 export default function WebmailListItem({
 	mailboxThreadItem,
 	activeMailbox,
@@ -214,11 +215,15 @@ export default function WebmailListItem({
 		return shown.join(", ") + suffix;
 	}
 
-	// ss2i : dans le dossier Drafts, les destinataires (« To: ... ») et non l'expediteur.
+	// ss2i : dans Drafts et Sent, les destinataires (« To: ... ») ; ailleurs, l'auteur du dernier
+	// message du fil seul (Samuel le 27/11/2026, lib/last-sender.ts), tous les participants au survol.
 	const isDrafts = activeMailbox.kind === "drafts";
-	const allNames = isDrafts
-		? `To: ${getAllNames({ to: mailboxThreadItem.participants?.to, cc: mailboxThreadItem.participants?.cc, bcc: mailboxThreadItem.participants?.bcc }) || "(no recipient)"}`
-		: getAllNames(mailboxThreadItem.participants);
+	const outgoing = isDrafts || activeMailbox.kind === "sent";
+	const recipients = getAllNames({ to: mailboxThreadItem.participants?.to, cc: mailboxThreadItem.participants?.cc, bcc: mailboxThreadItem.participants?.bcc });
+	const allNames = outgoing
+		? `To: ${recipients || "(no recipient)"}`
+		: lastSenderLabel(mailboxThreadItem.participants);
+	const allNamesTitle = outgoing ? allNames : getAllNames(mailboxThreadItem.participants);
 
 	const canMarkAsRead = mailboxThreadItem.unreadCount > 0;
 	const canMarkAsUnread =
@@ -318,7 +323,7 @@ export default function WebmailListItem({
 				</button>
 
 				<div onClick={openThread} className="truncate pr-2">
-					<span className="truncate">{allNames}</span>{" "}
+					<span className="truncate" title={allNamesTitle}>{allNames}</span>{" "}
 					{mailboxThreadItem.messageCount > 1 && (
 						<span className="text-xs text-muted-foreground font-normal">
 							{mailboxThreadItem.messageCount}

@@ -33,6 +33,7 @@ type Props = {
 
 import { DraftSendBadge, DraftTimesLabel, isSendingDraft } from "@/components/mailbox/default/draft-send-status";
 import { LAST_VIEWED_CLASS } from "@/lib/list-return";
+import { lastSenderLabel } from "@/lib/last-sender";
 export default function WebmailListItemMobile({
 	mailboxThreadItem,
 	activeMailbox,
@@ -119,11 +120,12 @@ export default function WebmailListItemMobile({
 		return arr.slice(0, 3).join(", ") + (arr.length > 3 ? "…" : "");
 	}
 
-	// ss2i : dans le dossier Drafts, les destinataires (« To: ... ») et non l'expediteur.
+	// ss2i : dans Drafts et Sent, les destinataires (« To: ... ») ; ailleurs, l'auteur du dernier
+	// message du fil seul (Samuel le 27/11/2026, lib/last-sender.ts).
 	const displayNames =
-		activeMailbox.kind === "drafts"
+		activeMailbox.kind === "drafts" || activeMailbox.kind === "sent"
 			? `To: ${names({ to: mailboxThreadItem.participants?.to, cc: mailboxThreadItem.participants?.cc, bcc: mailboxThreadItem.participants?.bcc }) || "(no recipient)"}`
-			: names(mailboxThreadItem.participants);
+			: lastSenderLabel(mailboxThreadItem.participants);
 	const canMarkAsRead = mailboxThreadItem.unreadCount > 0;
 	const canMarkAsUnread =
 		mailboxThreadItem.messageCount > 0 && mailboxThreadItem.unreadCount === 0;
